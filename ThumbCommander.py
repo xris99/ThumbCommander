@@ -693,30 +693,34 @@ class Pilot:
     def __init__(self, enemy):
         self.enemy = enemy
         self.timer = 0
-        self.freq = 10  
+        self.freq = 10
         self.triggerhappy = randint(3, 6)
         self.lucky = randint(4, 8)
-        
+
         # State machine
         self.state = Pilot.PATROL
         self.state_timer = 0
         self.prev_state = Pilot.PATROL
-        
+
         # Targeting - start facing player
         self.target_orientation_x = 3 if enemy[2] > 0 else 9
         self.target_orientation_y = 6
-        
+
         # Threat assessment
         self.threat_level = 0
         self.last_health = enemy[7]
         self.damage_timer = 0
-        
+
         # Personality traits (0.3-0.8 range for aggression, 0.6-1.0 for skill)
         self.aggression = 19660 + randint(0, 32768)  # 0.3 to 0.8
         self.skill = 39322 + randint(0, 26214)  # 0.6 to 1.0
-        
+
         # Maneuver direction
         self.flank_side = choice([0, 1])  # 0=left, 1=right
+
+        # Player velocity estimation for lead targeting
+        self.last_player_angle = [0, 0]
+        self.estimated_player_vel = [0, 0]
         
     @micropython.native
     def run(self):
@@ -942,37 +946,87 @@ class Pilot:
             return False
         z_pos = self.enemy[2]
         state = self.state
-        
+
         # Chase position - best firing spot
         if state == Pilot.CHASE:
             return randint(0, 2) <= 1  # 50% chance
-        
+
         # Intercept/Engage - fire when in range
         if state in [Pilot.INTERCEPT, Pilot.ENGAGE]:
             if 10<<16 < abs(z_pos) < 35<<16:
                 # Better pilots fire more often
                 threshold = 3 if self.skill > 52428 else 2  # 0.8 skill cutoff
                 return randint(0, self.triggerhappy) <= threshold
-        
+
         # Opportunistic shots
         if abs(z_pos) < 30<<16:
             return randint(0, self.lucky * 3) == 1
-            
+
         return False
-    
+
+    @micropython.native
+    def update_player_velocity_estimate(self):
+        """Estimate player velocity for lead targeting"""
+        # Calculate velocity as change in player_angle
+        self.estimated_player_vel[0] = player_angle[0] - self.last_player_angle[0]
+        self.estimated_player_vel[1] = player_angle[1] - self.last_player_angle[1]
+
+        # Store current for next frame
+        self.last_player_angle[0] = player_angle[0]
+        self.last_player_angle[1] = player_angle[1]
+
+    @micropython.native
+    def calculate_firing_solution(self):
+        """Calculate lead for moving target based on player velocity"""
+        # Update player velocity estimate
+        self.update_player_velocity_estimate()
+
+        # Distance to player (where player appears to be)
+        distance = abs(self.enemy[2])
+
+        # Laser speed (relative to enemy) - approximately 2-3x enemy velocity
+        laser_speed = 15<<16
+
+        # Time for laser to reach target (rough estimate)
+        if distance > (1<<16):
+            time_to_target = fpdiv_a(distance, laser_speed)
+        else:
+            time_to_target = 1<<16
+
+        # Predict where player will be
+        # Account for player movement and relative speed
+        player_vel_x = self.estimated_player_vel[0] + (player_speed - 65536)
+        player_vel_y = self.estimated_player_vel[1]
+
+        # Calculate lead - where to aim
+        lead_x = fpmul(time_to_target, player_vel_x)
+        lead_y = fpmul(time_to_target, player_vel_y)
+
+        # Scale lead based on pilot skill (better pilots lead more accurately)
+        # Skill ranges from 0.6 to 1.0, so this gives 60-100% of calculated lead
+        lead_x = fpmul(lead_x, self.skill)
+        lead_y = fpmul(lead_y, self.skill)
+
+        return lead_x, lead_y
+
     @micropython.native
     def fire_away(self):
-        """Fire laser with skill-based accuracy"""
+        """Fire laser with predictive lead targeting"""
+        # Calculate firing solution with lead
+        lead_x, lead_y = self.calculate_firing_solution()
+
+        # Add skill-based error (better pilots have less error)
         error_factor = (1<<16) - self.skill
-        error_x = fpmul(error_factor, randint(-32768, 32768))
-        error_y = fpmul(error_factor, randint(-32768, 32768))
-        
-        vel_x = (self.enemy[11] * 2) + error_x
-        vel_y = (self.enemy[12] * 2) + error_y
+        error_x = fpmul(error_factor, randint(-16384, 16384))  # Reduced error range
+        error_y = fpmul(error_factor, randint(-16384, 16384))
+
+        # Combine enemy velocity, lead targeting, and error
+        vel_x = (self.enemy[11] * 2) + lead_x + error_x
+        vel_y = (self.enemy[12] * 2) + lead_y + error_y
         vel_z = (self.enemy[13] * 3)
         if self.enemy[2] < (7<<16):
             vel_z = abs(vel_z)
-        self.enemy[9].append(Laser(self.enemy[0], self.enemy[1], self.enemy[2], 
+        self.enemy[9].append(Laser(self.enemy[0], self.enemy[1], self.enemy[2],
                                   vel_x, vel_y, vel_z))
  
 class Ship:
