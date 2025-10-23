@@ -1059,14 +1059,66 @@ class Ship:
         
         self.laser = []
         self.fire_time = 0
-        self.laser_energy = 5
+
+        # Weapon heat system (replaces simple energy counter)
+        self.weapon_heat = 0          # Current heat level (0-100)
+        self.max_heat = 100            # Maximum heat before overheat
+        self.heat_per_shot = 22        # Heat added per shot
+        self.cooling_rate = 3          # Heat removed per frame when not firing
+        self.overheated = False        # Overheat state flag
+        self.overheat_penalty_time = 0 # Extra cooldown when overheated
+
         self.last_time = 0
         self.afterburner_time = 0
         display.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
-    
+
+    @micropython.native
+    def get_heat_display_level(self):
+        """Convert heat (0-100) to display bars (0-5) for GUI"""
+        if self.weapon_heat >= 95:
+            return 5  # Critical heat / overheated
+        elif self.weapon_heat >= 80:
+            return 4  # Very hot
+        elif self.weapon_heat >= 60:
+            return 3  # Hot
+        elif self.weapon_heat >= 40:
+            return 2  # Warming up
+        elif self.weapon_heat >= 20:
+            return 1  # Slightly warm
+        else:
+            return 0  # Cool
+
+    @micropython.native
+    def update_weapon_heat(self):
+        """Update weapon cooling and overheat state"""
+        # Handle overheat penalty countdown
+        if self.overheat_penalty_time > 0:
+            self.overheat_penalty_time -= 1
+
+        # Cool down weapons (only if not in penalty time)
+        if self.weapon_heat > 0 and self.overheat_penalty_time == 0:
+            self.weapon_heat = max(0, self.weapon_heat - self.cooling_rate)
+
+        # Check for overheat recovery
+        if self.overheated:
+            if self.weapon_heat < 30:  # Recovered enough to fire again
+                self.overheated = False
+        else:
+            # Check if we've overheated
+            if self.weapon_heat >= self.max_heat:
+                self.overheated = True
+                self.overheat_penalty_time = 30  # Penalty: no cooling for 30 frames
+
     @micropython.native
     def run(self):
         global hudShip
+
+        # Update weapon heat/cooling system
+        self.update_weapon_heat()
+
+        # Get heat level for display (0-5 bars)
+        heat_display = self.get_heat_display_level()
+
         for laser in self.laser:
             if laser.run():
                 self.laser.remove(laser)
@@ -1074,25 +1126,26 @@ class Ship:
             display.draw_sprite_from_file(self.cockpit_sprite, self.cockpit_sprite_x, self.cockpit_sprite_y, 0)
         else:
             display.drawSprite(self.cockpit_sprite)
-        
-        # Use appropriate target sprite
-        if self.laser_energy == 0:
+
+        # Use appropriate target sprite (show active when overheated)
+        if self.overheated:
             display.drawSprite(self.target_active_sprite)
         else:
             display.drawSprite(self.target_sprite)
-        
+
         # Status indicators
         if IS_THUMBY_COLOR:
             #display.drawSprite(self.cockpit_top_sprite)
             display.draw_sprite_from_file(self.cockpit_top_sprite, self.cockpit_top_sprite_x, 0,0)
             draw_hull_status(display, lifes)
-            draw_half_circle_energy(display, self.cockpit_sprite_x + 59, self.cockpit_sprite_y + 26, 13, self.laser_energy, 5)
+            # Display heat level (0-5 bars)
+            draw_half_circle_energy(display, self.cockpit_sprite_x + 59, self.cockpit_sprite_y + 26, 13, heat_display, 5)
             self.radar_sprite.x = self.cockpit_sprite_x + PC.RADAR_X
             self.radar_sprite.y = self.cockpit_sprite_y + PC.RADAR_Y
             self.radar_sprite.setFrame(self.radar_frame)
             self.radar_frame = (self.radar_frame + 1) % self.radar_framecount
             display.drawSprite(self.radar_sprite)
-            
+
             if (self.cockpit_sprite_x == (SHIP_X+1)): display.drawSprite(self.stick_left_sprite)
             elif (self.cockpit_sprite_x == (SHIP_X-1)): display.drawSprite(self.stick_right_sprite)
             elif (self.cockpit_sprite_y == (SHIP_Y+1)): display.drawSprite(self.stick_back_sprite)
@@ -1102,7 +1155,8 @@ class Ship:
         else:
             for i in range(lifes):
                 display.drawFilledRectangle(self.cockpit_sprite.x + 19, self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3 - i*3, 2, 2, PC.WHITE)
-            for i in range(self.laser_energy):
+            # Display heat level (0-5 bars)
+            for i in range(heat_display):
                 display.drawFilledRectangle(self.cockpit_sprite.x + 45, self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3 - i*3, 2, 2, PC.WHITE)
             display.drawSprite(self.radar_sprite)  
 
@@ -1189,20 +1243,19 @@ class Ship:
             player_angle[1] += 1<<16
             self.cockpit_sprite_y = SHIP_Y+1 #TODO
         elif eval("button" + KEYMAPS[KEY_FIRE]).justPressed():
-            if (self.laser_energy > 0):
+            # Fire only if not overheated
+            if not self.overheated:
                 self.laser.append(Laser(player_angle[0], player_angle[1]))
                 self.fire_time = new_time
-                self.laser_energy -= 1
+                # Add heat instead of depleting energy
+                self.weapon_heat = min(self.max_heat, self.weapon_heat + self.heat_per_shot)
                 if (self.fx): self.fx.play(FXEngine.LASER)
         else:
             player_angle[2] = 0
             self.cockpit_sprite_x = SHIP_X #TODO
             self.cockpit_sprite_y = SHIP_Y #TODO
 
-        if (((int(ticks_diff(new_time, self.fire_time,))<<16)//1000000) > (1000*PC.FPS)):
-            if (self.laser_energy < 5):
-                self.laser_energy += 1
-            self.fire_time = new_time
+        # Old energy recharge code removed - now handled by update_weapon_heat() in run()
             
         if player_angle[0] < -2293760: player_angle[0] = -2293760
         if player_angle[0] > 2293760: player_angle[0] = 2293760
