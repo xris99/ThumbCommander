@@ -118,33 +118,15 @@ class MockEngine:
 
 sys.modules['engine'] = MockEngine()
 
-# Mock framebuf module (for ThumbyColor HUD)
-class MockFrameBuffer:
-    RGB565 = 1
-
-    def __init__(self, buffer, width, height, format):
-        self.buffer = buffer
-        self.width = width
-        self.height = height
-        self.format = format
-
-    def fill(self, color):
-        pass
-
-    def pixel(self, x, y, color=None):
-        if color is None:
-            return 0
-
-    def blit(self, fb, x, y, key=-1):
-        pass
-
-sys.modules['framebuf'] = type('Module', (), {
-    'FrameBuffer': MockFrameBuffer,
-    'RGB565': 1
-})()
-
-# Now import our pygame platform wrapper
+# Import pygame platform wrapper first
 import pygame_platform
+
+# Mock framebuf module - will use pygame_platform.PygameFrameBuffer
+sys.modules['framebuf'] = type('Module', (), {
+    'FrameBuffer': pygame_platform.PygameFrameBuffer,
+    'RGB565': 1,
+    'GS8': 2
+})()
 
 # Inject pygame platform into globals so imports work
 sys.modules['engine_io'] = type('Module', (), {
@@ -166,20 +148,53 @@ sys.modules['thumbycolor_native'] = type('Module', (), {
     '_rumble': pygame_platform.rumble
 })()
 
-# Mock audio module - use lambdas to avoid method binding issues
-sys.modules['audio'] = type('Module', (), {
-    'load': lambda filename: None,
-    'play': lambda: None,
-    'stop': lambda: None,
-    'set_volume': lambda volume: None,
-    'set_loop': lambda loop, start=0, end=0: None,
-    'get_position': lambda: 0,
-    'set_end_callback': lambda callback: None,
-    'clear_end_callback': lambda: None,
-    'open_id': lambda filename, id: None,  # Takes 2 args: filename and id
-    'play_id': lambda id: None,
-    'close_ids': lambda: None
-})()
+# Mock audio module - use functions not bound methods
+class AudioModule:
+    @staticmethod
+    def load(filename):
+        pass
+
+    @staticmethod
+    def play():
+        pass
+
+    @staticmethod
+    def stop():
+        pass
+
+    @staticmethod
+    def set_volume(volume):
+        pass
+
+    @staticmethod
+    def set_loop(loop, start=0, end=0):
+        pass
+
+    @staticmethod
+    def get_position():
+        return 0
+
+    @staticmethod
+    def set_end_callback(callback):
+        pass
+
+    @staticmethod
+    def clear_end_callback():
+        pass
+
+    @staticmethod
+    def open_id(filename, id):
+        pass
+
+    @staticmethod
+    def play_id(id):
+        pass
+
+    @staticmethod
+    def close_ids():
+        pass
+
+sys.modules['audio'] = AudioModule()
 
 # Mock cutscene utils
 def mock_init_cutscene_utils(*args):

@@ -3,12 +3,18 @@ from random import randint
 from platform_loader import audio_load, audio_play, audio_stop, audio_set_loop, audio_set_volume, audio_get_position, audio_set_end_callback, audio_clear_end_callback, audio_open_id, audio_play_id, audio_close_ids, buttonMENU
 import gc
 
-# Try to import time (might be mocked)
+# Try to import time and add sleep_ms if needed
 try:
     import time
+    # Add sleep_ms if it doesn't exist (Python's time module doesn't have sleep_ms)
+    if not hasattr(time, 'sleep_ms'):
+        time.sleep_ms = lambda ms: time.sleep(ms / 1000.0)
 except:
     # Create a simple stub if time doesn't exist
     class MockTime:
+        @staticmethod
+        def sleep(s):
+            pass
         @staticmethod
         def sleep_ms(ms):
             pass

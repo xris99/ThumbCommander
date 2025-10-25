@@ -1,10 +1,10 @@
 """
-pygame_platform.py - Pygame wrapper that mimics ThumbyColor API
+pygame_platform.py - Pygame wrapper that mimics ThumbyColor API using FrameBuffer
 This allows running ThumbCommander on PC for testing without modifying game code
 """
 import pygame
 import os
-from array import array
+import struct
 
 # Initialize pygame
 pygame.init()
@@ -14,10 +14,155 @@ DISPLAY_WIDTH = 128
 DISPLAY_HEIGHT = 128
 SCALE_FACTOR = 4  # Display at 4x size for visibility
 
-class PygameDisplay:
-    """Mimics ThumbyColor ColorDisplay API"""
+# FrameBuffer format constants
+RGB565 = 1
+GS8 = 2
 
-    # Color constants (RGB565 format converted to RGB888)
+
+class PygameFrameBuffer:
+    """
+    Mimics micropython's framebuf.FrameBuffer using pygame
+    Implements the same API as the real FrameBuffer class
+    """
+
+    def __init__(self, buffer, width, height, format):
+        self.buffer = buffer
+        self.width = width
+        self.height = height
+        self.format = format
+
+        # Create pygame surface based on format
+        if format == RGB565:
+            # RGB565: 2 bytes per pixel
+            self.pygame_surface = pygame.Surface((width, height))
+        elif format == GS8:
+            # GS8: 1 byte per pixel (grayscale/indexed)
+            self.pygame_surface = pygame.Surface((width, height))
+        else:
+            self.pygame_surface = pygame.Surface((width, height))
+
+    def rgb565_to_rgb888(self, rgb565):
+        """Convert RGB565 to RGB888 tuple"""
+        r = ((rgb565 >> 11) & 0x1F) * 255 // 31
+        g = ((rgb565 >> 5) & 0x3F) * 255 // 63
+        b = (rgb565 & 0x1F) * 255 // 31
+        return (r, g, b)
+
+    def rgb888_to_rgb565(self, r, g, b):
+        """Convert RGB888 to RGB565"""
+        return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+
+    def fill(self, color):
+        """Fill the framebuffer with a color"""
+        if self.format == RGB565:
+            rgb = self.rgb565_to_rgb888(color)
+            self.pygame_surface.fill(rgb)
+            # Update buffer
+            for y in range(self.height):
+                for x in range(self.width):
+                    pixel_index = (y * self.width + x) * 2
+                    if pixel_index + 1 < len(self.buffer):
+                        self.buffer[pixel_index] = color & 0xFF
+                        self.buffer[pixel_index + 1] = (color >> 8) & 0xFF
+        elif self.format == GS8:
+            gray = color & 0xFF
+            rgb = (gray, gray, gray)
+            self.pygame_surface.fill(rgb)
+            # Update buffer
+            for i in range(min(len(self.buffer), self.width * self.height)):
+                self.buffer[i] = gray
+
+    def pixel(self, x, y, color=None):
+        """Get or set a pixel"""
+        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+            return
+
+        if color is None:
+            # Get pixel
+            if self.format == RGB565:
+                pixel_index = (y * self.width + x) * 2
+                if pixel_index + 1 < len(self.buffer):
+                    return self.buffer[pixel_index] | (self.buffer[pixel_index + 1] << 8)
+            elif self.format == GS8:
+                pixel_index = y * self.width + x
+                if pixel_index < len(self.buffer):
+                    return self.buffer[pixel_index]
+            return 0
+        else:
+            # Set pixel
+            if self.format == RGB565:
+                rgb = self.rgb565_to_rgb888(color)
+                self.pygame_surface.set_at((x, y), rgb)
+                pixel_index = (y * self.width + x) * 2
+                if pixel_index + 1 < len(self.buffer):
+                    self.buffer[pixel_index] = color & 0xFF
+                    self.buffer[pixel_index + 1] = (color >> 8) & 0xFF
+            elif self.format == GS8:
+                gray = color & 0xFF
+                rgb = (gray, gray, gray)
+                self.pygame_surface.set_at((x, y), rgb)
+                pixel_index = y * self.width + x
+                if pixel_index < len(self.buffer):
+                    self.buffer[pixel_index] = gray
+
+    def blit(self, source_fb, x, y, key=-1, palette=None):
+        """
+        Blit another framebuffer onto this one
+
+        Args:
+            source_fb: Source PygameFrameBuffer to copy from
+            x, y: Position to blit to
+            key: Transparent color key (default -1 = no transparency)
+            palette: Optional palette framebuffer for indexed color mode
+        """
+        if palette is not None:
+            # Palette-based blitting (for 8-bit indexed mode)
+            # Source is GS8 (indexed), palette is RGB565
+            for sy in range(source_fb.height):
+                for sx in range(source_fb.width):
+                    dest_x = x + sx
+                    dest_y = y + sy
+
+                    if 0 <= dest_x < self.width and 0 <= dest_y < self.height:
+                        # Get palette index from source
+                        index = source_fb.pixel(sx, sy)
+
+                        if index is None:
+                            continue
+
+                        # Skip if matches key
+                        if key != -1 and index == key:
+                            continue
+
+                        # Look up color in palette
+                        if index < palette.width:
+                            color = palette.pixel(index, 0)
+                            if color is not None:
+                                self.pixel(dest_x, dest_y, color)
+        else:
+            # Direct blitting
+            for sy in range(source_fb.height):
+                for sx in range(source_fb.width):
+                    dest_x = x + sx
+                    dest_y = y + sy
+
+                    if 0 <= dest_x < self.width and 0 <= dest_y < self.height:
+                        color = source_fb.pixel(sx, sy)
+
+                        if color is None:
+                            continue
+
+                        # Skip if matches key
+                        if key != -1 and color == key:
+                            continue
+
+                        self.pixel(dest_x, dest_y, color)
+
+
+class PygameDisplay:
+    """Mimics ThumbyColor ColorDisplay API using FrameBuffer"""
+
+    # Color constants (RGB565 format)
     BLACK = 0x0000
     WHITE = 0xFFFF
     DARKGRAY = 0x4208
@@ -45,9 +190,9 @@ class PygameDisplay:
         self.clock = pygame.time.Clock()
         self.target_fps = 60
 
-        # Internal framebuffer (128x128 RGB888)
-        self.internal_fb = pygame.Surface((DISPLAY_WIDTH, DISPLAY_HEIGHT))
-        self.internal_fb.fill((0, 0, 0))
+        # Internal framebuffer (128x128 RGB565) - THIS IS THE KEY!
+        self.fb_buffer = bytearray(DISPLAY_WIDTH * DISPLAY_HEIGHT * 2)  # RGB565 = 2 bytes/pixel
+        self.internal_fb = PygameFrameBuffer(self.fb_buffer, DISPLAY_WIDTH, DISPLAY_HEIGHT, RGB565)
 
         # Font loading
         self.current_font = None
@@ -64,8 +209,11 @@ class PygameDisplay:
         except:
             self.current_font = pygame.font.Font(None, 10)
 
-        # Sprite cache
-        self.sprite_cache = {}
+        # Button states
+        self.buttons = {
+            'A': False, 'B': False, 'UP': False, 'DOWN': False,
+            'LEFT': False, 'RIGHT': False, 'LB': False, 'RB': False, 'MENU': False
+        }
 
     def rgb565_to_rgb888(self, rgb565):
         """Convert RGB565 to RGB888 tuple"""
@@ -78,138 +226,139 @@ class PygameDisplay:
         """Set target frame rate"""
         self.target_fps = fps
 
+    def enableGrayscale(self):
+        """Stub for enabling grayscale mode (not needed for pygame)"""
+        pass
+
+    def disableGrayscale(self):
+        """Stub for disabling grayscale mode (not needed for pygame)"""
+        pass
+
     def fill(self, color):
         """Fill screen with color"""
-        rgb = self.rgb565_to_rgb888(color)
-        self.internal_fb.fill(rgb)
+        self.internal_fb.fill(color)
 
     def setPixel(self, x, y, color):
         """Draw a single pixel"""
-        if 0 <= x < DISPLAY_WIDTH and 0 <= y < DISPLAY_HEIGHT:
-            rgb = self.rgb565_to_rgb888(color)
-            self.internal_fb.set_at((int(x), int(y)), rgb)
+        self.internal_fb.pixel(int(x), int(y), color)
 
     def drawLine(self, x0, y0, x1, y1, color):
         """Draw a line"""
-        rgb = self.rgb565_to_rgb888(color)
-        pygame.draw.line(self.internal_fb, rgb, (int(x0), int(y0)), (int(x1), int(y1)))
+        # Simple line drawing using Bresenham's algorithm
+        x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+
+        while True:
+            self.internal_fb.pixel(x0, y0, color)
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x0 += sx
+            if e2 < dx:
+                err += dx
+                y0 += sy
 
     def drawRectangle(self, x, y, width, height, color):
         """Draw rectangle outline"""
-        rgb = self.rgb565_to_rgb888(color)
-        pygame.draw.rect(self.internal_fb, rgb, (int(x), int(y), int(width), int(height)), 1)
+        x, y, width, height = int(x), int(y), int(width), int(height)
+        # Top
+        for i in range(width):
+            self.internal_fb.pixel(x + i, y, color)
+        # Bottom
+        for i in range(width):
+            self.internal_fb.pixel(x + i, y + height - 1, color)
+        # Left
+        for i in range(height):
+            self.internal_fb.pixel(x, y + i, color)
+        # Right
+        for i in range(height):
+            self.internal_fb.pixel(x + width - 1, y + i, color)
 
     def drawFilledRectangle(self, x, y, width, height, color):
         """Draw filled rectangle"""
-        rgb = self.rgb565_to_rgb888(color)
-        pygame.draw.rect(self.internal_fb, rgb, (int(x), int(y), int(width), int(height)))
+        x, y, width, height = int(x), int(y), int(width), int(height)
+        for dy in range(height):
+            for dx in range(width):
+                px = x + dx
+                py = y + dy
+                if 0 <= px < DISPLAY_WIDTH and 0 <= py < DISPLAY_HEIGHT:
+                    self.internal_fb.pixel(px, py, color)
 
-    def setFont(self, font_file, width, height, space):
+    def drawSprite(self, sprite):
+        """Draw a sprite"""
+        if hasattr(sprite, 'pygame_surface') and sprite.pygame_surface:
+            # Use the sprite's pygame surface and blit to internal_fb surface
+            self.internal_fb.pygame_surface.blit(
+                sprite.pygame_surface,
+                (sprite.x, sprite.y)
+            )
+
+    def drawText(self, text, x, y, color):
+        """Draw text"""
+        try:
+            rgb = self.rgb565_to_rgb888(color)
+            text_surface = self.current_font.render(str(text), True, rgb)
+            # Blit to internal framebuffer's pygame surface
+            self.internal_fb.pygame_surface.blit(text_surface, (int(x), int(y)))
+        except Exception as e:
+            # Fallback: draw simple text pixel by pixel
+            pass
+
+    def setFont(self, font_path, width, height, space):
         """Set current font"""
         self.font_width = width
         self.font_height = height
         self.font_space = space
 
-        # Map to pygame fonts
-        if "3x5" in font_file:
+        # Map font sizes to pygame fonts
+        if width <= 3:
             self.current_font = self.font_3x5
-        elif "5x7" in font_file:
+        elif width <= 5:
             self.current_font = self.font_5x7
-        elif "8x8" in font_file or "6x10" in font_file:
+        else:
             self.current_font = self.font_8x8
 
-    def drawText(self, text, x, y, color):
-        """Draw text"""
-        rgb = self.rgb565_to_rgb888(color)
-        text_surface = self.current_font.render(str(text), True, rgb)
-        self.internal_fb.blit(text_surface, (int(x), int(y)))
+    def draw_fullwidth_sprite(self, filename, y_offset=0, key=-1):
+        """Draw a fullwidth sprite (background image)"""
+        # For now, just fill with a dark color to show it's being called
+        # The actual sprite loading would happen here on real hardware
+        try:
+            # Try to load the binary file if it exists
+            if os.path.exists(filename):
+                with open(filename, 'rb') as f:
+                    data = f.read()
+                    # Parse RGB565 data
+                    width = DISPLAY_WIDTH
+                    height = min(DISPLAY_HEIGHT - y_offset, len(data) // (width * 2))
 
-    def drawSprite(self, sprite):
-        """Draw a sprite"""
-        if hasattr(sprite, 'draw'):
-            sprite.draw(self)
-
-    def drawSpriteWithScale(self, sprite):
-        """Draw a scaled sprite"""
-        if hasattr(sprite, 'draw_scaled'):
-            sprite.draw_scaled(self)
-        else:
-            self.drawSprite(sprite)
-
-    def draw_sprite_from_file(self, filename, x, y, frame):
-        """Draw sprite directly from file (stub - draws colored rectangle)"""
-        # Determine color based on filename
-        if "cockpit" in filename:
-            rgb = (100, 100, 100)  # Gray cockpit
-            width, height = 118, 53
-        elif "enemy" in filename:
-            rgb = (200, 50, 50)  # Red enemy
-            width, height = 70, 59
-        elif "astroid" in filename:
-            rgb = (139, 90, 60)  # Brown asteroid
-            width, height = 56, 47
-        elif "explode" in filename:
-            rgb = (255, 150, 0)  # Orange explosion
-            width, height = 56, 54
-        elif "shield" in filename:
-            rgb = (50, 150, 255)  # Blue shield
-            width, height = 30, 30
-        else:
-            rgb = self.rgb565_to_rgb888(self.LIGHTGRAY)
-            width, height = 20, 20
-
-        # Draw filled rectangle for visibility
-        pygame.draw.rect(self.internal_fb, rgb, (int(x), int(y), width, height))
-        # Draw outline
-        pygame.draw.rect(self.internal_fb, (255, 255, 255), (int(x), int(y), width, height), 1)
-
-    def draw_fullwidth_sprite(self, filename, y=0, frame=0):
-        """Draw full-width sprite (stub - draws gradient background)"""
-        # Draw a simple gradient background to show menu screens
-        if "menu" in filename:
-            # Draw dark blue gradient for main menu with stars
-            for i in range(DISPLAY_HEIGHT):
-                blue_val = int(20 + (i / DISPLAY_HEIGHT) * 40)
-                color = (0, 0, blue_val)
-                pygame.draw.line(self.internal_fb, color, (0, i), (DISPLAY_WIDTH, i))
-
-            # Add some "stars" for space theme
-            import random
-            random.seed(12345)  # Fixed seed for consistent star positions
-            for _ in range(30):
-                sx = random.randint(0, DISPLAY_WIDTH-1)
-                sy = random.randint(0, DISPLAY_HEIGHT-1)
-                brightness = random.choice([150, 200, 255])
-                self.internal_fb.set_at((sx, sy), (brightness, brightness, brightness))
-
-        elif "title" in filename:
-            # Title screen - darker gradient
-            for i in range(DISPLAY_HEIGHT):
-                val = int(15 + (i / DISPLAY_HEIGHT) * 25)
-                color = (val, val, val+20)
-                pygame.draw.line(self.internal_fb, color, (0, i), (DISPLAY_WIDTH, i))
-
-        elif "eject" in filename or "home" in filename or "intro" in filename:
-            # Cutscene gradient
-            for i in range(DISPLAY_HEIGHT):
-                val = int(10 + (i / DISPLAY_HEIGHT) * 30)
-                color = (val, val, val)
-                pygame.draw.line(self.internal_fb, color, (0, i), (DISPLAY_WIDTH, i))
+                    for y in range(height):
+                        for x in range(width):
+                            offset = (y * width + x) * 2
+                            if offset + 1 < len(data):
+                                rgb565 = data[offset] | (data[offset + 1] << 8)
+                                # Skip if matches key (transparency)
+                                if key != -1 and rgb565 == key:
+                                    continue
+                                self.internal_fb.pixel(x, y + y_offset, rgb565)
+            else:
+                # File doesn't exist, draw placeholder
+                # Draw a gradient background
+                for y in range(DISPLAY_HEIGHT - y_offset):
+                    blue_val = int(10 + (y / DISPLAY_HEIGHT) * 20)
+                    color = (0 << 11) | (blue_val << 5) | 31  # Blue gradient
+                    for x in range(DISPLAY_WIDTH):
+                        self.internal_fb.pixel(x, y + y_offset, color)
+        except Exception as e:
+            print(f"Error loading sprite {filename}: {e}")
 
     def update(self):
-        """Update the display"""
-        # Update all button states FIRST (before display)
-        update_buttons()
-
-        # Scale up the internal framebuffer to the screen
-        scaled = pygame.transform.scale(
-            self.internal_fb,
-            (DISPLAY_WIDTH * SCALE_FACTOR, DISPLAY_HEIGHT * SCALE_FACTOR)
-        )
-        self.screen.blit(scaled, (0, 0))
-        pygame.display.flip()
-        self.clock.tick(self.target_fps)
-
+        """Update the display and handle events"""
         # Handle pygame events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -217,13 +366,79 @@ class PygameDisplay:
                 import sys
                 sys.exit()
 
-    def enableGrayscale(self):
-        """Stub for compatibility"""
-        pass
+        # Update button states
+        self.update_buttons()
+
+        # Scale and blit internal framebuffer to screen
+        scaled_surface = pygame.transform.scale(
+            self.internal_fb.pygame_surface,
+            (DISPLAY_WIDTH * SCALE_FACTOR, DISPLAY_HEIGHT * SCALE_FACTOR)
+        )
+        self.screen.blit(scaled_surface, (0, 0))
+        pygame.display.flip()
+
+        # Maintain frame rate
+        self.clock.tick(self.target_fps)
+
+    def update_buttons(self):
+        """Update button states from keyboard"""
+        keys = pygame.key.get_pressed()
+
+        # Update button states based on keyboard
+        self.buttons['A'] = keys[BUTTON_MAPPINGS['A']]
+        self.buttons['B'] = keys[BUTTON_MAPPINGS['B']]
+        self.buttons['UP'] = keys[BUTTON_MAPPINGS['UP']]
+        self.buttons['DOWN'] = keys[BUTTON_MAPPINGS['DOWN']]
+        self.buttons['LEFT'] = keys[BUTTON_MAPPINGS['LEFT']]
+        self.buttons['RIGHT'] = keys[BUTTON_MAPPINGS['RIGHT']]
+        self.buttons['LB'] = keys[BUTTON_MAPPINGS['LB']]
+        self.buttons['RB'] = keys[BUTTON_MAPPINGS['RB']]
+        self.buttons['MENU'] = keys[BUTTON_MAPPINGS['MENU']]
+
+
+# Button mappings (updated for German keyboard)
+BUTTON_MAPPINGS = {
+    'A': pygame.K_y,      # Y key (works on QWERTZ)
+    'B': pygame.K_x,      # X key
+    'UP': pygame.K_UP,    # Arrow up
+    'DOWN': pygame.K_DOWN,  # Arrow down
+    'LEFT': pygame.K_LEFT,  # Arrow left
+    'RIGHT': pygame.K_RIGHT, # Arrow right
+    'LB': pygame.K_q,     # Q key (German keyboard friendly)
+    'RB': pygame.K_w,     # W key (German keyboard friendly)
+    'MENU': pygame.K_ESCAPE  # ESC key
+}
+
+
+class PygameButton:
+    """Mimics ThumbyButton ButtonClass"""
+
+    def __init__(self, key_code):
+        self.key_code = key_code
+        self.last_state = False
+        self.current_state = False
+        self.just_pressed_flag = False
+
+    def update(self):
+        """Update button state"""
+        keys = pygame.key.get_pressed()
+        self.last_state = self.current_state
+        self.current_state = keys[self.key_code]
+        self.just_pressed_flag = self.current_state and not self.last_state
+
+    def pressed(self):
+        """Check if button is currently pressed"""
+        keys = pygame.key.get_pressed()
+        return keys[self.key_code]
+
+    def justPressed(self):
+        """Check if button was just pressed"""
+        self.update()
+        return self.just_pressed_flag
 
 
 class PygameSprite:
-    """Mimics ThumbyColor ColorSprite API"""
+    """Mimics ThumbyColor ColorSprite"""
 
     def __init__(self, width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False):
         self.width = width
@@ -233,242 +448,167 @@ class PygameSprite:
         self.key = key
         self.mirrorX = mirrorX
         self.mirrorY = mirrorY
-        self.currentFrame = 0
-        self.frameCount = 13  # Default for enemy sprites
-        self.scaledWidth = width
-        self.scaledHeight = height
-        self.scale_factor = 1.0
+        self.pygame_surface = None
 
-        # Create a placeholder surface with transparency
-        self.surface = pygame.Surface((width, height))
-
-        # For bitmap data, create simple colored surface based on filename
+        # Try to load sprite from file
         if isinstance(bitmap_data, str):
-            # File-based sprite - use color based on filename
-            if "enemy" in bitmap_data:
-                self.surface.fill((200, 50, 50))  # Bright red for enemies
-                # Draw a simple enemy shape
-                pygame.draw.circle(self.surface, (255, 100, 100), (width//2, height//2), min(width, height)//3)
-            elif "astroid" in bitmap_data:
-                self.surface.fill((139, 90, 60))  # Brown for asteroids
-                # Draw some dots to make it look rocky (only if sprite has size)
-                if width > 10 and height > 10:
-                    import random
-                    for _ in range(5):
-                        x = random.randint(5, width-6)
-                        y = random.randint(5, height-6)
-                        pygame.draw.circle(self.surface, (100, 70, 50), (x, y), 3)
-            elif "shield" in bitmap_data:
-                self.surface.fill((50, 150, 255))  # Blue for shields
-                pygame.draw.circle(self.surface, (100, 200, 255), (width//2, height//2), min(width, height)//3)
-            elif "explode" in bitmap_data:
-                self.surface.fill((255, 150, 0))  # Orange explosion
-                # Make it look more explosive
-                pygame.draw.circle(self.surface, (255, 200, 50), (width//2, height//2), min(width, height)//4)
-            else:
-                self.surface.fill((100, 100, 100))  # Gray placeholder
-        else:
-            self.surface.fill((100, 100, 100))  # Gray placeholder
-
-    def setFrame(self, frame):
-        """Set current frame"""
-        self.currentFrame = frame
-
-    def setScale(self, scale):
-        """Set sprite scale"""
-        if isinstance(scale, int):
-            # Fixed-point scale (65536 = 1.0)
-            self.scale_factor = scale / 65536.0
-        else:
-            self.scale_factor = scale
-        self.scaledWidth = int(self.width * self.scale_factor)
-        self.scaledHeight = int(self.height * self.scale_factor)
-
-    def draw(self, display):
-        """Draw sprite at x, y"""
-        if hasattr(display, 'internal_fb'):
-            display.internal_fb.blit(self.surface, (int(self.x), int(self.y)))
-
-    def draw_scaled(self, display):
-        """Draw scaled sprite"""
-        if self.scaledWidth > 0 and self.scaledHeight > 0:
-            scaled = pygame.transform.scale(self.surface, (self.scaledWidth, self.scaledHeight))
-            if hasattr(display, 'internal_fb'):
-                display.internal_fb.blit(scaled, (int(self.x), int(self.y)))
-
-    def setLifes(self, lifes):
-        """Store life count for HUD"""
-        self._lifes = lifes
-
-    def getLifes(self):
-        """Get life count"""
-        return getattr(self, '_lifes', 0)
+            try:
+                if os.path.exists(bitmap_data):
+                    # Load binary sprite data
+                    with open(bitmap_data, 'rb') as f:
+                        data = f.read()
+                        # Assume RGB565 format
+                        self.pygame_surface = pygame.Surface((width, height))
+                        for y in range(height):
+                            for x in range(width):
+                                offset = (y * width + x) * 2
+                                if offset + 1 < len(data):
+                                    rgb565 = data[offset] | (data[offset + 1] << 8)
+                                    r = ((rgb565 >> 11) & 0x1F) * 255 // 31
+                                    g = ((rgb565 >> 5) & 0x3F) * 255 // 63
+                                    b = (rgb565 & 0x1F) * 255 // 31
+                                    self.pygame_surface.set_at((x, y), (r, g, b))
+                else:
+                    # Create placeholder sprite
+                    self.pygame_surface = pygame.Surface((width, height))
+                    self.pygame_surface.fill((128, 128, 128))
+            except Exception as e:
+                print(f"Error loading sprite {bitmap_data}: {e}")
+                self.pygame_surface = pygame.Surface((width, height))
+                self.pygame_surface.fill((255, 0, 255))  # Magenta for error
 
 
-class ButtonClass:
-    """Mimics thumbyButton.ButtonClass with pygame keyboard"""
-
-    def __init__(self, key_mapping):
-        self.key_mapping = key_mapping
-        self._pressed = False
-        self._just_pressed = False
-        self._prev_state = False
-
-    def update(self):
-        """Update button state from pygame keyboard"""
-        keys = pygame.key.get_pressed()
-        current_state = keys[self.key_mapping]
-
-        self._just_pressed = current_state and not self._prev_state
-        self._pressed = current_state
-        self._prev_state = current_state
-
-    def pressed(self):
-        """Check if button is currently pressed"""
-        return self._pressed
-
-    def justPressed(self):
-        """Check if button was just pressed this frame"""
-        result = self._just_pressed
-        self._just_pressed = False  # Clear after read
-        return result
-
-
-# Button mappings (keyboard keys)
-# Note: Uses Y instead of Z for German (QWERTZ) keyboard compatibility
-BUTTON_MAPPINGS = {
-    'A': pygame.K_y,      # Y key (Fire) - works on both QWERTY and QWERTZ
-    'B': pygame.K_x,      # X key
-    'UP': pygame.K_UP,
-    'DOWN': pygame.K_DOWN,
-    'LEFT': pygame.K_LEFT,
-    'RIGHT': pygame.K_RIGHT,
-    'LB': pygame.K_q,     # Q key (Left bumper - target previous)
-    'RB': pygame.K_w,     # W key (Right bumper - target next)
-    'MENU': pygame.K_ESCAPE
-}
-
-# Create button instances
-buttonA = ButtonClass(BUTTON_MAPPINGS['A'])
-buttonB = ButtonClass(BUTTON_MAPPINGS['B'])
-buttonU = ButtonClass(BUTTON_MAPPINGS['UP'])
-buttonD = ButtonClass(BUTTON_MAPPINGS['DOWN'])
-buttonL = ButtonClass(BUTTON_MAPPINGS['LEFT'])
-buttonR = ButtonClass(BUTTON_MAPPINGS['RIGHT'])
-buttonLB = ButtonClass(BUTTON_MAPPINGS['LB'])
-buttonRB = ButtonClass(BUTTON_MAPPINGS['RB'])
-buttonMENU = ButtonClass(BUTTON_MAPPINGS['MENU'])
-
-# All buttons for bulk update
-ALL_BUTTONS = [buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU]
-
-
-def update_buttons():
-    """Update all button states - call once per frame"""
-    for btn in ALL_BUTTONS:
-        btn.update()
-
-
-def dpadPressed():
-    """Check if any dpad button is pressed"""
-    return buttonU.pressed() or buttonD.pressed() or buttonL.pressed() or buttonR.pressed()
-
-
-def inputJustPressed():
-    """Check if any button was just pressed"""
-    return (buttonA.justPressed() or buttonB.justPressed() or buttonU.justPressed() or
-            buttonD.justPressed() or buttonL.justPressed() or buttonR.justPressed() or
-            buttonLB.justPressed() or buttonRB.justPressed() or buttonMENU.justPressed())
-
-
-# Stubs for other functions
 def rumble(duration):
-    """Stub for rumble"""
+    """Stub for rumble function"""
+    pass
+
+
+# Audio stub functions (all deactivated)
+def audio_load(filename):
+    """Stub for audio loading"""
+    pass
+
+def audio_play():
+    """Stub for audio playback"""
+    pass
+
+def audio_stop():
+    """Stub for audio stop"""
+    pass
+
+def audio_set_volume(volume):
+    """Stub for setting volume"""
+    pass
+
+def audio_set_loop(loop, start=0, end=0):
+    """Stub for setting loop"""
+    pass
+
+def audio_get_position():
+    """Stub for getting playback position"""
+    return 0
+
+def audio_set_end_callback(callback):
+    """Stub for setting end callback"""
+    pass
+
+def audio_clear_end_callback():
+    """Stub for clearing end callback"""
+    pass
+
+def audio_open_id(filename, id):
+    """Stub for opening audio by ID"""
+    pass
+
+def audio_play_id(id):
+    """Stub for playing audio by ID"""
+    pass
+
+def audio_close_ids():
+    """Stub for closing all audio IDs"""
     pass
 
 
 def play_cutscene_animation(filename, frames, cancel_callback):
-    """Play cutscene animation - shows title screen"""
-    # Determine what to show based on filename
-    if "intro" in filename or "title" in filename:
-        title_text = "THUMBCOMMANDER"
-        subtitle = "Press any key to continue"
-    elif "eject" in filename:
-        title_text = "EJECTING..."
-        subtitle = "Escape pod deployed"
-    elif "home" in filename:
-        title_text = "RETURNING HOME"
-        subtitle = "Mission accomplished"
-    else:
-        title_text = "CUTSCENE"
-        subtitle = "Loading..."
-
-    # Show cutscene for a moment
+    """Mock cutscene animation player"""
     import time
-    display.fill(display.BLACK)
 
-    # Draw gradient background
-    for i in range(DISPLAY_HEIGHT):
-        val = int(30 + (i / DISPLAY_HEIGHT) * 50)
-        pygame.draw.line(display.internal_fb, (0, 0, val), (0, i), (DISPLAY_WIDTH, i))
+    # Get or create display
+    disp = get_display()
 
-    # Draw title
-    title_y = DISPLAY_HEIGHT // 2 - 10
-    display.drawText(title_text, 15, title_y, display.WHITE)
-    display.drawText(subtitle, 10, title_y + 20, display.LIGHTGRAY)
+    # Determine what type of cutscene based on filename
+    is_intro = "intro" in filename.lower()
+    is_title = "title" in filename.lower()
 
-    display.update()
+    if is_intro or is_title:
+        # Show title screen
+        disp.fill(0x0000)  # Black background
 
-    # Brief pause to show cutscene
-    time.sleep(0.5)
+        # Draw gradient background
+        for y in range(DISPLAY_HEIGHT):
+            blue_val = int(10 + (y / DISPLAY_HEIGHT) * 20)
+            color = (0 << 11) | (blue_val << 5) | (31 - (y * 31 // DISPLAY_HEIGHT))
+            for x in range(DISPLAY_WIDTH):
+                disp.internal_fb.pixel(x, y, color)
+
+        # Draw title text
+        title_text = "THUMBCOMMANDER"
+        disp.drawText(title_text, 10, 50, disp.WHITE)
+        disp.drawText("Press any key to continue", 10, 70, disp.LIGHTGRAY)
+        disp.update()
+
+        # Wait for key press or timeout
+        start_time = time.time()
+        while time.time() - start_time < 2.0:  # 2 second timeout
+            keys = pygame.key.get_pressed()
+            if any(keys):
+                break
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    import sys
+                    sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    return
+            time.sleep(0.016)  # ~60 FPS
+            disp.update()
+    else:
+        # Other cutscenes - just show a placeholder
+        disp.fill(0x0000)
+        disp.drawText("Cutscene: " + os.path.basename(filename), 10, 50, disp.WHITE)
+        disp.update()
+        time.sleep(0.5)
 
 
 def create_cancel_callback():
-    """Stub for cancel callback"""
-    return lambda: False
+    """Create a mock cancel callback"""
+    def callback(frame_idx):
+        # Check if ESC is pressed
+        keys = pygame.key.get_pressed()
+        return not keys[pygame.K_ESCAPE]
+    return callback
 
 
-# Audio stubs
-def audio_load(filename):
-    pass
-
-def audio_play():
-    pass
-
-def audio_stop():
-    pass
-
-def audio_set_volume(volume):
-    pass
-
-def audio_set_loop(loop, start=0, end=0):
-    pass
-
-def audio_get_position():
-    return 0
-
-def audio_set_end_callback(callback):
-    pass
-
-def audio_clear_end_callback():
-    pass
-
-def audio_open_id(filename, id):
-    pass
-
-def audio_play_id(id):
-    pass
-
-def audio_close_ids():
-    pass
-
-
-# Create display instance
+# Create global display instance
 display = PygameDisplay()
+
+def get_display():
+    global display
+    if display is None:
+        display = PygameDisplay()
+    return display
+
+
+# Aliases for compatibility
 Sprite = PygameSprite
 
-
-# Helper function
-def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, scale=1.0):
-    """Create a sprite"""
-    return PygameSprite(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
+# Create button instances
+buttonA = PygameButton(BUTTON_MAPPINGS['A'])
+buttonB = PygameButton(BUTTON_MAPPINGS['B'])
+buttonU = PygameButton(BUTTON_MAPPINGS['UP'])
+buttonD = PygameButton(BUTTON_MAPPINGS['DOWN'])
+buttonL = PygameButton(BUTTON_MAPPINGS['LEFT'])
+buttonR = PygameButton(BUTTON_MAPPINGS['RIGHT'])
+buttonLB = PygameButton(BUTTON_MAPPINGS['LB'])
+buttonRB = PygameButton(BUTTON_MAPPINGS['RB'])
+buttonMENU = PygameButton(BUTTON_MAPPINGS['MENU'])
