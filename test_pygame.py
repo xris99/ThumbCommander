@@ -165,11 +165,11 @@ sys.modules['Intro'] = type('Module', (), {
 print("=" * 60)
 print("ThumbCommander - Pygame Test Harness")
 print("=" * 60)
-print("Controls:")
+print("Controls (German QWERTZ keyboard compatible):")
 print("  Arrow Keys  - Movement")
-print("  Z           - Fire (A button)")
+print("  Y           - Fire (A button)")
 print("  X           - B button")
-print("  A/S         - LB/RB (target cycling)")
+print("  Q/W         - LB/RB (target cycling)")
 print("  ESC         - Menu")
 print("=" * 60)
 print()
@@ -220,7 +220,7 @@ try:
     print("TESTING: Display and Input Systems")
     print("=" * 60)
 
-    from platform_loader import display, buttonA, buttonB, buttonU, buttonD, buttonL, buttonR
+    from platform_loader import display, buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB
 
     # Simple test loop
     display.setFPS(60)
@@ -229,6 +229,7 @@ try:
 
     print("Test running - press ESC to quit")
     print("Press buttons to test input...")
+    print("Y=Fire, X=B, Arrows=Move, Q=Prev Target, W=Next Target, ESC=Quit")
 
     while running:
         frame += 1
@@ -267,6 +268,12 @@ try:
             y += 10
         if buttonR.pressed():
             display.drawText("RIGHT PRESSED", 10, y, display.BLUE)
+            y += 10
+        if buttonLB.pressed():
+            display.drawText("LB (Q - Prev Target) PRESSED", 10, y, display.GREEN)
+            y += 10
+        if buttonRB.pressed():
+            display.drawText("RB (W - Next Target) PRESSED", 10, y, display.GREEN)
             y += 10
 
         # Draw a bouncing box to show animation

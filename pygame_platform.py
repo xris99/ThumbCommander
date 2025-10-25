@@ -265,15 +265,16 @@ class ButtonClass:
 
 
 # Button mappings (keyboard keys)
+# Note: Uses Y instead of Z for German (QWERTZ) keyboard compatibility
 BUTTON_MAPPINGS = {
-    'A': pygame.K_z,      # Z key
+    'A': pygame.K_y,      # Y key (Fire) - works on both QWERTY and QWERTZ
     'B': pygame.K_x,      # X key
     'UP': pygame.K_UP,
     'DOWN': pygame.K_DOWN,
     'LEFT': pygame.K_LEFT,
     'RIGHT': pygame.K_RIGHT,
-    'LB': pygame.K_a,     # A key
-    'RB': pygame.K_s,     # S key
+    'LB': pygame.K_q,     # Q key (Left bumper - target previous)
+    'RB': pygame.K_w,     # W key (Right bumper - target next)
     'MENU': pygame.K_ESCAPE
 }
 

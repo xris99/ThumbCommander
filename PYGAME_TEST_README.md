@@ -31,17 +31,21 @@ pip install pygame
 
 ## Controls
 
-| Thumby Button | Keyboard Key |
-|--------------|--------------|
-| D-Pad Up     | Arrow Up     |
-| D-Pad Down   | Arrow Down   |
-| D-Pad Left   | Arrow Left   |
-| D-Pad Right  | Arrow Right  |
-| A Button     | Z Key        |
-| B Button     | X Key        |
-| LB Button    | A Key        |
-| RB Button    | S Key        |
-| Menu         | ESC Key      |
+**Keyboard Layout:** Compatible with both QWERTY and German QWERTZ keyboards
+
+| Thumby Button | Keyboard Key | Function |
+|--------------|--------------|----------|
+| D-Pad Up     | Arrow Up     | Move Up |
+| D-Pad Down   | Arrow Down   | Move Down |
+| D-Pad Left   | Arrow Left   | Move Left |
+| D-Pad Right  | Arrow Right  | Move Right |
+| A Button     | **Y Key**    | Fire Weapon |
+| B Button     | X Key        | Secondary Action |
+| LB Button    | **Q Key**    | Previous Target |
+| RB Button    | **W Key**    | Next Target |
+| Menu         | ESC Key      | Pause/Menu |
+
+**Note:** Y key is used instead of Z for better compatibility with German QWERTZ keyboards. Q/W are used for target cycling (easier to reach than A/S).
 
 ## Running the Test
 
