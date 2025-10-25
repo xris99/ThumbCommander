@@ -531,6 +531,8 @@ class PygameButton:
 
     def update(self):
         """Update button state - called once per frame in display.update()"""
+        # Process events first to ensure fresh key state
+        pygame.event.pump()  # Process internal pygame events
         keys = pygame.key.get_pressed()
         self.last_state = self.current_state
         self.current_state = keys[self.key_code]
@@ -539,9 +541,10 @@ class PygameButton:
 
     def pressed(self):
         """Check if button is currently pressed"""
-        # Always get fresh state for pressed()
-        keys = pygame.key.get_pressed()
-        return keys[self.key_code]
+        # Return the cached state from last update()
+        # This ensures consistency when checking buttons after inputJustPressed()
+        # and works correctly during cutscenes where update() is called regularly
+        return self.current_state
 
     def justPressed(self):
         """Check if button was just pressed (True only on the frame it was pressed)"""
@@ -708,6 +711,21 @@ def update_buttons():
     """Update all button states - called by game code"""
     for button in [buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU]:
         button.update()
+
+
+def get_just_pressed_button():
+    """Get which button was just pressed - for settings menu remapping"""
+    # Check in order of priority
+    if buttonA.just_pressed_flag: return 'A'
+    if buttonB.just_pressed_flag: return 'B'
+    if buttonU.just_pressed_flag: return 'U'
+    if buttonD.just_pressed_flag: return 'D'
+    if buttonL.just_pressed_flag: return 'L'
+    if buttonR.just_pressed_flag: return 'R'
+    if buttonLB.just_pressed_flag: return 'LB'
+    if buttonRB.just_pressed_flag: return 'RB'
+    if buttonMENU.just_pressed_flag: return 'MENU'
+    return ''
 
 
 # Create global display instance
