@@ -142,7 +142,7 @@ class PygameDisplay:
         rgb = self.rgb565_to_rgb888(self.LIGHTGRAY)
         pygame.draw.rect(self.internal_fb, rgb, (int(x), int(y), 20, 20), 1)
 
-    def draw_fullwidth_sprite(self, filename, y=0):
+    def draw_fullwidth_sprite(self, filename, y=0, frame=0):
         """Draw full-width sprite (stub)"""
         pass
 

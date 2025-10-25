@@ -27,6 +27,7 @@ sys.modules['micropython'] = _micropython_mock
 # Also add to builtins so it's available globally without import
 import builtins
 builtins.micropython = _micropython_mock
+builtins.const = _micropython_mock.const  # Make const available globally
 
 # Mock thumbyHardware module
 class MockThumbyHardware:
@@ -106,6 +107,41 @@ class MockGC:
         return 100000  # Pretend we have plenty of memory
 
 sys.modules['gc'] = MockGC()
+
+# Mock engine module (ThumbyColor uses this for freq)
+class MockEngine:
+    @staticmethod
+    def freq(f=None):
+        if f:
+            pass  # Ignore frequency setting
+        return 300_000_000
+
+sys.modules['engine'] = MockEngine()
+
+# Mock framebuf module (for ThumbyColor HUD)
+class MockFrameBuffer:
+    RGB565 = 1
+
+    def __init__(self, buffer, width, height, format):
+        self.buffer = buffer
+        self.width = width
+        self.height = height
+        self.format = format
+
+    def fill(self, color):
+        pass
+
+    def pixel(self, x, y, color=None):
+        if color is None:
+            return 0
+
+    def blit(self, fb, x, y, key=-1):
+        pass
+
+sys.modules['framebuf'] = type('Module', (), {
+    'FrameBuffer': MockFrameBuffer,
+    'RGB565': 1
+})()
 
 # Now import our pygame platform wrapper
 import pygame_platform

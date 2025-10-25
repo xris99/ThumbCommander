@@ -1,8 +1,18 @@
 # ThumbCommander.py - Complete updated version with dynamic resolution support
 from sys import path
 from time import sleep
-loc = "/Games/ThumbCommander/"
-path.insert(0, '/Games/ThumbCommander')
+import os
+
+# Detect if running with pygame (check for pygame_platform module)
+try:
+    import pygame_platform
+    # Running with pygame, use current directory
+    loc = os.path.dirname(os.path.abspath(__file__)) + "/"
+    path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+except ImportError:
+    # Running on actual hardware
+    loc = "/Games/ThumbCommander/"
+    path.insert(0, '/Games/ThumbCommander')
 
 from platform_loader import display, IS_THUMBY_COLOR, Sprite, PC, create_sprite, play_cutscene_animation, create_cancel_callback, audio_load, audio_play, audio_stop, audio_set_loop, audio_set_volume, audio_get_position, rumble, buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU, dpadPressed, inputJustPressed
 display.enableGrayscale()
@@ -70,7 +80,7 @@ player_angle = [0, 0, 0]
 score = 0
 hudShip = None
 
-DEFAULT_KEYS = array('O', [
+DEFAULT_KEYS = [
     'A',  # FIRE (index 0)
     'B',  # SHIFT (index 1)
     'L',  # MOVE_LEFT (index 2)
@@ -82,21 +92,21 @@ DEFAULT_KEYS = array('O', [
     'RB' if IS_THUMBY_COLOR else 'R',  # TARGET_NEXT (index 8)
     'LB' if IS_THUMBY_COLOR else 'L',   # TARGET_PREV (index 9)
     'A'   # EJECT (index 10)
-])
+]
 
-SHIFT_REQUIRED = array('B', [
+SHIFT_REQUIRED = [
     False,  # FIRE (index 0)
-    False,  # SHIFT (index 1) 
+    False,  # SHIFT (index 1)
     False,  # MOVE_LEFT (index 2)
     False,  # MOVE_RIGHT (index 3)
     False,  # MOVE_UP (index 4)
     False,  # MOVE_DOWN (index 5)
-    True,   # AFTERBURNER (index 6) 
+    True,   # AFTERBURNER (index 6)
     True,   # BREAK (index 7)
     not IS_THUMBY_COLOR,   # TARGET_NEXT (index 8)
     not IS_THUMBY_COLOR,    # TARGET_PREV (index 9)
     True    # EJECT (index 10)
-])
+]
 
 # Constants for key indexes
 KEY_FIRE = const(0)
@@ -196,7 +206,7 @@ def fpsin(a:int) -> int:
     ta:int = a & sintab_quart_mask
     if (a & sintab_half_mask) >= sintab_sz_quart:
         ta = sintab_quart_mask - ta
-    v:int = ptr32(sintab)[ta]
+    v:int = sintab[ta]  # Use regular array indexing instead of ptr32
     if a >= sintab_sz_half:
         return 0 - v
     return v
@@ -282,7 +292,7 @@ def load_keymaps():
     try:
         with open(loc + "keymap.json", "r") as f:
             loaded_keys = json.loads(f.read())
-            complete_keys = array('O', DEFAULT_KEYS)
+            complete_keys = list(DEFAULT_KEYS)
             
             if "FIRE" in loaded_keys and button_exists(loaded_keys["FIRE"]):
                 complete_keys[KEY_FIRE] = loaded_keys["FIRE"]
@@ -311,7 +321,7 @@ def load_keymaps():
               
             return complete_keys
     except:
-        return array('O', DEFAULT_KEYS)
+        return list(DEFAULT_KEYS)
 
 def save_keymaps(keymap):
     try:
@@ -342,7 +352,7 @@ class Stars:
     def __init__(self, num=None, scale_pos=4, stable=80):
         if num is None:
             num = PC.STAR_COUNT
-        stars = array('O', [None] * num)
+        stars = list([None] * num)
         for i in range(num):
             speed = 0 if (randint(0,100) <= stable) else randint(42598, 62258)
             if speed != 0:
@@ -398,7 +408,7 @@ class Stars:
 
 class Astroids:
     def __init__(self, num=5):
-        astroids = array('O', [None] * num)
+        astroids = list([None] * num)
         for i in range(num):
             astroids[i] = self.new_astroid()
         self.astroids = astroids
@@ -493,7 +503,7 @@ class Astroids:
 
 class Enemies:
     def __init__(self, num=1):
-        enemies = array('O', [None] * num)
+        enemies = list([None] * num)
         for i in range(num):
             enemies[i] = self.new_enemy()
         
@@ -505,7 +515,7 @@ class Enemies:
      
     @micropython.native
     def new_enemy(self):
-        e = array('O', [randrange(-PC.SPACE_ENEMIES<<16, PC.SPACE_ENEMIES<<16),      #0: x
+        e = list([randrange(-PC.SPACE_ENEMIES<<16, PC.SPACE_ENEMIES<<16),      #0: x
                         randrange(-PC.SPACE_ENEMIES<<16, PC.SPACE_ENEMIES<<16),      #1: y
                         45<<16,                            #2: z
                         randrange(0, 12),                  #3: x-orientation (0:-180, 6:0, 12:+180)
@@ -1395,7 +1405,7 @@ def menu():
             if IS_THUMBY_COLOR:
                 display.draw_fullwidth_sprite(menu_sprite,4,0)
                 if i==0:
-                    display.drawText("Asteroid Dodge", 09, 56, PC.SELECT)
+                    display.drawText("Asteroid Dodge", 9, 56, PC.SELECT)
                     display.drawText("Dog Fight", 32, 82, PC.UNSELECT)
                     display.drawText("Campaigns", 31, 109, PC.UNSELECT)
                     display.drawRectangle(1,49,125,25,PC.ORANGE)
@@ -1567,7 +1577,7 @@ class SettingsMenu:
                     self.remapping = True
                     self.current_remap = self.selected
                 elif self.selected == 11:  # Reset defaults
-                    KEYMAPS = array('O', DEFAULT_KEYS)
+                    KEYMAPS = list(DEFAULT_KEYS)
                     SHIFT_REQUIRED = array('B', [False,False,False,False,False,False,True,True,not IS_THUMBY_COLOR,not IS_THUMBY_COLOR,True])
                     self.update_menu()
                     sleep(0.3)
