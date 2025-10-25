@@ -9,18 +9,24 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Mock micropython module before any imports
+def _decorator_passthrough(func):
+    """Pass-through decorator for @micropython.native and @micropython.viper"""
+    return func
+
 class MockMicropython:
-    @staticmethod
-    def native(func):
-        return func
+    native = staticmethod(_decorator_passthrough)
+    viper = staticmethod(_decorator_passthrough)
 
     @staticmethod
-    def viper(func):
-        return func
+    def const(x):
+        return int(x)
 
-    const = int  # Make const just return an int
+_micropython_mock = MockMicropython()
+sys.modules['micropython'] = _micropython_mock
 
-sys.modules['micropython'] = MockMicropython()
+# Also add to builtins so it's available globally without import
+import builtins
+builtins.micropython = _micropython_mock
 
 # Mock thumbyHardware module
 class MockThumbyHardware:
@@ -69,11 +75,23 @@ sys.modules['machine'] = MockMachine()
 import time as real_time
 
 class MockTime:
-    sleep = real_time.sleep
-    sleep_ms = lambda ms: real_time.sleep(ms / 1000.0)
-    ticks_ms = lambda: int(real_time.time() * 1000)
-    ticks_us = lambda: int(real_time.time() * 1000000)
-    ticks_diff = lambda a, b: a - b
+    sleep = staticmethod(real_time.sleep)
+
+    @staticmethod
+    def sleep_ms(ms):
+        real_time.sleep(ms / 1000.0)
+
+    @staticmethod
+    def ticks_ms():
+        return int(real_time.time() * 1000)
+
+    @staticmethod
+    def ticks_us():
+        return int(real_time.time() * 1000000)
+
+    @staticmethod
+    def ticks_diff(a, b):
+        return a - b
 
 sys.modules['utime'] = MockTime()
 
@@ -81,8 +99,11 @@ sys.modules['utime'] = MockTime()
 import gc as real_gc
 
 class MockGC:
-    collect = real_gc.collect
-    mem_free = lambda: 100000  # Pretend we have plenty of memory
+    collect = staticmethod(real_gc.collect)
+
+    @staticmethod
+    def mem_free():
+        return 100000  # Pretend we have plenty of memory
 
 sys.modules['gc'] = MockGC()
 
@@ -136,7 +157,7 @@ sys.modules['cutscene_utils'] = type('Module', (), {
 
 # Mock Intro module
 sys.modules['Intro'] = type('Module', (), {
-    '__init__': lambda: None,
+    '__init__': lambda self: None,
     'start': lambda: None,
     'finish': lambda: None
 })()
