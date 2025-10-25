@@ -273,6 +273,9 @@ class PygameDisplay:
             'LEFT': False, 'RIGHT': False, 'LB': False, 'RB': False, 'MENU': False
         }
 
+        # Text rendering queue (to render after buffer sync)
+        self.text_queue = []
+
     def rgb565_to_rgb888(self, rgb565):
         """Convert RGB565 to RGB888 tuple"""
         r = ((rgb565 >> 11) & 0x1F) * 255 // 31
@@ -349,24 +352,50 @@ class PygameDisplay:
                     self.internal_fb.pixel(px, py, color)
 
     def drawSprite(self, sprite):
-        """Draw a sprite"""
-        if hasattr(sprite, 'pygame_surface') and sprite.pygame_surface:
-            # Use the sprite's pygame surface and blit to internal_fb surface
-            self.internal_fb.pygame_surface.blit(
-                sprite.pygame_surface,
-                (sprite.x, sprite.y)
-            )
+        """Draw a sprite using FrameBuffer.blit()"""
+        # Get the current frame's framebuffer
+        sprite_fb = sprite.get_current_framebuffer()
+        if sprite_fb:
+            # Blit sprite framebuffer to display framebuffer
+            self.internal_fb.blit(sprite_fb, sprite.x, sprite.y, sprite.key)
+
+    def drawSpriteWithScale(self, sprite):
+        """Draw a scaled sprite using FrameBuffer.blit()"""
+        # Get the current frame's framebuffer
+        sprite_fb = sprite.get_current_framebuffer()
+        if sprite_fb:
+            # For now, just draw at sprite position (scaling happens via setScale)
+            # TODO: Implement proper scaling if needed
+            self.internal_fb.blit(sprite_fb, sprite.x, sprite.y, sprite.key)
+
+    def draw_sprite_from_file(self, filename, x, y, key=-1):
+        """Draw a sprite directly from a .COL.bin file (ThumbyColor specific)"""
+        # Load and draw the sprite
+        try:
+            if os.path.exists(filename):
+                with open(filename, 'rb') as f:
+                    # Read header
+                    header = f.read(6)
+                    if len(header) == 6:
+                        width, height, frames = struct.unpack('<HHH', header)
+
+                        # Read first frame
+                        frame_size = width * height * 2
+                        frame_data = bytearray(f.read(frame_size))
+
+                        if len(frame_data) == frame_size:
+                            # Create temporary framebuffer
+                            temp_fb = PygameFrameBuffer(frame_data, width, height, RGB565)
+                            # Blit to display
+                            self.internal_fb.blit(temp_fb, x, y, key)
+        except Exception as e:
+            print(f"Error drawing sprite from file {filename}: {e}")
 
     def drawText(self, text, x, y, color):
-        """Draw text"""
-        try:
-            rgb = self.rgb565_to_rgb888(color)
-            text_surface = self.current_font.render(str(text), True, rgb)
-            # Blit to internal framebuffer's pygame surface
-            self.internal_fb.pygame_surface.blit(text_surface, (int(x), int(y)))
-        except Exception as e:
-            # Fallback: draw simple text pixel by pixel
-            pass
+        """Draw text - queued for rendering after buffer sync"""
+        # Add to queue instead of rendering immediately
+        # This ensures text is drawn AFTER the buffer sync in update()
+        self.text_queue.append((str(text), int(x), int(y), color))
 
     def setFont(self, font_path, width, height, space):
         """Set current font"""
@@ -448,6 +477,17 @@ class PygameDisplay:
                         pxarray[x][y] = RGB565_TO_RGB888[color]
             del pxarray  # Release the lock on the surface
 
+        # Render all queued text AFTER buffer sync
+        for text, x, y, color in self.text_queue:
+            try:
+                rgb = self.rgb565_to_rgb888(color)
+                text_surface = self.current_font.render(text, True, rgb)
+                self.internal_fb.pygame_surface.blit(text_surface, (x, y))
+            except Exception as e:
+                pass  # Silently skip failed text rendering
+        # Clear the queue
+        self.text_queue = []
+
         # Scale and blit internal framebuffer to screen
         scaled_surface = pygame.transform.scale(
             self.internal_fb.pygame_surface,
@@ -517,7 +557,7 @@ class PygameButton:
 
 
 class PygameSprite:
-    """Mimics ThumbyColor ColorSprite"""
+    """Mimics ThumbyColor ColorSprite - loads and displays .COL.bin files"""
 
     def __init__(self, width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False):
         self.width = width
@@ -527,34 +567,96 @@ class PygameSprite:
         self.key = key
         self.mirrorX = mirrorX
         self.mirrorY = mirrorY
-        self.pygame_surface = None
 
-        # Try to load sprite from file
+        # Animation properties
+        self.current_frame = 0
+        self.frameCount = 1
+        self.frame_data = None
+
+        # Scaling properties
+        self.scale = 1 << 16  # Fixed point 16.16
+        self.scaledWidth = width
+        self.scaledHeight = height
+
+        # Load sprite data from .COL.bin file
         if isinstance(bitmap_data, str):
-            try:
-                if os.path.exists(bitmap_data):
-                    # Load binary sprite data
-                    with open(bitmap_data, 'rb') as f:
-                        data = f.read()
-                        # Assume RGB565 format
-                        self.pygame_surface = pygame.Surface((width, height))
-                        for y in range(height):
-                            for x in range(width):
-                                offset = (y * width + x) * 2
-                                if offset + 1 < len(data):
-                                    rgb565 = data[offset] | (data[offset + 1] << 8)
-                                    r = ((rgb565 >> 11) & 0x1F) * 255 // 31
-                                    g = ((rgb565 >> 5) & 0x3F) * 255 // 63
-                                    b = (rgb565 & 0x1F) * 255 // 31
-                                    self.pygame_surface.set_at((x, y), (r, g, b))
-                else:
-                    # Create placeholder sprite
-                    self.pygame_surface = pygame.Surface((width, height))
-                    self.pygame_surface.fill((128, 128, 128))
-            except Exception as e:
-                print(f"Error loading sprite {bitmap_data}: {e}")
-                self.pygame_surface = pygame.Surface((width, height))
-                self.pygame_surface.fill((255, 0, 255))  # Magenta for error
+            self._load_col_bin(bitmap_data)
+        else:
+            # Fallback for non-.COL.bin data (shouldn't happen on ThumbyColor)
+            print(f"Warning: Non-.COL.bin sprite data type: {type(bitmap_data)}")
+            self.frame_buffers = []
+            self.frameCount = 1
+
+    def _load_col_bin(self, filename):
+        """Load a .COL.bin sprite file"""
+        try:
+            if os.path.exists(filename):
+                with open(filename, 'rb') as f:
+                    # Read header: width (uint16), height (uint16), frames (uint16)
+                    header = f.read(6)
+                    if len(header) == 6:
+                        file_width, file_height, frames = struct.unpack('<HHH', header)
+
+                        # Update dimensions from file
+                        self.width = file_width
+                        self.height = file_height
+                        self.frameCount = frames
+                        self.scaledWidth = file_width
+                        self.scaledHeight = file_height
+
+                        # Read all frame data
+                        frame_size = self.width * self.height * 2  # RGB565 = 2 bytes/pixel
+                        self.frame_data = []
+                        self.frame_buffers = []
+
+                        for frame_idx in range(self.frameCount):
+                            frame_bytes = f.read(frame_size)
+                            if len(frame_bytes) == frame_size:
+                                # Store raw frame data
+                                self.frame_data.append(bytearray(frame_bytes))
+                                # Create a FrameBuffer for this frame
+                                fb = PygameFrameBuffer(self.frame_data[frame_idx], self.width, self.height, RGB565)
+                                self.frame_buffers.append(fb)
+                            else:
+                                print(f"Warning: Frame {frame_idx} incomplete in {filename}")
+                                break
+                    else:
+                        print(f"Warning: Invalid .COL.bin header in {filename}")
+                        self.frame_buffers = []
+            else:
+                print(f"Warning: Sprite file not found: {filename}")
+                self.frame_buffers = []
+        except Exception as e:
+            print(f"Error loading sprite {filename}: {e}")
+            self.frame_buffers = []
+            self.frameCount = 1
+
+    def setFrame(self, frame):
+        """Set the current animation frame"""
+        if 0 <= frame < self.frameCount:
+            self.current_frame = frame
+
+    def setScale(self, scale):
+        """Set the sprite scale (fixed point 16.16 format)"""
+        self.scale = scale
+        # Convert fixed point to integer dimensions
+        self.scaledWidth = (self.width * scale) >> 16
+        self.scaledHeight = (self.height * scale) >> 16
+        if self.scaledWidth < 1:
+            self.scaledWidth = 1
+        if self.scaledHeight < 1:
+            self.scaledHeight = 1
+
+    def getLifes(self):
+        """Return number of lives (for specific sprites that represent life count)"""
+        # This is used for some HUD sprites - return current frame as life count
+        return self.current_frame
+
+    def get_current_framebuffer(self):
+        """Get the FrameBuffer for the current frame"""
+        if self.frame_buffers and 0 <= self.current_frame < len(self.frame_buffers):
+            return self.frame_buffers[self.current_frame]
+        return None
 
 
 def rumble(duration):
