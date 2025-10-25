@@ -166,14 +166,31 @@ class PygameDisplay:
     def draw_fullwidth_sprite(self, filename, y=0, frame=0):
         """Draw full-width sprite (stub - draws gradient background)"""
         # Draw a simple gradient background to show menu screens
-        if "menu" in filename or "title" in filename:
-            # Draw dark blue gradient for menu
+        if "menu" in filename:
+            # Draw dark blue gradient for main menu with stars
             for i in range(DISPLAY_HEIGHT):
                 blue_val = int(20 + (i / DISPLAY_HEIGHT) * 40)
                 color = (0, 0, blue_val)
                 pygame.draw.line(self.internal_fb, color, (0, i), (DISPLAY_WIDTH, i))
+
+            # Add some "stars" for space theme
+            import random
+            random.seed(12345)  # Fixed seed for consistent star positions
+            for _ in range(30):
+                sx = random.randint(0, DISPLAY_WIDTH-1)
+                sy = random.randint(0, DISPLAY_HEIGHT-1)
+                brightness = random.choice([150, 200, 255])
+                self.internal_fb.set_at((sx, sy), (brightness, brightness, brightness))
+
+        elif "title" in filename:
+            # Title screen - darker gradient
+            for i in range(DISPLAY_HEIGHT):
+                val = int(15 + (i / DISPLAY_HEIGHT) * 25)
+                color = (val, val, val+20)
+                pygame.draw.line(self.internal_fb, color, (0, i), (DISPLAY_WIDTH, i))
+
         elif "eject" in filename or "home" in filename or "intro" in filename:
-            # Draw different gradient for cutscenes
+            # Cutscene gradient
             for i in range(DISPLAY_HEIGHT):
                 val = int(10 + (i / DISPLAY_HEIGHT) * 30)
                 color = (val, val, val)
@@ -371,8 +388,39 @@ def rumble(duration):
 
 
 def play_cutscene_animation(filename, frames, cancel_callback):
-    """Stub for cutscene animation"""
-    pass
+    """Play cutscene animation - shows title screen"""
+    # Determine what to show based on filename
+    if "intro" in filename or "title" in filename:
+        title_text = "THUMBCOMMANDER"
+        subtitle = "Press any key to continue"
+    elif "eject" in filename:
+        title_text = "EJECTING..."
+        subtitle = "Escape pod deployed"
+    elif "home" in filename:
+        title_text = "RETURNING HOME"
+        subtitle = "Mission accomplished"
+    else:
+        title_text = "CUTSCENE"
+        subtitle = "Loading..."
+
+    # Show cutscene for a moment
+    import time
+    display.fill(display.BLACK)
+
+    # Draw gradient background
+    for i in range(DISPLAY_HEIGHT):
+        val = int(30 + (i / DISPLAY_HEIGHT) * 50)
+        pygame.draw.line(display.internal_fb, (0, 0, val), (0, i), (DISPLAY_WIDTH, i))
+
+    # Draw title
+    title_y = DISPLAY_HEIGHT // 2 - 10
+    display.drawText(title_text, 15, title_y, display.WHITE)
+    display.drawText(subtitle, 10, title_y + 20, display.LIGHTGRAY)
+
+    display.update()
+
+    # Brief pause to show cutscene
+    time.sleep(0.5)
 
 
 def create_cancel_callback():

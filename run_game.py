@@ -166,19 +166,19 @@ sys.modules['thumbycolor_native'] = type('Module', (), {
     '_rumble': pygame_platform.rumble
 })()
 
-# Mock audio module
+# Mock audio module - use lambdas to avoid method binding issues
 sys.modules['audio'] = type('Module', (), {
-    'load': pygame_platform.audio_load,
-    'play': pygame_platform.audio_play,
-    'stop': pygame_platform.audio_stop,
-    'set_volume': pygame_platform.audio_set_volume,
-    'set_loop': pygame_platform.audio_set_loop,
-    'get_position': pygame_platform.audio_get_position,
-    'set_end_callback': pygame_platform.audio_set_end_callback,
-    'clear_end_callback': pygame_platform.audio_clear_end_callback,
-    'open_id': pygame_platform.audio_open_id,
-    'play_id': pygame_platform.audio_play_id,
-    'close_ids': pygame_platform.audio_close_ids
+    'load': lambda filename: None,
+    'play': lambda: None,
+    'stop': lambda: None,
+    'set_volume': lambda volume: None,
+    'set_loop': lambda loop, start=0, end=0: None,
+    'get_position': lambda: 0,
+    'set_end_callback': lambda callback: None,
+    'clear_end_callback': lambda: None,
+    'open_id': lambda filename, id: None,  # Takes 2 args: filename and id
+    'play_id': lambda id: None,
+    'close_ids': lambda: None
 })()
 
 # Mock cutscene utils
