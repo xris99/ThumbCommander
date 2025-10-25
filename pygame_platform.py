@@ -6,6 +6,13 @@ import pygame
 import os
 import struct
 
+# Try to import numpy for fast array operations
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+
 # Initialize pygame
 pygame.init()
 
@@ -17,6 +24,14 @@ SCALE_FACTOR = 4  # Display at 4x size for visibility
 # FrameBuffer format constants
 RGB565 = 1
 GS8 = 2
+
+# Pre-compute RGB565 to RGB888 lookup table for speed
+RGB565_TO_RGB888 = []
+for i in range(65536):
+    r = ((i >> 11) & 0x1F) * 255 // 31
+    g = ((i >> 5) & 0x3F) * 255 // 63
+    b = (i & 0x1F) * 255 // 31
+    RGB565_TO_RGB888.append((r << 16) | (g << 8) | b)
 
 
 class PygameFrameBuffer:
@@ -116,47 +131,90 @@ class PygameFrameBuffer:
             palette: Optional palette framebuffer for indexed color mode
         """
         if palette is not None:
-            # Palette-based blitting (for 8-bit indexed mode)
+            # Palette-based blitting (for 8-bit indexed mode) - OPTIMIZED
             # Source is GS8 (indexed), palette is RGB565
+            # Direct buffer access for speed - NO PYGAME SURFACE UPDATE
             for sy in range(source_fb.height):
+                dest_y = y + sy
+                if dest_y < 0 or dest_y >= self.height:
+                    continue
+
                 for sx in range(source_fb.width):
                     dest_x = x + sx
-                    dest_y = y + sy
+                    if dest_x < 0 or dest_x >= self.width:
+                        continue
 
-                    if 0 <= dest_x < self.width and 0 <= dest_y < self.height:
-                        # Get palette index from source
-                        index = source_fb.pixel(sx, sy)
+                    # Get palette index from source buffer directly
+                    src_idx = sy * source_fb.width + sx
+                    if src_idx >= len(source_fb.buffer):
+                        continue
 
-                        if index is None:
-                            continue
+                    index = source_fb.buffer[src_idx]
 
-                        # Skip if matches key
-                        if key != -1 and index == key:
-                            continue
+                    # Skip if matches key
+                    if key != -1 and index == key:
+                        continue
 
-                        # Look up color in palette
-                        if index < palette.width:
-                            color = palette.pixel(index, 0)
-                            if color is not None:
-                                self.pixel(dest_x, dest_y, color)
+                    # Look up color in palette buffer directly
+                    if index < palette.width:
+                        pal_idx = index * 2  # RGB565 = 2 bytes
+                        if pal_idx + 1 < len(palette.buffer):
+                            color = palette.buffer[pal_idx] | (palette.buffer[pal_idx + 1] << 8)
+
+                            # Write to destination buffer directly
+                            dest_idx = (dest_y * self.width + dest_x) * 2
+                            if dest_idx + 1 < len(self.buffer):
+                                self.buffer[dest_idx] = color & 0xFF
+                                self.buffer[dest_idx + 1] = (color >> 8) & 0xFF
+            # Note: pygame surface update happens in display.update()
         else:
-            # Direct blitting
-            for sy in range(source_fb.height):
-                for sx in range(source_fb.width):
-                    dest_x = x + sx
+            # Direct blitting - OPTIMIZED
+            if source_fb.format == self.format == RGB565:
+                # Fast path for RGB565 to RGB565 - NO PYGAME SURFACE UPDATE
+                for sy in range(source_fb.height):
                     dest_y = y + sy
+                    if dest_y < 0 or dest_y >= self.height:
+                        continue
 
-                    if 0 <= dest_x < self.width and 0 <= dest_y < self.height:
-                        color = source_fb.pixel(sx, sy)
-
-                        if color is None:
+                    for sx in range(source_fb.width):
+                        dest_x = x + sx
+                        if dest_x < 0 or dest_x >= self.width:
                             continue
+
+                        # Direct buffer copy
+                        src_idx = (sy * source_fb.width + sx) * 2
+                        if src_idx + 1 >= len(source_fb.buffer):
+                            continue
+
+                        color = source_fb.buffer[src_idx] | (source_fb.buffer[src_idx + 1] << 8)
 
                         # Skip if matches key
                         if key != -1 and color == key:
                             continue
 
-                        self.pixel(dest_x, dest_y, color)
+                        dest_idx = (dest_y * self.width + dest_x) * 2
+                        if dest_idx + 1 < len(self.buffer):
+                            self.buffer[dest_idx] = source_fb.buffer[src_idx]
+                            self.buffer[dest_idx + 1] = source_fb.buffer[src_idx + 1]
+                # Note: pygame surface update happens in display.update()
+            else:
+                # Fallback to pixel-by-pixel
+                for sy in range(source_fb.height):
+                    for sx in range(source_fb.width):
+                        dest_x = x + sx
+                        dest_y = y + sy
+
+                        if 0 <= dest_x < self.width and 0 <= dest_y < self.height:
+                            color = source_fb.pixel(sx, sy)
+
+                            if color is None:
+                                continue
+
+                            # Skip if matches key
+                            if key != -1 and color == key:
+                                continue
+
+                            self.pixel(dest_x, dest_y, color)
 
 
 class PygameDisplay:
@@ -369,6 +427,27 @@ class PygameDisplay:
         # Update button states
         self.update_buttons()
 
+        # Sync RGB565 buffer to pygame surface ONCE per frame
+        if HAS_NUMPY:
+            # Fast path with numpy
+            rgb565_array = np.frombuffer(self.internal_fb.buffer, dtype=np.uint16).reshape((DISPLAY_HEIGHT, DISPLAY_WIDTH))
+            r = ((rgb565_array >> 11) & 0x1F) * 255 // 31
+            g = ((rgb565_array >> 5) & 0x3F) * 255 // 63
+            b = (rgb565_array & 0x1F) * 255 // 31
+            rgb_array = np.dstack((r, g, b)).astype(np.uint8)
+            pygame.surfarray.blit_array(self.internal_fb.pygame_surface, np.transpose(rgb_array, (1, 0, 2)))
+        else:
+            # Fallback with PixelArray and lookup table (faster than set_at)
+            pxarray = pygame.PixelArray(self.internal_fb.pygame_surface)
+            for y in range(DISPLAY_HEIGHT):
+                for x in range(DISPLAY_WIDTH):
+                    idx = (y * DISPLAY_WIDTH + x) * 2
+                    if idx + 1 < len(self.internal_fb.buffer):
+                        color = self.internal_fb.buffer[idx] | (self.internal_fb.buffer[idx + 1] << 8)
+                        # Use lookup table for speed
+                        pxarray[x][y] = RGB565_TO_RGB888[color]
+            del pxarray  # Release the lock on the surface
+
         # Scale and blit internal framebuffer to screen
         scaled_surface = pygame.transform.scale(
             self.internal_fb.pygame_surface,
@@ -529,64 +608,10 @@ def audio_close_ids():
     pass
 
 
-def play_cutscene_animation(filename, frames, cancel_callback):
-    """Mock cutscene animation player"""
-    import time
-
-    # Get or create display
-    disp = get_display()
-
-    # Determine what type of cutscene based on filename
-    is_intro = "intro" in filename.lower()
-    is_title = "title" in filename.lower()
-
-    if is_intro or is_title:
-        # Show title screen
-        disp.fill(0x0000)  # Black background
-
-        # Draw gradient background
-        for y in range(DISPLAY_HEIGHT):
-            blue_val = int(10 + (y / DISPLAY_HEIGHT) * 20)
-            color = (0 << 11) | (blue_val << 5) | (31 - (y * 31 // DISPLAY_HEIGHT))
-            for x in range(DISPLAY_WIDTH):
-                disp.internal_fb.pixel(x, y, color)
-
-        # Draw title text
-        title_text = "THUMBCOMMANDER"
-        disp.drawText(title_text, 10, 50, disp.WHITE)
-        disp.drawText("Press any key to continue", 10, 70, disp.LIGHTGRAY)
-        disp.update()
-
-        # Wait for key press or timeout
-        start_time = time.time()
-        while time.time() - start_time < 2.0:  # 2 second timeout
-            keys = pygame.key.get_pressed()
-            if any(keys):
-                break
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    import sys
-                    sys.exit()
-                if event.type == pygame.KEYDOWN:
-                    return
-            time.sleep(0.016)  # ~60 FPS
-            disp.update()
-    else:
-        # Other cutscenes - just show a placeholder
-        disp.fill(0x0000)
-        disp.drawText("Cutscene: " + os.path.basename(filename), 10, 50, disp.WHITE)
-        disp.update()
-        time.sleep(0.5)
-
-
-def create_cancel_callback():
-    """Create a mock cancel callback"""
-    def callback(frame_idx):
-        # Check if ESC is pressed
-        keys = pygame.key.get_pressed()
-        return not keys[pygame.K_ESCAPE]
-    return callback
+def update_buttons():
+    """Update all button states - called by game code"""
+    for button in [buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU]:
+        button.update()
 
 
 # Create global display instance

@@ -196,15 +196,41 @@ class AudioModule:
 
 sys.modules['audio'] = AudioModule()
 
-# Mock cutscene utils
-def mock_init_cutscene_utils(*args):
-    pass
+# Check if we should use real cutscenes or skip them
+if pygame_platform.HAS_NUMPY:
+    # Import real cutscene_utils - it will use the FrameBuffer we provided
+    import cutscene_utils
+    # Initialize it with pygame platform components
+    from platform_constants import get_constants
+    PC = get_constants(True)
+    cutscene_utils.init_cutscene_utils(
+        pygame_platform.display,
+        PC,
+        pygame_platform.audio_load,
+        pygame_platform.audio_play,
+        pygame_platform.audio_stop,
+        pygame_platform.buttonMENU
+    )
+else:
+    # Skip cutscenes (too slow without numpy)
+    print("WARNING: Numpy not available. Cutscenes will be skipped.")
+    print("Install numpy for full cutscene support: pip install numpy")
 
-sys.modules['cutscene_utils'] = type('Module', (), {
-    'init_cutscene_utils': mock_init_cutscene_utils,
-    'play_cutscene_animation': pygame_platform.play_cutscene_animation,
-    'create_cancel_callback': pygame_platform.create_cancel_callback
-})()
+    # Create a proper mock module
+    class MockCutsceneUtils:
+        @staticmethod
+        def init_cutscene_utils(*args):
+            pass
+
+        @staticmethod
+        def play_cutscene_animation(filename, frames, cancel_callback):
+            pass
+
+        @staticmethod
+        def create_cancel_callback():
+            return lambda frame_idx: True
+
+    sys.modules['cutscene_utils'] = MockCutsceneUtils()
 
 # Mock Intro module
 sys.modules['Intro'] = type('Module', (), {
@@ -241,8 +267,13 @@ platform_loader.buttonLB = pygame_platform.buttonLB
 platform_loader.buttonRB = pygame_platform.buttonRB
 platform_loader.buttonMENU = pygame_platform.buttonMENU
 platform_loader.rumble = pygame_platform.rumble
-platform_loader.play_cutscene_animation = pygame_platform.play_cutscene_animation
-platform_loader.create_cancel_callback = pygame_platform.create_cancel_callback
+# Set cutscene functions from the appropriate module
+if pygame_platform.HAS_NUMPY:
+    platform_loader.play_cutscene_animation = cutscene_utils.play_cutscene_animation
+    platform_loader.create_cancel_callback = cutscene_utils.create_cancel_callback
+else:
+    platform_loader.play_cutscene_animation = sys.modules['cutscene_utils'].play_cutscene_animation
+    platform_loader.create_cancel_callback = sys.modules['cutscene_utils'].create_cancel_callback
 platform_loader.audio_load = pygame_platform.audio_load
 platform_loader.audio_play = pygame_platform.audio_play
 platform_loader.audio_stop = pygame_platform.audio_stop
