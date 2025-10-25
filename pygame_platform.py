@@ -87,6 +87,83 @@ class PygameFrameBuffer:
             for i in range(min(len(self.buffer), self.width * self.height)):
                 self.buffer[i] = gray
 
+    def rect(self, x, y, w, h, c, fill=False):
+        """Draw a rectangle (micropython FrameBuffer API)
+
+        Args:
+            x, y: Top-left corner
+            w, h: Width and height
+            c: Color
+            fill: If True, draw filled rectangle
+        """
+        if fill:
+            # Draw filled rectangle
+            for dy in range(h):
+                for dx in range(w):
+                    px = x + dx
+                    py = y + dy
+                    if 0 <= px < self.width and 0 <= py < self.height:
+                        self.pixel(px, py, c)
+        else:
+            # Draw rectangle outline
+            # Top and bottom
+            for dx in range(w):
+                if 0 <= x + dx < self.width:
+                    if 0 <= y < self.height:
+                        self.pixel(x + dx, y, c)
+                    if 0 <= y + h - 1 < self.height:
+                        self.pixel(x + dx, y + h - 1, c)
+            # Left and right
+            for dy in range(h):
+                if 0 <= y + dy < self.height:
+                    if 0 <= x < self.width:
+                        self.pixel(x, y + dy, c)
+                    if 0 <= x + w - 1 < self.width:
+                        self.pixel(x + w - 1, y + dy, c)
+
+    def hline(self, x, y, w, c):
+        """Draw a horizontal line (micropython FrameBuffer API)"""
+        for dx in range(w):
+            px = x + dx
+            if 0 <= px < self.width and 0 <= y < self.height:
+                self.pixel(px, y, c)
+
+    def vline(self, x, y, h, c):
+        """Draw a vertical line (micropython FrameBuffer API)"""
+        for dy in range(h):
+            py = y + dy
+            if 0 <= x < self.width and 0 <= py < self.height:
+                self.pixel(x, py, c)
+
+    def line(self, x1, y1, x2, y2, c):
+        """Draw a line (micropython FrameBuffer API)"""
+        # Bresenham's line algorithm
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
+
+        while True:
+            if 0 <= x1 < self.width and 0 <= y1 < self.height:
+                self.pixel(x1, y1, c)
+            if x1 == x2 and y1 == y2:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x1 += sx
+            if e2 < dx:
+                err += dx
+                y1 += sy
+
+    def text(self, s, x, y, c):
+        """Draw text (basic implementation for micropython FrameBuffer API)"""
+        # This is a minimal implementation - micropython has bitmap fonts
+        # For now, just record that text should be drawn
+        # The actual rendering would need bitmap font data
+        pass
+
     def pixel(self, x, y, color=None):
         """Get or set a pixel"""
         if x < 0 or x >= self.width or y < 0 or y >= self.height:
