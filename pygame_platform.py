@@ -501,18 +501,9 @@ class PygameDisplay:
 
     def update_buttons(self):
         """Update button states from keyboard"""
-        keys = pygame.key.get_pressed()
-
-        # Update button states based on keyboard
-        self.buttons['A'] = keys[BUTTON_MAPPINGS['A']]
-        self.buttons['B'] = keys[BUTTON_MAPPINGS['B']]
-        self.buttons['UP'] = keys[BUTTON_MAPPINGS['UP']]
-        self.buttons['DOWN'] = keys[BUTTON_MAPPINGS['DOWN']]
-        self.buttons['LEFT'] = keys[BUTTON_MAPPINGS['LEFT']]
-        self.buttons['RIGHT'] = keys[BUTTON_MAPPINGS['RIGHT']]
-        self.buttons['LB'] = keys[BUTTON_MAPPINGS['LB']]
-        self.buttons['RB'] = keys[BUTTON_MAPPINGS['RB']]
-        self.buttons['MENU'] = keys[BUTTON_MAPPINGS['MENU']]
+        # Update all button instances
+        for button in [buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU]:
+            button.update()
 
 
 # Button mappings (updated for German keyboard)
@@ -539,20 +530,23 @@ class PygameButton:
         self.just_pressed_flag = False
 
     def update(self):
-        """Update button state"""
+        """Update button state - called once per frame in display.update()"""
         keys = pygame.key.get_pressed()
         self.last_state = self.current_state
         self.current_state = keys[self.key_code]
+        # Set flag if button just transitioned from not pressed to pressed
         self.just_pressed_flag = self.current_state and not self.last_state
 
     def pressed(self):
         """Check if button is currently pressed"""
+        # Always get fresh state for pressed()
         keys = pygame.key.get_pressed()
         return keys[self.key_code]
 
     def justPressed(self):
-        """Check if button was just pressed"""
-        self.update()
+        """Check if button was just pressed (True only on the frame it was pressed)"""
+        # Return the flag that was set by update()
+        # The flag persists for the entire frame until the next update()
         return self.just_pressed_flag
 
 
