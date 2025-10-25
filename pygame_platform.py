@@ -137,17 +137,53 @@ class PygameDisplay:
             self.drawSprite(sprite)
 
     def draw_sprite_from_file(self, filename, x, y, frame):
-        """Draw sprite directly from file (stub for now)"""
-        # For testing, just draw a placeholder
-        rgb = self.rgb565_to_rgb888(self.LIGHTGRAY)
-        pygame.draw.rect(self.internal_fb, rgb, (int(x), int(y), 20, 20), 1)
+        """Draw sprite directly from file (stub - draws colored rectangle)"""
+        # Determine color based on filename
+        if "cockpit" in filename:
+            rgb = (100, 100, 100)  # Gray cockpit
+            width, height = 118, 53
+        elif "enemy" in filename:
+            rgb = (200, 50, 50)  # Red enemy
+            width, height = 70, 59
+        elif "astroid" in filename:
+            rgb = (139, 90, 60)  # Brown asteroid
+            width, height = 56, 47
+        elif "explode" in filename:
+            rgb = (255, 150, 0)  # Orange explosion
+            width, height = 56, 54
+        elif "shield" in filename:
+            rgb = (50, 150, 255)  # Blue shield
+            width, height = 30, 30
+        else:
+            rgb = self.rgb565_to_rgb888(self.LIGHTGRAY)
+            width, height = 20, 20
+
+        # Draw filled rectangle for visibility
+        pygame.draw.rect(self.internal_fb, rgb, (int(x), int(y), width, height))
+        # Draw outline
+        pygame.draw.rect(self.internal_fb, (255, 255, 255), (int(x), int(y), width, height), 1)
 
     def draw_fullwidth_sprite(self, filename, y=0, frame=0):
-        """Draw full-width sprite (stub)"""
-        pass
+        """Draw full-width sprite (stub - draws gradient background)"""
+        # Draw a simple gradient background to show menu screens
+        if "menu" in filename or "title" in filename:
+            # Draw dark blue gradient for menu
+            for i in range(DISPLAY_HEIGHT):
+                blue_val = int(20 + (i / DISPLAY_HEIGHT) * 40)
+                color = (0, 0, blue_val)
+                pygame.draw.line(self.internal_fb, color, (0, i), (DISPLAY_WIDTH, i))
+        elif "eject" in filename or "home" in filename or "intro" in filename:
+            # Draw different gradient for cutscenes
+            for i in range(DISPLAY_HEIGHT):
+                val = int(10 + (i / DISPLAY_HEIGHT) * 30)
+                color = (val, val, val)
+                pygame.draw.line(self.internal_fb, color, (0, i), (DISPLAY_WIDTH, i))
 
     def update(self):
         """Update the display"""
+        # Update all button states FIRST (before display)
+        update_buttons()
+
         # Scale up the internal framebuffer to the screen
         scaled = pygame.transform.scale(
             self.internal_fb,
@@ -186,19 +222,36 @@ class PygameSprite:
         self.scaledHeight = height
         self.scale_factor = 1.0
 
-        # Create a placeholder surface
+        # Create a placeholder surface with transparency
         self.surface = pygame.Surface((width, height))
-        self.surface.fill((100, 100, 100))  # Gray placeholder
 
-        # For bitmap data, create simple colored surface
+        # For bitmap data, create simple colored surface based on filename
         if isinstance(bitmap_data, str):
             # File-based sprite - use color based on filename
             if "enemy" in bitmap_data:
-                self.surface.fill((200, 100, 100))  # Red for enemies
+                self.surface.fill((200, 50, 50))  # Bright red for enemies
+                # Draw a simple enemy shape
+                pygame.draw.circle(self.surface, (255, 100, 100), (width//2, height//2), min(width, height)//3)
             elif "astroid" in bitmap_data:
-                self.surface.fill((150, 150, 100))  # Brown for asteroids
+                self.surface.fill((139, 90, 60))  # Brown for asteroids
+                # Draw some dots to make it look rocky (only if sprite has size)
+                if width > 10 and height > 10:
+                    import random
+                    for _ in range(5):
+                        x = random.randint(5, width-6)
+                        y = random.randint(5, height-6)
+                        pygame.draw.circle(self.surface, (100, 70, 50), (x, y), 3)
             elif "shield" in bitmap_data:
-                self.surface.fill((100, 100, 200))  # Blue for shields
+                self.surface.fill((50, 150, 255))  # Blue for shields
+                pygame.draw.circle(self.surface, (100, 200, 255), (width//2, height//2), min(width, height)//3)
+            elif "explode" in bitmap_data:
+                self.surface.fill((255, 150, 0))  # Orange explosion
+                # Make it look more explosive
+                pygame.draw.circle(self.surface, (255, 200, 50), (width//2, height//2), min(width, height)//4)
+            else:
+                self.surface.fill((100, 100, 100))  # Gray placeholder
+        else:
+            self.surface.fill((100, 100, 100))  # Gray placeholder
 
     def setFrame(self, frame):
         """Set current frame"""
