@@ -3,9 +3,25 @@ ThumbyColor native display and sprite emulation for PC
 Uses pygame for rendering
 """
 
-import pygame
 import os
-from .framebuf import FrameBuffer, RGB565
+try:
+    # Try relative import first (when imported as package)
+    from .framebuf import FrameBuffer, RGB565
+except ImportError:
+    # Fall back to absolute import (when imported directly)
+    from framebuf import FrameBuffer, RGB565
+
+# Lazy import pygame - only when display is created
+pygame = None
+
+
+def _ensure_pygame():
+    """Ensure pygame is imported and initialized"""
+    global pygame
+    if pygame is None:
+        import pygame as pg
+        pg.init()
+        pygame = pg
 
 
 class ColorDisplay:
@@ -23,7 +39,7 @@ class ColorDisplay:
             height: Display height in pixels (default 128)
             scale: Scale factor for the window (default 4 for 512x512 window)
         """
-        pygame.init()
+        _ensure_pygame()
         self.width = width
         self.height = height
         self.scale = scale

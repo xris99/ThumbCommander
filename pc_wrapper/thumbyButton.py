@@ -3,7 +3,19 @@ Thumby button emulation for PC
 Maps keyboard keys to button states
 """
 
-import pygame
+# Lazy import pygame - only when actually needed
+pygame = None
+
+
+def _ensure_pygame():
+    """Ensure pygame is imported"""
+    global pygame
+    if pygame is None:
+        try:
+            import pygame as pg
+            pygame = pg
+        except ImportError:
+            pass  # pygame not available
 
 
 class ButtonState:
@@ -27,20 +39,40 @@ class ButtonClass:
 
     # Keyboard mapping
     key_mapping = {
-        'A': pygame.K_z,
-        'B': pygame.K_x,
-        'UP': pygame.K_UP,
-        'DOWN': pygame.K_DOWN,
-        'LEFT': pygame.K_LEFT,
-        'RIGHT': pygame.K_RIGHT,
-        'LB': pygame.K_a,
-        'RB': pygame.K_s,
-        'MENU': pygame.K_ESCAPE,
+        'A': None,  # Will be set to pygame.K_z when pygame is loaded
+        'B': None,
+        'UP': None,
+        'DOWN': None,
+        'LEFT': None,
+        'RIGHT': None,
+        'LB': None,
+        'RB': None,
+        'MENU': None,
     }
+
+    @classmethod
+    def _init_key_mapping(cls):
+        """Initialize key mapping once pygame is available"""
+        _ensure_pygame()
+        if pygame and cls.key_mapping['A'] is None:
+            cls.key_mapping['A'] = pygame.K_z
+            cls.key_mapping['B'] = pygame.K_x
+            cls.key_mapping['UP'] = pygame.K_UP
+            cls.key_mapping['DOWN'] = pygame.K_DOWN
+            cls.key_mapping['LEFT'] = pygame.K_LEFT
+            cls.key_mapping['RIGHT'] = pygame.K_RIGHT
+            cls.key_mapping['LB'] = pygame.K_a
+            cls.key_mapping['RB'] = pygame.K_s
+            cls.key_mapping['MENU'] = pygame.K_ESCAPE
 
     @classmethod
     def update_all_buttons(cls):
         """Update all button states - call this once per frame"""
+        _ensure_pygame()
+        if pygame is None:
+            return
+
+        cls._init_key_mapping()
         keys = pygame.key.get_pressed()
 
         for button_id, state in cls.button_states.items():
