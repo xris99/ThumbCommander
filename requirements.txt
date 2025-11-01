@@ -1,0 +1,2 @@
+# Python dependencies for running ThumbCommander on PC
+pygame>=2.0.0
