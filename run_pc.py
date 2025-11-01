@@ -19,7 +19,8 @@ sys.path.insert(0, PC_WRAPPER_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
 # Import and setup MicroPython compatibility BEFORE any game imports
-from pc_wrapper.micropython_compat import micropython, const
+# Note: micropython_compat automatically installs itself in sys.modules
+import pc_wrapper.micropython_compat
 
 # Replace standard modules with our compatibility versions
 import pc_wrapper.utime as utime
@@ -36,7 +37,7 @@ import pc_wrapper.cutscene_utils as cutscene_utils
 import pc_wrapper.grayscale as grayscale
 
 # Install modules in sys.modules so they're found by import statements
-sys.modules['micropython'] = micropython
+# micropython is already installed by micropython_compat
 sys.modules['utime'] = utime
 sys.modules['machine'] = machine
 sys.modules['gc'] = gc
