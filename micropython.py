@@ -75,3 +75,24 @@ def schedule(func, arg):
     Schedule function to be executed (simplified on PC)
     """
     func(arg)
+
+def ptr32(obj):
+    """
+    Return pointer to 32-bit array (viper mode)
+    On PC, just return the object itself
+    """
+    return obj
+
+def ptr16(obj):
+    """
+    Return pointer to 16-bit array (viper mode)
+    On PC, just return the object itself
+    """
+    return obj
+
+def ptr8(obj):
+    """
+    Return pointer to 8-bit array (viper mode)
+    On PC, just return the object itself
+    """
+    return obj

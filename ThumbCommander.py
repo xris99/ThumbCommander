@@ -1,18 +1,8 @@
 # ThumbCommander.py - Complete updated version with dynamic resolution support
 from sys import path
 from time import sleep
-import os
-
-# Detect if running with pygame (check for pygame_platform module)
-try:
-    import pygame_platform
-    # Running with pygame, use current directory
-    loc = os.path.dirname(os.path.abspath(__file__)) + "/"
-    path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-except ImportError:
-    # Running on actual hardware
-    loc = "/Games/ThumbCommander/"
-    path.insert(0, '/Games/ThumbCommander')
+loc = "/Games/ThumbCommander/"
+path.insert(0, '/Games/ThumbCommander')
 
 from platform_loader import display, IS_THUMBY_COLOR, Sprite, PC, create_sprite, play_cutscene_animation, create_cancel_callback, audio_load, audio_play, audio_stop, audio_set_loop, audio_set_volume, audio_get_position, rumble, buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU, dpadPressed, inputJustPressed
 display.enableGrayscale()
@@ -80,7 +70,7 @@ player_angle = [0, 0, 0]
 score = 0
 hudShip = None
 
-DEFAULT_KEYS = [
+DEFAULT_KEYS = array('O', [
     'A',  # FIRE (index 0)
     'B',  # SHIFT (index 1)
     'L',  # MOVE_LEFT (index 2)
@@ -92,21 +82,21 @@ DEFAULT_KEYS = [
     'RB' if IS_THUMBY_COLOR else 'R',  # TARGET_NEXT (index 8)
     'LB' if IS_THUMBY_COLOR else 'L',   # TARGET_PREV (index 9)
     'A'   # EJECT (index 10)
-]
+])
 
-SHIFT_REQUIRED = [
+SHIFT_REQUIRED = array('B', [
     False,  # FIRE (index 0)
-    False,  # SHIFT (index 1)
+    False,  # SHIFT (index 1) 
     False,  # MOVE_LEFT (index 2)
     False,  # MOVE_RIGHT (index 3)
     False,  # MOVE_UP (index 4)
     False,  # MOVE_DOWN (index 5)
-    True,   # AFTERBURNER (index 6)
+    True,   # AFTERBURNER (index 6) 
     True,   # BREAK (index 7)
     not IS_THUMBY_COLOR,   # TARGET_NEXT (index 8)
     not IS_THUMBY_COLOR,    # TARGET_PREV (index 9)
     True    # EJECT (index 10)
-]
+])
 
 # Constants for key indexes
 KEY_FIRE = const(0)
@@ -206,7 +196,7 @@ def fpsin(a:int) -> int:
     ta:int = a & sintab_quart_mask
     if (a & sintab_half_mask) >= sintab_sz_quart:
         ta = sintab_quart_mask - ta
-    v:int = sintab[ta]  # Use regular array indexing instead of ptr32
+    v:int = ptr32(sintab)[ta]
     if a >= sintab_sz_half:
         return 0 - v
     return v
@@ -292,7 +282,7 @@ def load_keymaps():
     try:
         with open(loc + "keymap.json", "r") as f:
             loaded_keys = json.loads(f.read())
-            complete_keys = list(DEFAULT_KEYS)
+            complete_keys = array('O', DEFAULT_KEYS)
             
             if "FIRE" in loaded_keys and button_exists(loaded_keys["FIRE"]):
                 complete_keys[KEY_FIRE] = loaded_keys["FIRE"]
@@ -321,7 +311,7 @@ def load_keymaps():
               
             return complete_keys
     except:
-        return list(DEFAULT_KEYS)
+        return array('O', DEFAULT_KEYS)
 
 def save_keymaps(keymap):
     try:
@@ -352,7 +342,7 @@ class Stars:
     def __init__(self, num=None, scale_pos=4, stable=80):
         if num is None:
             num = PC.STAR_COUNT
-        stars = list([None] * num)
+        stars = array('O', [None] * num)
         for i in range(num):
             speed = 0 if (randint(0,100) <= stable) else randint(42598, 62258)
             if speed != 0:
@@ -408,7 +398,7 @@ class Stars:
 
 class Astroids:
     def __init__(self, num=5):
-        astroids = list([None] * num)
+        astroids = array('O', [None] * num)
         for i in range(num):
             astroids[i] = self.new_astroid()
         self.astroids = astroids
@@ -503,7 +493,7 @@ class Astroids:
 
 class Enemies:
     def __init__(self, num=1):
-        enemies = list([None] * num)
+        enemies = array('O', [None] * num)
         for i in range(num):
             enemies[i] = self.new_enemy()
         
@@ -515,7 +505,7 @@ class Enemies:
      
     @micropython.native
     def new_enemy(self):
-        e = list([randrange(-PC.SPACE_ENEMIES<<16, PC.SPACE_ENEMIES<<16),      #0: x
+        e = array('O', [randrange(-PC.SPACE_ENEMIES<<16, PC.SPACE_ENEMIES<<16),      #0: x
                         randrange(-PC.SPACE_ENEMIES<<16, PC.SPACE_ENEMIES<<16),      #1: y
                         45<<16,                            #2: z
                         randrange(0, 12),                  #3: x-orientation (0:-180, 6:0, 12:+180)
@@ -703,34 +693,30 @@ class Pilot:
     def __init__(self, enemy):
         self.enemy = enemy
         self.timer = 0
-        self.freq = 10
+        self.freq = 10  
         self.triggerhappy = randint(3, 6)
         self.lucky = randint(4, 8)
-
+        
         # State machine
         self.state = Pilot.PATROL
         self.state_timer = 0
         self.prev_state = Pilot.PATROL
-
+        
         # Targeting - start facing player
         self.target_orientation_x = 3 if enemy[2] > 0 else 9
         self.target_orientation_y = 6
-
+        
         # Threat assessment
         self.threat_level = 0
         self.last_health = enemy[7]
         self.damage_timer = 0
-
+        
         # Personality traits (0.3-0.8 range for aggression, 0.6-1.0 for skill)
         self.aggression = 19660 + randint(0, 32768)  # 0.3 to 0.8
         self.skill = 39322 + randint(0, 26214)  # 0.6 to 1.0
-
+        
         # Maneuver direction
         self.flank_side = choice([0, 1])  # 0=left, 1=right
-
-        # Player velocity estimation for lead targeting
-        self.last_player_angle = [0, 0]
-        self.estimated_player_vel = [0, 0]
         
     @micropython.native
     def run(self):
@@ -956,87 +942,37 @@ class Pilot:
             return False
         z_pos = self.enemy[2]
         state = self.state
-
+        
         # Chase position - best firing spot
         if state == Pilot.CHASE:
             return randint(0, 2) <= 1  # 50% chance
-
+        
         # Intercept/Engage - fire when in range
         if state in [Pilot.INTERCEPT, Pilot.ENGAGE]:
             if 10<<16 < abs(z_pos) < 35<<16:
                 # Better pilots fire more often
                 threshold = 3 if self.skill > 52428 else 2  # 0.8 skill cutoff
                 return randint(0, self.triggerhappy) <= threshold
-
+        
         # Opportunistic shots
         if abs(z_pos) < 30<<16:
             return randint(0, self.lucky * 3) == 1
-
+            
         return False
-
-    @micropython.native
-    def update_player_velocity_estimate(self):
-        """Estimate player velocity for lead targeting"""
-        # Calculate velocity as change in player_angle
-        self.estimated_player_vel[0] = player_angle[0] - self.last_player_angle[0]
-        self.estimated_player_vel[1] = player_angle[1] - self.last_player_angle[1]
-
-        # Store current for next frame
-        self.last_player_angle[0] = player_angle[0]
-        self.last_player_angle[1] = player_angle[1]
-
-    @micropython.native
-    def calculate_firing_solution(self):
-        """Calculate lead for moving target based on player velocity"""
-        # Update player velocity estimate
-        self.update_player_velocity_estimate()
-
-        # Distance to player (where player appears to be)
-        distance = abs(self.enemy[2])
-
-        # Laser speed (relative to enemy) - approximately 2-3x enemy velocity
-        laser_speed = 15<<16
-
-        # Time for laser to reach target (rough estimate)
-        if distance > (1<<16):
-            time_to_target = fpdiv_a(distance, laser_speed)
-        else:
-            time_to_target = 1<<16
-
-        # Predict where player will be
-        # Account for player movement and relative speed
-        player_vel_x = self.estimated_player_vel[0] + (player_speed - 65536)
-        player_vel_y = self.estimated_player_vel[1]
-
-        # Calculate lead - where to aim
-        lead_x = fpmul(time_to_target, player_vel_x)
-        lead_y = fpmul(time_to_target, player_vel_y)
-
-        # Scale lead based on pilot skill (better pilots lead more accurately)
-        # Skill ranges from 0.6 to 1.0, so this gives 60-100% of calculated lead
-        lead_x = fpmul(lead_x, self.skill)
-        lead_y = fpmul(lead_y, self.skill)
-
-        return lead_x, lead_y
-
+    
     @micropython.native
     def fire_away(self):
-        """Fire laser with predictive lead targeting"""
-        # Calculate firing solution with lead
-        lead_x, lead_y = self.calculate_firing_solution()
-
-        # Add skill-based error (better pilots have less error)
+        """Fire laser with skill-based accuracy"""
         error_factor = (1<<16) - self.skill
-        error_x = fpmul(error_factor, randint(-16384, 16384))  # Reduced error range
-        error_y = fpmul(error_factor, randint(-16384, 16384))
-
-        # Combine enemy velocity, lead targeting, and error
-        vel_x = (self.enemy[11] * 2) + lead_x + error_x
-        vel_y = (self.enemy[12] * 2) + lead_y + error_y
+        error_x = fpmul(error_factor, randint(-32768, 32768))
+        error_y = fpmul(error_factor, randint(-32768, 32768))
+        
+        vel_x = (self.enemy[11] * 2) + error_x
+        vel_y = (self.enemy[12] * 2) + error_y
         vel_z = (self.enemy[13] * 3)
         if self.enemy[2] < (7<<16):
             vel_z = abs(vel_z)
-        self.enemy[9].append(Laser(self.enemy[0], self.enemy[1], self.enemy[2],
+        self.enemy[9].append(Laser(self.enemy[0], self.enemy[1], self.enemy[2], 
                                   vel_x, vel_y, vel_z))
  
 class Ship:
@@ -1069,66 +1005,14 @@ class Ship:
         
         self.laser = []
         self.fire_time = 0
-
-        # Weapon heat system (replaces simple energy counter)
-        self.weapon_heat = 0          # Current heat level (0-100)
-        self.max_heat = 100            # Maximum heat before overheat
-        self.heat_per_shot = 22        # Heat added per shot
-        self.cooling_rate = 3          # Heat removed per frame when not firing
-        self.overheated = False        # Overheat state flag
-        self.overheat_penalty_time = 0 # Extra cooldown when overheated
-
+        self.laser_energy = 5
         self.last_time = 0
         self.afterburner_time = 0
         display.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
-
-    @micropython.native
-    def get_heat_display_level(self):
-        """Convert heat (0-100) to display bars (0-5) for GUI"""
-        if self.weapon_heat >= 95:
-            return 5  # Critical heat / overheated
-        elif self.weapon_heat >= 80:
-            return 4  # Very hot
-        elif self.weapon_heat >= 60:
-            return 3  # Hot
-        elif self.weapon_heat >= 40:
-            return 2  # Warming up
-        elif self.weapon_heat >= 20:
-            return 1  # Slightly warm
-        else:
-            return 0  # Cool
-
-    @micropython.native
-    def update_weapon_heat(self):
-        """Update weapon cooling and overheat state"""
-        # Handle overheat penalty countdown
-        if self.overheat_penalty_time > 0:
-            self.overheat_penalty_time -= 1
-
-        # Cool down weapons (only if not in penalty time)
-        if self.weapon_heat > 0 and self.overheat_penalty_time == 0:
-            self.weapon_heat = max(0, self.weapon_heat - self.cooling_rate)
-
-        # Check for overheat recovery
-        if self.overheated:
-            if self.weapon_heat < 30:  # Recovered enough to fire again
-                self.overheated = False
-        else:
-            # Check if we've overheated
-            if self.weapon_heat >= self.max_heat:
-                self.overheated = True
-                self.overheat_penalty_time = 30  # Penalty: no cooling for 30 frames
-
+    
     @micropython.native
     def run(self):
         global hudShip
-
-        # Update weapon heat/cooling system
-        self.update_weapon_heat()
-
-        # Get heat level for display (0-5 bars)
-        heat_display = self.get_heat_display_level()
-
         for laser in self.laser:
             if laser.run():
                 self.laser.remove(laser)
@@ -1136,26 +1020,25 @@ class Ship:
             display.draw_sprite_from_file(self.cockpit_sprite, self.cockpit_sprite_x, self.cockpit_sprite_y, 0)
         else:
             display.drawSprite(self.cockpit_sprite)
-
-        # Use appropriate target sprite (show active when overheated)
-        if self.overheated:
+        
+        # Use appropriate target sprite
+        if self.laser_energy == 0:
             display.drawSprite(self.target_active_sprite)
         else:
             display.drawSprite(self.target_sprite)
-
+        
         # Status indicators
         if IS_THUMBY_COLOR:
             #display.drawSprite(self.cockpit_top_sprite)
             display.draw_sprite_from_file(self.cockpit_top_sprite, self.cockpit_top_sprite_x, 0,0)
             draw_hull_status(display, lifes)
-            # Display heat level (0-5 bars)
-            draw_half_circle_energy(display, self.cockpit_sprite_x + 59, self.cockpit_sprite_y + 26, 13, heat_display, 5)
+            draw_half_circle_energy(display, self.cockpit_sprite_x + 59, self.cockpit_sprite_y + 26, 13, self.laser_energy, 5)
             self.radar_sprite.x = self.cockpit_sprite_x + PC.RADAR_X
             self.radar_sprite.y = self.cockpit_sprite_y + PC.RADAR_Y
             self.radar_sprite.setFrame(self.radar_frame)
             self.radar_frame = (self.radar_frame + 1) % self.radar_framecount
             display.drawSprite(self.radar_sprite)
-
+            
             if (self.cockpit_sprite_x == (SHIP_X+1)): display.drawSprite(self.stick_left_sprite)
             elif (self.cockpit_sprite_x == (SHIP_X-1)): display.drawSprite(self.stick_right_sprite)
             elif (self.cockpit_sprite_y == (SHIP_Y+1)): display.drawSprite(self.stick_back_sprite)
@@ -1165,8 +1048,7 @@ class Ship:
         else:
             for i in range(lifes):
                 display.drawFilledRectangle(self.cockpit_sprite.x + 19, self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3 - i*3, 2, 2, PC.WHITE)
-            # Display heat level (0-5 bars)
-            for i in range(heat_display):
+            for i in range(self.laser_energy):
                 display.drawFilledRectangle(self.cockpit_sprite.x + 45, self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3 - i*3, 2, 2, PC.WHITE)
             display.drawSprite(self.radar_sprite)  
 
@@ -1253,19 +1135,20 @@ class Ship:
             player_angle[1] += 1<<16
             self.cockpit_sprite_y = SHIP_Y+1 #TODO
         elif eval("button" + KEYMAPS[KEY_FIRE]).justPressed():
-            # Fire only if not overheated
-            if not self.overheated:
+            if (self.laser_energy > 0):
                 self.laser.append(Laser(player_angle[0], player_angle[1]))
                 self.fire_time = new_time
-                # Add heat instead of depleting energy
-                self.weapon_heat = min(self.max_heat, self.weapon_heat + self.heat_per_shot)
+                self.laser_energy -= 1
                 if (self.fx): self.fx.play(FXEngine.LASER)
         else:
             player_angle[2] = 0
             self.cockpit_sprite_x = SHIP_X #TODO
             self.cockpit_sprite_y = SHIP_Y #TODO
 
-        # Old energy recharge code removed - now handled by update_weapon_heat() in run()
+        if (((int(ticks_diff(new_time, self.fire_time,))<<16)//1000000) > (1000*PC.FPS)):
+            if (self.laser_energy < 5):
+                self.laser_energy += 1
+            self.fire_time = new_time
             
         if player_angle[0] < -2293760: player_angle[0] = -2293760
         if player_angle[0] > 2293760: player_angle[0] = 2293760
@@ -1577,7 +1460,7 @@ class SettingsMenu:
                     self.remapping = True
                     self.current_remap = self.selected
                 elif self.selected == 11:  # Reset defaults
-                    KEYMAPS = list(DEFAULT_KEYS)
+                    KEYMAPS = array('O', DEFAULT_KEYS)
                     SHIFT_REQUIRED = array('B', [False,False,False,False,False,False,True,True,not IS_THUMBY_COLOR,not IS_THUMBY_COLOR,True])
                     self.update_menu()
                     sleep(0.3)

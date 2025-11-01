@@ -16,6 +16,47 @@ builtins.micropython = micropython
 if not hasattr(gc, 'mem_free'):
     gc.mem_free = lambda: 999999
 
+# Add ptr32, ptr16, ptr8 to builtins for viper mode
+builtins.ptr32 = micropython.ptr32
+builtins.ptr16 = micropython.ptr16
+builtins.ptr8 = micropython.ptr8
+
+# Monkey-patch array module for MicroPython 'O' and 'B' typecodes on PC
+try:
+    import array as _array_module
+    _original_array = _array_module.array
+
+    class _ArrayWrapper:
+        def __init__(self, typecode, initializer=None):
+            if typecode == 'O' or typecode == 'B':
+                # Use list for object and byte arrays (MicroPython compatibility)
+                self._data = list(initializer) if initializer is not None else []
+                self._typecode = typecode
+            else:
+                # Use standard array for other types
+                self._array = _original_array(typecode, initializer or [])
+                self._data = None
+
+        def __getitem__(self, key):
+            return self._data[key] if self._data is not None else self._array[key]
+
+        def __setitem__(self, key, value):
+            if self._data is not None:
+                self._data[key] = value
+            else:
+                self._array[key] = value
+
+        def __len__(self):
+            return len(self._data) if self._data is not None else len(self._array)
+
+        def __iter__(self):
+            return iter(self._data) if self._data is not None else iter(self._array)
+
+    _array_module.array = _ArrayWrapper
+    builtins.array = _ArrayWrapper
+except:
+    pass
+
 # Platform detection
 IS_THUMBY_COLOR = False
 IS_PC = False
@@ -34,7 +75,21 @@ except ImportError:
         # Running on PC
         IS_PC = True
         IS_THUMBY_COLOR = True  # Pretend to be ThumbyColor for game logic
-        print("PC mode detected - using color_native")
+        print("PC mode detected")
+
+# PC file path redirection from /Games/ThumbCommander/ to current directory
+if IS_PC:
+    import os
+    _original_open = builtins.open
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    def _pc_open(file, mode='r', *args, **kwargs):
+        """Redirect /Games/ThumbCommander/ paths to current directory"""
+        if isinstance(file, str) and file.startswith('/Games/ThumbCommander/'):
+            file = os.path.join(_current_dir, file.replace('/Games/ThumbCommander/', ''))
+        return _original_open(file, mode, *args, **kwargs)
+
+    builtins.open = _pc_open
 
 # Get platform constants
 from platform_constants import get_constants
@@ -57,16 +112,16 @@ audio_open_id = _audio_stub
 audio_play_id = _audio_stub
 audio_close_ids = _audio_stub
 
-# Import display and sprite classes from color_native (works for both PC and hardware)
-from color_native import ColorDisplay, ColorSprite, _rumble
+# Import display and sprite classes from thumbycolor_native (works for both PC and hardware)
+from thumbycolor_native import ColorDisplay, ColorSprite, _rumble
 display = ColorDisplay()
 Sprite = ColorSprite
 rumble = _rumble
 
 # Create buttons
 if IS_PC:
-    # PC mode - color_native provides ButtonClass
-    from color_native import ButtonClass
+    # PC mode - thumbycolor_native provides ButtonClass
+    from thumbycolor_native import ButtonClass
     import pygame
 
     # Map keyboard to buttons (German keyboard layout: Z=Y, Y=Z)
@@ -91,7 +146,7 @@ if IS_PC:
     display.register_button(buttonRB)
     display.register_button(buttonMENU)
 
-    print("PC mode initialized successfully!")
+    print("PC mode initialized")
 
 elif IS_THUMBY_COLOR:
     # ThumbyColor hardware

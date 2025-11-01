@@ -1,7 +1,7 @@
 """
-color_native.py - Unified ThumbyColor display module for both hardware and PC
+thumbycolor_native.py - Unified ThumbyColor display module for both hardware and PC
 
-On hardware: Re-exports from thumbycolor_native
+On hardware: Re-exports from C module thumbycolor_native
 On PC: Implements ColorDisplay and ColorSprite with pygame backend
 """
 
