@@ -35,6 +35,7 @@ import pc_wrapper.thumbyHardware as thumbyHardware
 import pc_wrapper.audio as audio
 import pc_wrapper.cutscene_utils as cutscene_utils
 import pc_wrapper.grayscale as grayscale
+import pc_wrapper.Intro as Intro
 
 # Install modules in sys.modules so they're found by import statements
 # micropython is already installed by micropython_compat
@@ -50,6 +51,7 @@ sys.modules['thumbyHardware'] = thumbyHardware
 sys.modules['audio'] = audio
 sys.modules['cutscene_utils'] = cutscene_utils
 sys.modules['grayscale'] = grayscale
+sys.modules['Intro'] = Intro
 
 # Create a dummy 'lib' directory if it doesn't exist
 lib_dir = os.path.join(SCRIPT_DIR, 'lib')

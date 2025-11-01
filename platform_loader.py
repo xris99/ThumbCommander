@@ -1,6 +1,7 @@
 # platform_loader.py - Updated with memory-efficient imports using try/except
 import sys
 import gc
+import micropython
 from thumbyButton import ButtonClass
 
 # Platform detection
