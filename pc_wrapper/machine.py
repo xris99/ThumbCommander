@@ -8,9 +8,6 @@ import time
 import os
 import numpy as np
 
-# Debug flag - set to True to see detailed audio diagnostics
-DEBUG_AUDIO = True
-
 # Lazy pygame import
 pygame = None
 _audio_initialized = False
@@ -32,24 +29,14 @@ def _ensure_pygame():
             # Check if mixer is already initialized (by engine_draw.py)
             existing_init = pygame.mixer.get_init()
             if existing_init is not None:
-                if DEBUG_AUDIO:
-                    print(f"[Audio Debug] Mixer already initialized: freq={existing_init[0]}, size={existing_init[1]}, channels={existing_init[2]}")
                 _audio_initialized = True
             else:
                 # Initialize pygame.mixer for audio playback
-                if DEBUG_AUDIO:
-                    print("[Audio Debug] Initializing pygame.mixer at 16000 Hz mono")
                 pygame.mixer.pre_init(frequency=16000, size=-16, channels=1, buffer=512)
                 pygame.mixer.init()
-                mixer_info = pygame.mixer.get_init()
-                if DEBUG_AUDIO:
-                    print(f"[Audio Debug] Mixer initialized: freq={mixer_info[0]}, size={mixer_info[1]}, channels={mixer_info[2]}")
                 _audio_initialized = True
         except Exception as e:
-            if DEBUG_AUDIO:
-                print(f"[Audio Debug] Error initializing mixer: {e}")
             # Mixer initialization failed, but we can still continue
-            # Audio just won't work
             _audio_initialized = True  # Don't keep trying
             return False
 
@@ -96,20 +83,24 @@ class Pin:
 class PWM:
     """
     PWM class that outputs audio through pygame.mixer
-    Collects 16-bit unsigned samples (0-65535) and plays them as continuous audio stream
+    Implements real-time sample rate conversion to match pygame mixer rate
     """
 
     # Class-level audio state
     _sample_buffer = []
-    _sample_rate = 8000  # Default, will be updated
     _active_pwm = None
     _lock = threading.Lock()
     _playback_thread = None
     _stop_playback = False
     _channel = None
-    _samples_received = 0
-    _chunks_played = 0
-    _last_sample_value = None
+
+    # Resampling state
+    _source_sample_rate = None
+    _target_sample_rate = 16000  # Pygame mixer rate
+    _resample_ratio = 1.0
+    _resample_position = 0.0  # Fractional sample position
+    _last_input_sample = 32768  # Previous sample for interpolation
+    _resampler_initialized = False
 
     def __init__(self, pin, freq=120000, duty=0):
         """
@@ -124,34 +115,35 @@ class PWM:
         self._freq = freq
         self._duty = 0
 
-        if DEBUG_AUDIO:
-            print(f"[Audio Debug] PWM.__init__ called: freq={freq} (PWM carrier frequency)")
-
         # Only set as active PWM if pygame is available
         if _ensure_pygame():
             with PWM._lock:
                 # If there's already an active PWM, stop it
                 if PWM._active_pwm is not None and PWM._active_pwm is not self:
-                    if DEBUG_AUDIO:
-                        print("[Audio Debug] Stopping previous PWM instance")
                     PWM._active_pwm._cleanup()
 
                 PWM._active_pwm = self
                 PWM._sample_buffer = []
                 PWM._stop_playback = False
-                PWM._samples_received = 0
-                PWM._chunks_played = 0
+
+                # Reset resampler state
+                PWM._source_sample_rate = None
+                PWM._resample_ratio = 1.0
+                PWM._resample_position = 0.0
+                PWM._last_input_sample = 32768
+                PWM._resampler_initialized = False
+
+                # Get mixer rate
+                mixer_info = pygame.mixer.get_init()
+                if mixer_info:
+                    PWM._target_sample_rate = mixer_info[0]
 
                 # Get a dedicated mixer channel for audio streaming
                 if PWM._channel is None:
                     PWM._channel = pygame.mixer.Channel(0)
-                    if DEBUG_AUDIO:
-                        print(f"[Audio Debug] Created mixer channel 0")
 
                 # Start playback thread if not running
                 if PWM._playback_thread is None or not PWM._playback_thread.is_alive():
-                    if DEBUG_AUDIO:
-                        print("[Audio Debug] Starting audio playback thread")
                     PWM._playback_thread = threading.Thread(target=self._audio_player_thread, daemon=True)
                     PWM._playback_thread.start()
 
@@ -171,6 +163,7 @@ class PWM:
         """
         Get or set 16-bit duty cycle (0-65535)
         This is the main method used by audio.py to output samples
+        Implements real-time sample rate conversion
         """
         if val is None:
             return self._duty
@@ -179,40 +172,55 @@ class PWM:
 
         # Send sample to audio buffer if we're the active PWM
         if PWM._active_pwm is self:
-            with PWM._lock:
-                PWM._sample_buffer.append(val)
-                PWM._samples_received += 1
+            # Detect source sample rate on first samples
+            if not PWM._resampler_initialized:
+                import sys
+                try:
+                    if 'audio' in sys.modules:
+                        audio_mod = sys.modules['audio']
+                        if hasattr(audio_mod, 'audio') and hasattr(audio_mod.audio, 'sample_rate'):
+                            PWM._source_sample_rate = audio_mod.audio.sample_rate
+                            PWM._resample_ratio = PWM._target_sample_rate / PWM._source_sample_rate
+                            PWM._resampler_initialized = True
+                except:
+                    pass
 
-                # Debug: First few samples and detect sample rate
-                if DEBUG_AUDIO:
-                    if PWM._samples_received <= 3:
-                        print(f"[Audio Debug] Sample #{PWM._samples_received}: value={val}")
-                    elif PWM._samples_received == 1000:
-                        print(f"[Audio Debug] Received 1000 samples, buffer size: {len(PWM._sample_buffer)}")
-                        # Try to detect sample rate from timing
-                        import sys
-                        try:
-                            # Access audio module to get sample rate
-                            if 'audio' in sys.modules:
-                                audio_mod = sys.modules['audio']
-                                if hasattr(audio_mod, 'audio') and hasattr(audio_mod.audio, 'sample_rate'):
-                                    detected_rate = audio_mod.audio.sample_rate
-                                    mixer_rate = pygame.mixer.get_init()[0]
-                                    print(f"[Audio Debug] Audio file sample rate: {detected_rate} Hz")
-                                    print(f"[Audio Debug] Pygame mixer rate: {mixer_rate} Hz")
-                                    if detected_rate != mixer_rate:
-                                        print(f"[Audio Debug] **WARNING** Sample rate mismatch! Audio will play at wrong speed!")
-                                        print(f"[Audio Debug] Speed ratio: {mixer_rate/detected_rate:.2f}x")
-                        except:
-                            pass
+                # If we still don't have rate info, assume 1:1 (no resampling)
+                if not PWM._resampler_initialized:
+                    PWM._resample_ratio = 1.0
+                    PWM._resampler_initialized = True
+
+            # Apply resampling if needed
+            if PWM._resample_ratio == 1.0:
+                # No resampling needed - direct passthrough
+                with PWM._lock:
+                    PWM._sample_buffer.append(val)
+            else:
+                # Resample using linear interpolation
+                with PWM._lock:
+                    # How many output samples does this input sample generate?
+                    # Add the resampling ratio to our position
+                    PWM._resample_position += PWM._resample_ratio
+
+                    # Generate interpolated samples
+                    while PWM._resample_position >= 1.0:
+                        # Calculate interpolation factor
+                        frac = 1.0 - (PWM._resample_position - PWM._resample_ratio) / PWM._resample_ratio
+                        frac = max(0.0, min(1.0, frac))
+
+                        # Linear interpolation between last and current sample
+                        interpolated = int(PWM._last_input_sample + frac * (val - PWM._last_input_sample))
+                        PWM._sample_buffer.append(interpolated)
+
+                        PWM._resample_position -= 1.0
+
+                    # Store current sample for next interpolation
+                    PWM._last_input_sample = val
 
     @staticmethod
     def _audio_player_thread():
         """Background thread that continuously plays audio from buffer"""
         chunk_size = 1024  # Samples per chunk
-
-        if DEBUG_AUDIO:
-            print(f"[Audio Debug] Audio player thread started, chunk_size={chunk_size}")
 
         while not PWM._stop_playback:
             # Check if we have enough samples to play
@@ -238,44 +246,20 @@ class PWM:
                     else:  # Mono
                         sound = pygame.sndarray.make_sound(samples_signed)
 
-                    # Debug sound properties
-                    if DEBUG_AUDIO and PWM._chunks_played < 2:
-                        print(f"[Audio Debug] Chunk #{PWM._chunks_played + 1}:")
-                        print(f"  - Sample values: min={samples_signed.min()}, max={samples_signed.max()}, mean={samples_signed.mean():.1f}")
-                        print(f"  - Sound length: {sound.get_length():.3f}s ({len(chunk)} samples)")
-                        print(f"  - Channel queue status: {PWM._channel.get_queue()}")
-                        print(f"  - Channel playing: {PWM._channel.get_busy()}")
-
                     # Queue sound on dedicated channel
                     if PWM._channel.get_queue() is None:
                         PWM._channel.play(sound)
-                        if DEBUG_AUDIO and PWM._chunks_played < 2:
-                            print(f"  - Action: play() on empty channel")
                     else:
                         PWM._channel.queue(sound)
-                        if DEBUG_AUDIO and PWM._chunks_played < 2:
-                            print(f"  - Action: queue() on active channel")
 
-                    PWM._chunks_played += 1
-                    if DEBUG_AUDIO and PWM._chunks_played % 50 == 0:
-                        print(f"[Audio Debug] Played {PWM._chunks_played} chunks, buffer: {len(PWM._sample_buffer)} samples")
-
-                except Exception as e:
-                    if DEBUG_AUDIO:
-                        print(f"[Audio Debug] Error playing chunk: {e}")
-                        import traceback
-                        traceback.print_exc()
+                except:
+                    pass  # Silently fail if audio has issues
             else:
                 # No chunk ready, sleep briefly
                 time.sleep(0.01)
 
-        if DEBUG_AUDIO:
-            print("[Audio Debug] Audio player thread exiting")
-
     def _cleanup(self):
         """Stop audio playback"""
-        if DEBUG_AUDIO:
-            print(f"[Audio Debug] PWM._cleanup(): received {PWM._samples_received} samples, played {PWM._chunks_played} chunks")
         with PWM._lock:
             PWM._sample_buffer = []
             if PWM._channel:
@@ -283,8 +267,6 @@ class PWM:
 
     def deinit(self):
         """Deinitialize PWM"""
-        if DEBUG_AUDIO:
-            print("[Audio Debug] PWM.deinit() called")
         if PWM._active_pwm is self:
             self._cleanup()
             with PWM._lock:
@@ -316,9 +298,6 @@ class Timer:
             self._period_ms = 1000.0 / freq
         else:
             self._period_ms = 100
-
-        if DEBUG_AUDIO and callback:
-            print(f"[Audio Debug] Timer.init: mode={'PERIODIC' if mode == Timer.PERIODIC else 'ONE_SHOT'}, period={self._period_ms:.1f}ms")
 
         if callback is not None:
             self._stop_event = threading.Event()
