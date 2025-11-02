@@ -235,13 +235,15 @@ class PWM:
     def _audio_player_thread():
         """
         Background thread for audio playback
-        Uses large chunks and waits for completion (no queueing)
-        This approach is simpler and more reliable than pygame's limited queue
+        Uses bytes conversion (no numpy) to avoid segfaults
         """
-        chunk_size = 2048  # Large chunks for smooth playback (~131ms at 15625 Hz)
+        chunk_size = 2048  # Chunk size in samples
         headroom = 8192    # Initial buffer before starting
         chunks_played = 0
         playback_started = False
+
+        # Import struct for bytes conversion
+        import struct
 
         print(f"[Audio] Playback thread starting, waiting for {headroom} samples", flush=True)
 
@@ -265,13 +267,19 @@ class PWM:
                     time.sleep(0.01)
                     continue
 
-            # Wait for channel to be idle before playing next chunk
-            # This ensures no overlap or queue issues
-            if PWM._channel.get_busy():
-                time.sleep(0.001)  # Poll every 1ms for channel to finish
-                continue
+            # Wait for channel to finish current sound
+            wait_count = 0
+            while PWM._channel.get_busy() and not PWM._stop_playback:
+                time.sleep(0.010)  # Check every 10ms
+                wait_count += 1
 
-            # Channel is idle - extract and play next chunk
+            if chunks_played <= 10 and wait_count > 0:
+                print(f"[Audio] Waited {wait_count * 10}ms for channel to finish", flush=True)
+
+            if PWM._stop_playback:
+                break
+
+            # Extract chunk
             chunk = None
             with PWM._lock:
                 buffer_size = len(PWM._sample_buffer)
@@ -280,31 +288,27 @@ class PWM:
                     chunk = PWM._sample_buffer[:actual_chunk_size]
                     PWM._sample_buffer = PWM._sample_buffer[actual_chunk_size:]
 
-            if chunk and pygame:
+            if chunk:
                 chunks_played += 1
                 if chunks_played <= 5 or chunks_played % 50 == 0:
                     print(f"[Audio] Playing chunk #{chunks_played}: {len(chunk)} samples, buffer: {buffer_size}", flush=True)
 
                 try:
-                    # Convert 16-bit unsigned (0-65535) to 16-bit signed (-32768 to 32767)
-                    samples = np.array(chunk, dtype=np.int32)
-                    samples_signed = (samples - 32768).astype(np.int16)
+                    # Convert to bytes without numpy (avoids segfaults)
+                    # Convert samples to signed 16-bit integers
+                    signed_samples = [max(-32768, min(32767, int(s) - 32768)) for s in chunk]
 
-                    # Create pygame sound
-                    mixer_info = pygame.mixer.get_init()
-                    if mixer_info and mixer_info[2] == 2:  # Stereo
-                        samples_stereo = np.column_stack((samples_signed, samples_signed))
-                        sound = pygame.sndarray.make_sound(samples_stereo)
-                    else:  # Mono
-                        sound = pygame.sndarray.make_sound(samples_signed)
+                    # Pack all samples at once using format string (much faster)
+                    audio_bytes = struct.pack('<' + 'h' * len(signed_samples), *signed_samples)
 
-                    # Play sound (channel is guaranteed idle)
+                    # Create and play sound
+                    sound = pygame.mixer.Sound(buffer=audio_bytes)
                     PWM._channel.play(sound)
 
                 except Exception as e:
                     print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
             else:
-                # Buffer empty, wait for decoder to fill it
+                # Buffer empty, wait for decoder
                 time.sleep(0.01)
 
     def _cleanup(self):
