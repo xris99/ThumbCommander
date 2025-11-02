@@ -17,12 +17,9 @@ def _ensure_pygame():
     if pygame is None:
         try:
             import pygame as pg
-            import os
             # IMPORTANT: Initialize mixer BEFORE pygame.init() to set audio parameters
             # This must match the settings in machine.py PWM class
-            # Use dummy audio driver for headless environments (override with SDL_AUDIODRIVER env var)
-            if 'SDL_AUDIODRIVER' not in os.environ:
-                os.environ['SDL_AUDIODRIVER'] = 'dummy'
+            # Note: pygame will auto-detect audio hardware. Set SDL_AUDIODRIVER=dummy to force headless mode.
             pg.mixer.pre_init(frequency=16000, size=-16, channels=1, buffer=512)
             pg.init()
             pygame = pg
