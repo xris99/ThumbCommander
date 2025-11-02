@@ -133,13 +133,26 @@ class PWM:
         print(f"[Audio] PWM.__init__: pygame available = {pygame_available}, pygame.mixer.get_init() = {pygame.mixer.get_init() if pygame else None}", flush=True)
 
         if pygame_available:
-            # CRITICAL: Cleanup old PWM OUTSIDE the lock first to avoid deadlock
+            # CRITICAL: Properly cleanup old PWM before creating new one
             if PWM._active_pwm is not None:
                 print(f"[Audio] Cleaning up old PWM instance before creating new one", flush=True)
-                old_pwm = PWM._active_pwm
-                PWM._active_pwm = None  # Disconnect it first
-                old_pwm.deinit()  # Force cleanup
-                time.sleep(0.05)  # Give playback thread time to see None and exit
+                # Stop the old playback thread
+                PWM._stop_playback = True
+
+                # Wait for old thread to actually exit (up to 500ms)
+                old_thread = PWM._playback_thread
+                if old_thread and old_thread.is_alive():
+                    for i in range(50):  # 50 * 10ms = 500ms max wait
+                        if not old_thread.is_alive():
+                            break
+                        time.sleep(0.01)
+                    print(f"[Audio] Old thread exited: {not old_thread.is_alive()}", flush=True)
+
+                # Stop the mixer channel
+                with PWM._lock:
+                    if PWM._channel:
+                        PWM._channel.stop()
+                        print(f"[Audio] Stopped old mixer channel", flush=True)
 
             with PWM._lock:
                 PWM._active_pwm = self
@@ -167,14 +180,15 @@ class PWM:
                 print(f"[Audio] PWM reinitialized, buffer cleared, resampler reset", flush=True)
                 sys.stdout.flush()
 
-                # Get a dedicated mixer channel for audio streaming
-                if PWM._channel is None:
-                    PWM._channel = pygame.mixer.Channel(0)
+                # ALWAYS create a fresh mixer channel for each audio file
+                # This ensures the channel is in a clean state
+                PWM._channel = pygame.mixer.Channel(0)
+                print(f"[Audio] Created fresh mixer channel", flush=True)
 
-                # Start playback thread if not running
-                if PWM._playback_thread is None or not PWM._playback_thread.is_alive():
-                    PWM._playback_thread = threading.Thread(target=self._audio_player_thread, daemon=True)
-                    PWM._playback_thread.start()
+                # Always start a new playback thread (old one has been stopped)
+                PWM._playback_thread = threading.Thread(target=self._audio_player_thread, daemon=True)
+                PWM._playback_thread.start()
+                print(f"[Audio] Started new playback thread", flush=True)
 
     def freq(self, val=None):
         """Get or set PWM frequency"""
@@ -204,7 +218,8 @@ class PWM:
         if PWM._active_pwm is not self:
             return  # Silently discard samples from inactive PWM instances
 
-        if PWM._active_pwm is self:
+        # Process sample (resampling and buffering)
+        if True:
             # Detect source sample rate on first samples
             if not PWM._resampler_initialized:
                 import sys
@@ -275,12 +290,12 @@ class PWM:
     def _audio_player_thread():
         """Background thread that continuously plays audio from buffer"""
         chunk_size = 512  # Samples per chunk (reduced from 1024 for more frequent refills)
-        headroom = 3072  # Wait for this many samples before starting (Option 2: larger buffer)
+        headroom = 8192  # Wait for this many samples before starting (~512ms buffer at 16kHz)
         chunks_played = 0
         underrun_count = 0
         playback_started = False
 
-        print(f"[Audio] Playback thread starting, will wait for {headroom} samples before playing", flush=True)
+        print(f"[Audio] Playback thread starting, will wait for {headroom} samples (512ms) before playing", flush=True)
 
         while not PWM._stop_playback:
             # Check if we have enough samples to play
