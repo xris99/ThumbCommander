@@ -267,18 +267,6 @@ class PWM:
                     time.sleep(0.01)
                     continue
 
-            # Wait for channel to finish current sound
-            wait_count = 0
-            while PWM._channel.get_busy() and not PWM._stop_playback:
-                time.sleep(0.010)  # Check every 10ms
-                wait_count += 1
-
-            if chunks_played <= 10 and wait_count > 0:
-                print(f"[Audio] Waited {wait_count * 10}ms for channel to finish", flush=True)
-
-            if PWM._stop_playback:
-                break
-
             # Extract chunk
             chunk = None
             with PWM._lock:
@@ -301,9 +289,24 @@ class PWM:
                     # Pack all samples at once using format string (much faster)
                     audio_bytes = struct.pack('<' + 'h' * len(signed_samples), *signed_samples)
 
-                    # Create and play sound
+                    # Create sound
                     sound = pygame.mixer.Sound(buffer=audio_bytes)
+
+                    # Calculate expected playback duration
+                    expected_duration = len(chunk) / PWM._current_mixer_rate
+
+                    # Play sound
                     PWM._channel.play(sound)
+
+                    # Wait for CALCULATED duration (don't trust get_busy())
+                    # get_busy() returns False too early, causing sound interruption
+                    start_time = time.time()
+                    while time.time() - start_time < expected_duration and not PWM._stop_playback:
+                        time.sleep(0.005)
+
+                    if chunks_played <= 10:
+                        actual_wait = (time.time() - start_time) * 1000
+                        print(f"[Audio] Waited {actual_wait:.0f}ms (expected {expected_duration * 1000:.0f}ms)", flush=True)
 
                 except Exception as e:
                     print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
