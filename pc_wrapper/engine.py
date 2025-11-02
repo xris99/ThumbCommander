@@ -11,14 +11,14 @@ _fps_limit_period_ms = 1000.0 / 60.0  # milliseconds per frame
 _last_tick_time = time.time()
 _fps_limit_enabled = True
 
-# Import button class for input polling
+# Import button update function for input polling
 try:
-    from pc_wrapper.thumbyButton import ButtonClass
+    from pc_wrapper.thumbyButton import update_button_state
 except ImportError:
     try:
-        from thumbyButton import ButtonClass
+        from thumbyButton import update_button_state
     except ImportError:
-        ButtonClass = None
+        update_button_state = None
 
 
 def freq(frequency):
@@ -97,8 +97,8 @@ def tick():
                 pass
 
     # Update button states (poll input)
-    if ButtonClass is not None:
-        ButtonClass.update_all_buttons()
+    if update_button_state is not None:
+        update_button_state()
 
     # Update tick time
     _last_tick_time = time.time()

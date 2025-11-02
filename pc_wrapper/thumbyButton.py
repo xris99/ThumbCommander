@@ -1,10 +1,29 @@
 """
 Thumby button emulation for PC
 Maps keyboard keys to button states
+Button state is updated once per frame by engine.tick()
 """
 
-# Lazy import pygame - only when actually needed
+# Lazy import pygame
 pygame = None
+
+# Module-level button state - updated once per frame by engine.tick()
+_current_keys = {}
+_previous_keys = {}
+_initialized = False
+
+# Keyboard mapping
+_key_mapping = {
+    'A': None,
+    'B': None,
+    'UP': None,
+    'DOWN': None,
+    'LEFT': None,
+    'RIGHT': None,
+    'LB': None,
+    'RB': None,
+    'MENU': None,
+}
 
 
 def _ensure_pygame():
@@ -15,92 +34,84 @@ def _ensure_pygame():
             import pygame as pg
             pygame = pg
         except ImportError:
-            pass  # pygame not available
+            pass
 
 
-class ButtonState:
+def _init_key_mapping():
+    """Initialize key mapping once pygame is available"""
+    global _initialized
+    if _initialized:
+        return
+
+    _ensure_pygame()
+    if pygame:
+        _key_mapping['A'] = pygame.K_z
+        _key_mapping['B'] = pygame.K_x
+        _key_mapping['UP'] = pygame.K_UP
+        _key_mapping['DOWN'] = pygame.K_DOWN
+        _key_mapping['LEFT'] = pygame.K_LEFT
+        _key_mapping['RIGHT'] = pygame.K_RIGHT
+        _key_mapping['LB'] = pygame.K_a
+        _key_mapping['RB'] = pygame.K_s
+        _key_mapping['MENU'] = pygame.K_ESCAPE
+        _initialized = True
+
+
+def update_button_state():
     """
-    Tracks button state for keyboard mapping
+    Update button states - called ONCE per frame by engine.tick()
+    Reads pygame key state and stores in module-level variables
     """
-    def __init__(self):
-        self.current = False
-        self.previous = False
-        self.just_pressed = False
+    global _current_keys, _previous_keys
+
+    _ensure_pygame()
+    if pygame is None:
+        return
+
+    _init_key_mapping()
+
+    # Store previous state
+    _previous_keys = _current_keys.copy()
+
+    # Read current pygame key state
+    keys = pygame.key.get_pressed()
+
+    # Update current state for all mapped buttons
+    _current_keys = {}
+    for button_id, key_code in _key_mapping.items():
+        if key_code is not None:
+            _current_keys[button_id] = keys[key_code]
+        else:
+            _current_keys[button_id] = False
+
+
+def _is_key_pressed(button_id):
+    """Check if a button is currently pressed"""
+    return _current_keys.get(button_id, False)
+
+
+def _was_key_pressed(button_id):
+    """Check if a button was pressed in the previous frame"""
+    return _previous_keys.get(button_id, False)
 
 
 class ButtonClass:
     """
     Button class compatible with Thumby button API
-    Maps to keyboard keys via pygame
+    Queries module-level state updated by engine.tick()
     """
-
-    # Class-level button states for all buttons
-    button_states = {}
-
-    # Keyboard mapping
-    key_mapping = {
-        'A': None,  # Will be set to pygame.K_z when pygame is loaded
-        'B': None,
-        'UP': None,
-        'DOWN': None,
-        'LEFT': None,
-        'RIGHT': None,
-        'LB': None,
-        'RB': None,
-        'MENU': None,
-    }
-
-    @classmethod
-    def _init_key_mapping(cls):
-        """Initialize key mapping once pygame is available"""
-        _ensure_pygame()
-        if pygame and cls.key_mapping['A'] is None:
-            cls.key_mapping['A'] = pygame.K_z
-            cls.key_mapping['B'] = pygame.K_x
-            cls.key_mapping['UP'] = pygame.K_UP
-            cls.key_mapping['DOWN'] = pygame.K_DOWN
-            cls.key_mapping['LEFT'] = pygame.K_LEFT
-            cls.key_mapping['RIGHT'] = pygame.K_RIGHT
-            cls.key_mapping['LB'] = pygame.K_a
-            cls.key_mapping['RB'] = pygame.K_s
-            cls.key_mapping['MENU'] = pygame.K_ESCAPE
-
-    @classmethod
-    def update_all_buttons(cls):
-        """Update all button states - call this once per frame"""
-        _ensure_pygame()
-        if pygame is None:
-            return
-
-        cls._init_key_mapping()
-        keys = pygame.key.get_pressed()
-
-        for button_id, state in cls.button_states.items():
-            # Update previous state
-            state.previous = state.current
-
-            # Check if key is pressed
-            key = cls.key_mapping.get(button_id)
-            if key:
-                state.current = keys[key]
-            else:
-                state.current = False
-
-            # Check for just pressed
-            state.just_pressed = state.current and not state.previous
 
     def __init__(self, button_id):
         """
         Initialize button
 
         Args:
-            button_id: String identifier for the button ('A', 'B', 'UP', etc.)
+            button_id: String identifier or integer constant
         """
-        # For pygame keys, button_id will be an integer, convert to string
+        # Map from thumby hardware constants to our strings
         if isinstance(button_id, str):
             self.button_id = button_id
         else:
-            # Map from thumby hardware constants to our strings
             id_map = {
                 0: 'UP',
                 1: 'DOWN',
@@ -111,24 +122,17 @@ class ButtonClass:
             }
             self.button_id = id_map.get(button_id, 'A')
 
-        # Create button state if it doesn't exist
-        if self.button_id not in ButtonClass.button_states:
-            ButtonClass.button_states[self.button_id] = ButtonState()
-
     def pressed(self):
         """Check if button is currently pressed"""
-        ButtonClass.update_all_buttons()
-        state = ButtonClass.button_states.get(self.button_id)
-        return state.current if state else False
+        return _is_key_pressed(self.button_id)
 
     def justPressed(self):
         """Check if button was just pressed this frame"""
-        ButtonClass.update_all_buttons()
-        state = ButtonClass.button_states.get(self.button_id)
-        return state.just_pressed if state else False
+        current = _is_key_pressed(self.button_id)
+        previous = _was_key_pressed(self.button_id)
+        return current and not previous
 
     def setPressed(self, value):
         """Manually set button state (for testing)"""
-        state = ButtonClass.button_states.get(self.button_id)
-        if state:
-            state.current = value
+        global _current_keys
+        _current_keys[self.button_id] = value

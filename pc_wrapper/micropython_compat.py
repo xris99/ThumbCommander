@@ -118,3 +118,6 @@ sys.modules['micropython'] = micropython_module
 
 # Also install micropython as a builtin so it's available everywhere (needed for @micropython.viper decorators)
 builtins.micropython = micropython_module
+
+# Install const as a builtin so it can be used directly (needed for const(4) in methods)
+builtins.const = const
