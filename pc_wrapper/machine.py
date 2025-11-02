@@ -216,16 +216,10 @@ class PWM:
         if PWM._active_pwm is not self:
             return  # Silently discard samples from inactive PWM instances
 
-        # Direct passthrough - append sample to buffer with backpressure
+        # Direct passthrough - append sample to buffer
         with PWM._lock:
-            buffer_size = len(PWM._sample_buffer)
             PWM._sample_buffer.append(val)
             PWM._samples_in += 1
-
-        # Backpressure: if buffer too large, slow down sample intake
-        # Target: keep buffer around 8192 samples (prevents unbounded growth)
-        if buffer_size > 12288:  # 12K samples = ~786ms at 15625 Hz
-            time.sleep(0.00001)  # 10 microseconds backpressure
 
         # Debug output every 5 seconds
         current_time = time.time()
@@ -304,27 +298,39 @@ class PWM:
                     # Create sound and keep reference (prevents garbage collection)
                     PWM._current_sound = pygame.mixer.Sound(buffer=audio_bytes)
 
-                    # Calculate expected playback duration
-                    expected_duration = len(chunk) / PWM._current_mixer_rate
+                    # Calculate base playback duration
+                    base_duration = len(chunk) / PWM._current_mixer_rate
+
+                    # Adjust wait time based on buffer size (adaptive consumption)
+                    # Decoder runs faster than nominal rate, so we need to consume faster
+                    with PWM._lock:
+                        current_buffer = len(PWM._sample_buffer)
+
+                    # Target: keep buffer around 8192 samples
+                    if current_buffer > 10000:
+                        # Buffer growing - consume faster (wait less)
+                        adjustment = -0.015  # Reduce wait by 15ms
+                    elif current_buffer > 9000:
+                        adjustment = -0.010  # Reduce wait by 10ms
+                    elif current_buffer < 7000:
+                        # Buffer shrinking - consume slower (wait more)
+                        adjustment = +0.010
+                    else:
+                        adjustment = 0  # Buffer stable
+
+                    wait_duration = base_duration + adjustment
 
                     # Play sound
                     PWM._channel.play(PWM._current_sound)
 
-                    # Immediately check if playing started
-                    if chunks_played <= 10:
-                        is_busy = PWM._channel.get_busy()
-                        print(f"[Audio] After play(): channel busy={is_busy}", flush=True)
-
-                    # Wait for CALCULATED duration (don't trust get_busy())
-                    # get_busy() returns False too early, causing sound interruption
+                    # Wait for adjusted duration
                     start_time = time.time()
-                    while time.time() - start_time < expected_duration and not PWM._stop_playback:
+                    while time.time() - start_time < wait_duration and not PWM._stop_playback:
                         time.sleep(0.005)
 
                     if chunks_played <= 10:
                         actual_wait = (time.time() - start_time) * 1000
-                        is_busy_after = PWM._channel.get_busy()
-                        print(f"[Audio] Waited {actual_wait:.0f}ms (expected {expected_duration * 1000:.0f}ms), busy after={is_busy_after}", flush=True)
+                        print(f"[Audio] Waited {actual_wait:.0f}ms (base {base_duration * 1000:.0f}ms, adj {adjustment * 1000:+.0f}ms), buffer={current_buffer}", flush=True)
 
                 except Exception as e:
                     print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
