@@ -273,9 +273,9 @@ class PWM:
                     # Store current sample for next interpolation
                     PWM._last_input_sample = val
 
-            # Debug output every second
+            # Debug output every 5 seconds
             current_time = time.time()
-            if current_time - PWM._last_debug_time >= 1.0:
+            if current_time - PWM._last_debug_time >= 5.0:
                 with PWM._lock:
                     buffer_size = len(PWM._sample_buffer)
                 elapsed = current_time - PWM._last_debug_time
@@ -289,10 +289,11 @@ class PWM:
     @staticmethod
     def _audio_player_thread():
         """Background thread that continuously plays audio from buffer"""
-        chunk_size = 512  # Samples per chunk (reduced from 1024 for more frequent refills)
+        chunk_size = 512  # Preferred chunk size
+        min_chunk = 64   # Minimum chunk size - play smaller chunks when decoder is slow
         headroom = 8192  # Wait for this many samples before starting (~512ms buffer at 16kHz)
         chunks_played = 0
-        underrun_count = 0
+        small_chunk_count = 0
         playback_started = False
 
         print(f"[Audio] Playback thread starting, will wait for {headroom} samples (512ms) before playing", flush=True)
@@ -317,24 +318,27 @@ class PWM:
                     time.sleep(0.01)
                     continue
 
-            # Extract chunk if available
+            # Extract chunk - play whatever is available (eliminates underruns)
             with PWM._lock:
                 buffer_size = len(PWM._sample_buffer)
-                if buffer_size >= chunk_size:
-                    # Extract chunk
-                    chunk = PWM._sample_buffer[:chunk_size]
-                    PWM._sample_buffer = PWM._sample_buffer[chunk_size:]
+                if buffer_size >= min_chunk:
+                    # Play whatever we have, up to chunk_size
+                    actual_chunk_size = min(buffer_size, chunk_size)
+                    chunk = PWM._sample_buffer[:actual_chunk_size]
+                    PWM._sample_buffer = PWM._sample_buffer[actual_chunk_size:]
+
+                    # Track small chunks (indicates decoder is slow)
+                    if actual_chunk_size < chunk_size:
+                        small_chunk_count += 1
+                        if small_chunk_count <= 5 or small_chunk_count % 20 == 0:
+                            print(f"[Audio] Small chunk #{small_chunk_count}: {actual_chunk_size} samples (buffer: {buffer_size})")
                 else:
                     chunk = None
-                    if buffer_size > 0:
-                        underrun_count += 1
-                        if underrun_count <= 5 or underrun_count % 10 == 0:
-                            print(f"[Audio] Buffer underrun #{underrun_count}: only {buffer_size} samples available (need {chunk_size})")
 
             if chunk and pygame:
                 chunks_played += 1
-                if chunks_played <= 3 or chunks_played % 50 == 0:
-                    print(f"[Audio] Played chunk #{chunks_played}, buffer was {buffer_size} samples")
+                if chunks_played <= 3 or chunks_played % 100 == 0:
+                    print(f"[Audio] Played chunk #{chunks_played}, buffer: {buffer_size} samples")
                 try:
                     # Convert 16-bit unsigned (0-65535) to 16-bit signed (-32768 to 32767)
                     samples = np.array(chunk, dtype=np.int32)
