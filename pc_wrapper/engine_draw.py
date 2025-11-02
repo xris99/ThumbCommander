@@ -17,6 +17,10 @@ def _ensure_pygame():
     if pygame is None:
         try:
             import pygame as pg
+            # IMPORTANT: Initialize mixer BEFORE pygame.init() to set audio parameters
+            # This must match the settings in machine.py PWM class
+            # Note: SDL_AUDIODRIVER can be set by user (e.g., 'dummy' for headless, or auto-detect)
+            pg.mixer.pre_init(frequency=16000, size=-16, channels=1, buffer=512)
             pg.init()
             pygame = pg
             _pygame_initialized = True

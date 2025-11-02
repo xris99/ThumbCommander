@@ -8,9 +8,9 @@ import time
 import os
 import numpy as np
 
-# Set dummy audio driver for headless environments
-if 'SDL_AUDIODRIVER' not in os.environ:
-    os.environ['SDL_AUDIODRIVER'] = 'dummy'
+# Set dummy audio driver for headless environments (only if explicitly requested)
+# User can set SDL_AUDIODRIVER=dummy to force dummy mode
+# Otherwise, pygame will try to use available audio hardware
 
 # Lazy pygame import
 pygame = None
@@ -152,7 +152,6 @@ class PWM:
     def _audio_player_thread():
         """Background thread that continuously plays audio from buffer"""
         chunk_size = 1024  # Samples per chunk
-        chunks_played = 0
 
         while not PWM._stop_playback:
             # Check if we have enough samples to play
@@ -172,7 +171,8 @@ class PWM:
                     samples_signed = (samples - 32768).astype(np.int16)  # Subtract then convert
 
                     # Reshape for stereo if needed (duplicate mono channel)
-                    if pygame.mixer.get_init()[2] == 2:  # If stereo (2 channels)
+                    mixer_info = pygame.mixer.get_init()
+                    if mixer_info and mixer_info[2] == 2:  # If stereo (2 channels)
                         # Duplicate mono to stereo
                         samples_stereo = np.column_stack((samples_signed, samples_signed))
                         sound = pygame.sndarray.make_sound(samples_stereo)
@@ -186,8 +186,6 @@ class PWM:
                     else:
                         # Queue for seamless continuation
                         PWM._channel.queue(sound)
-
-                    chunks_played += 1
                 except:
                     pass  # Silently fail if audio has issues
             else:
