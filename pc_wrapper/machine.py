@@ -216,10 +216,18 @@ class PWM:
         if PWM._active_pwm is not self:
             return  # Silently discard samples from inactive PWM instances
 
-        # Direct passthrough - append sample to buffer
+        # Direct passthrough with smart backpressure
         with PWM._lock:
+            buffer_size = len(PWM._sample_buffer)
             PWM._sample_buffer.append(val)
             PWM._samples_in += 1
+
+        # Smart backpressure: only sleep every Nth sample when buffer too large
+        # This prevents lag (not called on every sample) while controlling growth
+        if buffer_size > 9000 and PWM._samples_in % 100 == 0:
+            # Buffer over target - sleep briefly every 100 samples
+            # At 17000 Hz: 170 sleeps/sec * 1ms = 170ms overhead (acceptable)
+            time.sleep(0.001)  # 1ms sleep every 100 samples
 
         # Debug output every 5 seconds
         current_time = time.time()
@@ -298,39 +306,18 @@ class PWM:
                     # Create sound and keep reference (prevents garbage collection)
                     PWM._current_sound = pygame.mixer.Sound(buffer=audio_bytes)
 
-                    # Calculate base playback duration
-                    base_duration = len(chunk) / PWM._current_mixer_rate
-
-                    # Adjust wait time based on buffer size (adaptive consumption)
-                    # Decoder runs faster than nominal rate, so we need to consume faster
-                    with PWM._lock:
-                        current_buffer = len(PWM._sample_buffer)
-
-                    # Target: keep buffer around 8192 samples
-                    if current_buffer > 10000:
-                        # Buffer growing - consume faster (wait less)
-                        adjustment = -0.015  # Reduce wait by 15ms
-                    elif current_buffer > 9000:
-                        adjustment = -0.010  # Reduce wait by 10ms
-                    elif current_buffer < 7000:
-                        # Buffer shrinking - consume slower (wait more)
-                        adjustment = +0.010
-                    else:
-                        adjustment = 0  # Buffer stable
-
-                    wait_duration = base_duration + adjustment
-
-                    # Play sound
+                    # Play sound immediately (backpressure controls buffer growth)
                     PWM._channel.play(PWM._current_sound)
 
-                    # Wait for adjusted duration
-                    start_time = time.time()
-                    while time.time() - start_time < wait_duration and not PWM._stop_playback:
-                        time.sleep(0.005)
+                    # Simple wait for channel to finish (let pygame handle timing)
+                    # Don't use complex adaptive logic - backpressure handles it
+                    while PWM._channel.get_busy() and not PWM._stop_playback:
+                        time.sleep(0.010)  # Check every 10ms
 
                     if chunks_played <= 10:
-                        actual_wait = (time.time() - start_time) * 1000
-                        print(f"[Audio] Waited {actual_wait:.0f}ms (base {base_duration * 1000:.0f}ms, adj {adjustment * 1000:+.0f}ms), buffer={current_buffer}", flush=True)
+                        with PWM._lock:
+                            current_buffer = len(PWM._sample_buffer)
+                        print(f"[Audio] Played chunk #{chunks_played}, buffer={current_buffer}", flush=True)
 
                 except Exception as e:
                     print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
