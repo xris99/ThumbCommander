@@ -29,6 +29,7 @@ import pc_wrapper.gc_compat as gc
 import pc_wrapper.framebuf as framebuf
 import pc_wrapper.engine as engine
 import pc_wrapper.engine_io as engine_io
+import thumbycolor_base  # Base class for ColorDisplay
 import pc_wrapper.thumbycolor_native as thumbycolor_native
 import pc_wrapper.thumbyButton as thumbyButton
 import pc_wrapper.thumbyHardware as thumbyHardware
@@ -45,6 +46,7 @@ sys.modules['gc'] = gc
 sys.modules['framebuf'] = framebuf
 sys.modules['engine'] = engine
 sys.modules['engine_io'] = engine_io
+sys.modules['thumbycolor_base'] = thumbycolor_base
 sys.modules['thumbycolor_native'] = thumbycolor_native
 sys.modules['thumbyButton'] = thumbyButton
 sys.modules['thumbyHardware'] = thumbyHardware

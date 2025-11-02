@@ -1,17 +1,20 @@
 """
-ThumbyColor display and sprite emulation for PC
-Minimal wrapper that extends the original ThumbyColor API
+PC wrapper for ThumbyColor display - extends base ColorDisplay
+Only overrides what's needed for pygame rendering
 """
 
 import os
-try:
-    # Try relative import first (when imported as package)
-    from .framebuf import FrameBuffer, RGB565
-except ImportError:
-    # Fall back to absolute import (when imported directly)
-    from framebuf import FrameBuffer, RGB565
+import sys
 
-# Lazy import pygame - only when display is created
+# Import base class
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from thumbycolor_base import ColorDisplay as BaseColorDisplay, ColorSprite as BaseColorSprite, _rumble as base_rumble
+from framebuf import FrameBuffer, RGB565
+
+# Lazy import pygame
 pygame = None
 _pygame_available = None
 
@@ -30,115 +33,29 @@ def _ensure_pygame():
     return _pygame_available
 
 
-class ColorDisplay:
+class ColorDisplay(BaseColorDisplay):
     """
-    ThumbyColor display emulation
-    Provides internal_fb FrameBuffer for game rendering
+    PC ColorDisplay - extends base ColorDisplay with pygame rendering
+    Only overrides __init__, update(), and draw_fullwidth_sprite()
     """
 
     def __init__(self, width=128, height=128, scale=4):
-        self.width = width
-        self.height = height
+        # Call parent __init__ to setup internal_fb and all base attributes
+        super().__init__()
+
+        # Add PC-specific attributes
         self.scale = scale
-
-        # Create internal framebuffer (RGB565 format) - THIS IS KEY!
-        # The game expects display.internal_fb to be a FrameBuffer object
-        self.buffer = bytearray(width * height * 2)  # 2 bytes per pixel for RGB565
-        self.internal_fb = FrameBuffer(self.buffer, width, height, RGB565)
-
-        # Color constants (RGB565)
-        self.BLACK = 0x0000
-        self.WHITE = 0xFFFF
-        self.DARKGRAY = 0x4208
-        self.LIGHTGRAY = 0xBDF7
-        self.RED = 0xF800
-        self.GREEN = 0x07E0
-        self.BLUE = 0x001F
-        self.CYAN = 0x07FF
-        self.ORANGE = 0xFD20
-        self.PURPLE = 0x8010
-        self.YELLOW = 0xFFEE
-        self.LASER_BLUE = 0x297F
-        self.LASER_COLOR = 0x297F
-        self.ENEMY_PURPLE = 0x8010
-        self.HIT_COLOR = 0xF800
-
-        # Font settings (not used - internal_fb.text() uses embedded font)
-        self.font_file = None
-        self.font_width = 8
-        self.font_height = 8
-        self.font_space = 0
-
-        # FPS control
-        self.fps = 60
-        self.grayscale_enabled = False
-
-        # Initialize pygame if available
         self.screen = None
         self.clock = None
+
+        # Initialize pygame if available
         if _ensure_pygame():
             self.screen = pygame.display.set_mode((width * scale, height * scale))
             pygame.display.set_caption("ThumbCommander - ThumbyColor Edition (PC)")
             self.clock = pygame.time.Clock()
 
-    def enableGrayscale(self):
-        """Enable grayscale mode (for compatibility)"""
-        self.grayscale_enabled = True
-
-    def setFPS(self, fps):
-        """Set target FPS"""
-        self.fps = fps
-
-    def setFont(self, font_file, width, height, space):
-        """Set font parameters (for compatibility - internal_fb uses embedded font)"""
-        self.font_file = font_file
-        self.font_width = width
-        self.font_height = height
-        self.font_space = space
-
-    # Drawing methods - delegate to internal_fb
-    def fill(self, color):
-        """Fill display with color"""
-        self.internal_fb.fill(color)
-
-    def setPixel(self, x, y, color):
-        """Set pixel at (x, y) to color"""
-        self.internal_fb.pixel(x, y, color)
-
-    def getPixel(self, x, y):
-        """Get pixel color at (x, y)"""
-        return self.internal_fb.pixel(x, y)
-
-    def drawLine(self, x1, y1, x2, y2, color):
-        """Draw line from (x1,y1) to (x2,y2)"""
-        self.internal_fb.line(x1, y1, x2, y2, color)
-
-    def drawRectangle(self, x, y, w, h, color):
-        """Draw rectangle outline"""
-        self.internal_fb.rect(x, y, w, h, color, fill=False)
-
-    def drawFilledRectangle(self, x, y, w, h, color):
-        """Draw filled rectangle"""
-        self.internal_fb.fill_rect(x, y, w, h, color)
-
-    def drawText(self, text, x, y, color):
-        """Draw text using internal_fb's embedded 8x8 font"""
-        self.internal_fb.text(str(text), x, y, color)
-
-    def drawSprite(self, sprite):
-        """Draw a sprite at its position"""
-        if hasattr(sprite, 'render'):
-            sprite.render(self)
-
-    def drawSpriteWithScale(self, sprite):
-        """Draw a scaled sprite"""
-        if hasattr(sprite, 'render_scaled'):
-            sprite.render_scaled(self)
-        else:
-            self.drawSprite(sprite)
-
     def draw_fullwidth_sprite(self, filename, x=0, y=0):
-        """Draw full-width sprite from .COL.bin file"""
+        """Draw full-width sprite from .COL.bin file - PC implementation"""
         if not isinstance(filename, str):
             return
 
@@ -175,23 +92,15 @@ class ColorDisplay:
         except Exception as e:
             print(f"Error drawing fullwidth sprite {filename}: {e}")
 
-    def rgb565_to_rgb888(self, color565):
-        """Convert RGB565 to RGB888 for pygame"""
-        r = ((color565 >> 11) & 0x1F) * 255 // 31
-        g = ((color565 >> 5) & 0x3F) * 255 // 63
-        b = (color565 & 0x1F) * 255 // 31
-        return (r, g, b)
-
     def update(self):
-        """Update display - blit framebuffer to pygame surface and handle events"""
+        """Update display - PC implementation blits to pygame surface"""
         if self.screen is None:
             return
 
-        # Handle pygame events (including button input)
+        # Handle pygame events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
-                import sys
                 sys.exit()
 
         # Blit internal_fb to pygame surface
@@ -199,10 +108,15 @@ class ColorDisplay:
             for x in range(self.width):
                 color565 = self.internal_fb.pixel(x, y)
                 if color565 is not None:
-                    rgb = self.rgb565_to_rgb888(color565)
+                    # Convert RGB565 to RGB888
+                    r = ((color565 >> 11) & 0x1F) * 255 // 31
+                    g = ((color565 >> 5) & 0x3F) * 255 // 63
+                    b = (color565 & 0x1F) * 255 // 31
+
+                    # Draw scaled pixel
                     pygame.draw.rect(
                         self.screen,
-                        rgb,
+                        (r, g, b),
                         (x * self.scale, y * self.scale, self.scale, self.scale)
                     )
 
@@ -211,35 +125,19 @@ class ColorDisplay:
             self.clock.tick(self.fps)
 
 
-class ColorSprite:
+class ColorSprite(BaseColorSprite):
     """
-    ThumbyColor sprite - loads and renders .COL.bin sprite files
+    PC ColorSprite - extends base ColorSprite with file loading
     """
 
     def __init__(self, width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False):
-        self.width = width
-        self.height = height
-        self.x = x
-        self.y = y
-        self.key = key
-        self.mirrorX = mirrorX
-        self.mirrorY = mirrorY
-
-        self.currentFrame = 0
-        self.frameCount = 1
-        self.frame_data = None
-
-        # Scaling
-        self.scale = 65536  # Fixed point 1.0
-        self.scaledWidth = width
-        self.scaledHeight = height
+        super().__init__(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
 
         # Load bitmap data
         if isinstance(bitmap_data, str):
-            # Load from .COL.bin file
             self.load_from_file(bitmap_data)
         elif isinstance(bitmap_data, tuple):
-            # Grayscale compatibility (not implemented for PC)
+            # Grayscale compatibility
             self.bitmap = bitmap_data
             self.bitmapByteCount = (width * height + 7) // 8
 
@@ -250,7 +148,7 @@ class ColorSprite:
                 with open(filename, 'rb') as f:
                     self.frame_data = f.read()
 
-                # Parse dimensions from filename (format: name_width_height.COL.bin)
+                # Parse dimensions from filename
                 basename = os.path.basename(filename)
                 parts = basename.replace('.COL.bin', '').split('_')
 
@@ -262,7 +160,7 @@ class ColorSprite:
                         pass
 
                 # Calculate frame count
-                bytes_per_frame = self.width * self.height * 2  # RGB565
+                bytes_per_frame = self.width * self.height * 2
                 if len(self.frame_data) >= bytes_per_frame:
                     self.frameCount = len(self.frame_data) // bytes_per_frame
 
@@ -271,31 +169,11 @@ class ColorSprite:
         except Exception as e:
             print(f"Error loading sprite from {filename}: {e}")
 
-    def setFrame(self, frame):
-        """Set current animation frame"""
-        if frame < self.frameCount:
-            self.currentFrame = frame
-
-    def setScale(self, scale):
-        """Set sprite scale (fixed point)"""
-        self.scale = scale
-        self.scaledWidth = (self.width * scale) >> 16
-        self.scaledHeight = (self.height * scale) >> 16
-
-    def setLifes(self, lifes):
-        """Set life count (for HUD)"""
-        self.lifes = lifes
-
-    def getLifes(self):
-        """Get life count"""
-        return getattr(self, 'lifes', 0)
-
     def render(self, display):
         """Render sprite to display using blit"""
         if not self.frame_data:
             return
 
-        # Create a FrameBuffer for this sprite frame
         bytes_per_frame = self.width * self.height * 2
         frame_offset = self.currentFrame * bytes_per_frame
 
@@ -317,7 +195,6 @@ class ColorSprite:
             self.render(display)
             return
 
-        # For scaled rendering, we need to manually scale pixels
         bytes_per_frame = self.width * self.height * 2
         frame_offset = self.currentFrame * bytes_per_frame
 
@@ -348,6 +225,5 @@ class ColorSprite:
                         display.internal_fb.pixel(final_x, final_y, color)
 
 
-def _rumble(duration):
-    """Rumble stub - does nothing on PC"""
-    pass
+# Export _rumble from base
+_rumble = base_rumble

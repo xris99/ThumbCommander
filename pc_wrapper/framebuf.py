@@ -147,6 +147,14 @@ class FrameBuffer:
                 idx = index * 2
                 self.buffer[idx] = col & 0xFF
                 self.buffer[idx + 1] = (col >> 8) & 0xFF
+        elif self.format == GS8:
+            index = x + y * self.stride
+            if col is None:
+                # Get pixel
+                return self.buffer[index]
+            else:
+                # Set pixel
+                self.buffer[index] = col & 0xFF
 
     def hline(self, x, y, w, col):
         """Draw horizontal line"""
