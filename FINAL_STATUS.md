@@ -29,7 +29,15 @@ The PC wrapper is now fully functional and the game should run on PC with pygame
    - Added `ptr32`, `ptr8`, `ptr16` classes for viper function compatibility
    - These wrap arrays/buffers and provide pointer-like access
 
-2. **thumbycolor_native.py**
+2. **framebuf.py** ⭐ Key Fix
+   - Created 1:1 copy of MicroPython FrameBuffer implementation
+   - Full RGB565 support with proper pixel operations
+   - Embedded 8x8 font (96 characters, ASCII 32-127)
+   - All drawing methods: fill, pixel, text, line, rect, fill_rect, blit, scroll
+
+3. **thumbycolor_native.py**
+   - Fixed `drawText()` to properly delegate to FrameBuffer's text() method ⭐
+   - Uses embedded 8x8 font for correct text rendering
    - Made display work without pygame (stub mode for testing)
    - Fixed `draw_fullwidth_sprite()` to accept both 2-arg and 3-arg calls
    - Added `_init_colors()` method for consistent initialization

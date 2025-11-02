@@ -1,9 +1,9 @@
 """
-MicroPython framebuf module emulation for PC
-Implements FrameBuffer class with RGB565 support
+MicroPython framebuf module - Python implementation
+Based on micropython/extmod/modframebuf.c
 """
 
-# Framebuffer formats
+# Format constants
 MONO_VLSB = 0
 MONO_HLSB = 3
 MONO_HMSB = 4
@@ -12,171 +12,258 @@ GS2_HMSB = 5
 GS4_HMSB = 2
 GS8 = 6
 
+# 8x8 font data - same as MicroPython font_petme128_8x8
+# 96 characters (ASCII 32-127), 8 bytes per character
+FONT_DATA = bytes([
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  # SPACE
+    0x00, 0x00, 0x5f, 0x00, 0x00, 0x00, 0x00, 0x00,  # !
+    0x00, 0x07, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00,  # "
+    0x14, 0x7f, 0x14, 0x7f, 0x14, 0x00, 0x00, 0x00,  # #
+    0x24, 0x2a, 0x7f, 0x2a, 0x12, 0x00, 0x00, 0x00,  # $
+    0x23, 0x13, 0x08, 0x64, 0x62, 0x00, 0x00, 0x00,  # %
+    0x36, 0x49, 0x55, 0x22, 0x50, 0x00, 0x00, 0x00,  # &
+    0x00, 0x05, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,  # '
+    0x00, 0x1c, 0x22, 0x41, 0x00, 0x00, 0x00, 0x00,  # (
+    0x00, 0x41, 0x22, 0x1c, 0x00, 0x00, 0x00, 0x00,  # )
+    0x14, 0x08, 0x3e, 0x08, 0x14, 0x00, 0x00, 0x00,  # *
+    0x08, 0x08, 0x3e, 0x08, 0x08, 0x00, 0x00, 0x00,  # +
+    0x00, 0x50, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,  # ,
+    0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x00,  # -
+    0x00, 0x60, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00,  # .
+    0x20, 0x10, 0x08, 0x04, 0x02, 0x00, 0x00, 0x00,  # /
+    0x3e, 0x51, 0x49, 0x45, 0x3e, 0x00, 0x00, 0x00,  # 0
+    0x00, 0x42, 0x7f, 0x40, 0x00, 0x00, 0x00, 0x00,  # 1
+    0x42, 0x61, 0x51, 0x49, 0x46, 0x00, 0x00, 0x00,  # 2
+    0x21, 0x41, 0x45, 0x4b, 0x31, 0x00, 0x00, 0x00,  # 3
+    0x18, 0x14, 0x12, 0x7f, 0x10, 0x00, 0x00, 0x00,  # 4
+    0x27, 0x45, 0x45, 0x45, 0x39, 0x00, 0x00, 0x00,  # 5
+    0x3c, 0x4a, 0x49, 0x49, 0x30, 0x00, 0x00, 0x00,  # 6
+    0x01, 0x71, 0x09, 0x05, 0x03, 0x00, 0x00, 0x00,  # 7
+    0x36, 0x49, 0x49, 0x49, 0x36, 0x00, 0x00, 0x00,  # 8
+    0x06, 0x49, 0x49, 0x29, 0x1e, 0x00, 0x00, 0x00,  # 9
+    0x00, 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00,  # :
+    0x00, 0x56, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00,  # ;
+    0x08, 0x14, 0x22, 0x41, 0x00, 0x00, 0x00, 0x00,  # <
+    0x14, 0x14, 0x14, 0x14, 0x14, 0x00, 0x00, 0x00,  # =
+    0x00, 0x41, 0x22, 0x14, 0x08, 0x00, 0x00, 0x00,  # >
+    0x02, 0x01, 0x51, 0x09, 0x06, 0x00, 0x00, 0x00,  # ?
+    0x32, 0x49, 0x79, 0x41, 0x3e, 0x00, 0x00, 0x00,  # @
+    0x7e, 0x11, 0x11, 0x11, 0x7e, 0x00, 0x00, 0x00,  # A
+    0x7f, 0x49, 0x49, 0x49, 0x36, 0x00, 0x00, 0x00,  # B
+    0x3e, 0x41, 0x41, 0x41, 0x22, 0x00, 0x00, 0x00,  # C
+    0x7f, 0x41, 0x41, 0x22, 0x1c, 0x00, 0x00, 0x00,  # D
+    0x7f, 0x49, 0x49, 0x49, 0x41, 0x00, 0x00, 0x00,  # E
+    0x7f, 0x09, 0x09, 0x09, 0x01, 0x00, 0x00, 0x00,  # F
+    0x3e, 0x41, 0x49, 0x49, 0x7a, 0x00, 0x00, 0x00,  # G
+    0x7f, 0x08, 0x08, 0x08, 0x7f, 0x00, 0x00, 0x00,  # H
+    0x00, 0x41, 0x7f, 0x41, 0x00, 0x00, 0x00, 0x00,  # I
+    0x20, 0x40, 0x41, 0x3f, 0x01, 0x00, 0x00, 0x00,  # J
+    0x7f, 0x08, 0x14, 0x22, 0x41, 0x00, 0x00, 0x00,  # K
+    0x7f, 0x40, 0x40, 0x40, 0x40, 0x00, 0x00, 0x00,  # L
+    0x7f, 0x02, 0x0c, 0x02, 0x7f, 0x00, 0x00, 0x00,  # M
+    0x7f, 0x04, 0x08, 0x10, 0x7f, 0x00, 0x00, 0x00,  # N
+    0x3e, 0x41, 0x41, 0x41, 0x3e, 0x00, 0x00, 0x00,  # O
+    0x7f, 0x09, 0x09, 0x09, 0x06, 0x00, 0x00, 0x00,  # P
+    0x3e, 0x41, 0x51, 0x21, 0x5e, 0x00, 0x00, 0x00,  # Q
+    0x7f, 0x09, 0x19, 0x29, 0x46, 0x00, 0x00, 0x00,  # R
+    0x46, 0x49, 0x49, 0x49, 0x31, 0x00, 0x00, 0x00,  # S
+    0x01, 0x01, 0x7f, 0x01, 0x01, 0x00, 0x00, 0x00,  # T
+    0x3f, 0x40, 0x40, 0x40, 0x3f, 0x00, 0x00, 0x00,  # U
+    0x1f, 0x20, 0x40, 0x20, 0x1f, 0x00, 0x00, 0x00,  # V
+    0x3f, 0x40, 0x38, 0x40, 0x3f, 0x00, 0x00, 0x00,  # W
+    0x63, 0x14, 0x08, 0x14, 0x63, 0x00, 0x00, 0x00,  # X
+    0x07, 0x08, 0x70, 0x08, 0x07, 0x00, 0x00, 0x00,  # Y
+    0x61, 0x51, 0x49, 0x45, 0x43, 0x00, 0x00, 0x00,  # Z
+    0x00, 0x7f, 0x41, 0x41, 0x00, 0x00, 0x00, 0x00,  # [
+    0x02, 0x04, 0x08, 0x10, 0x20, 0x00, 0x00, 0x00,  # backslash
+    0x00, 0x41, 0x41, 0x7f, 0x00, 0x00, 0x00, 0x00,  # ]
+    0x04, 0x02, 0x01, 0x02, 0x04, 0x00, 0x00, 0x00,  # ^
+    0x40, 0x40, 0x40, 0x40, 0x40, 0x00, 0x00, 0x00,  # _
+    0x00, 0x01, 0x02, 0x04, 0x00, 0x00, 0x00, 0x00,  # `
+    0x20, 0x54, 0x54, 0x54, 0x78, 0x00, 0x00, 0x00,  # a
+    0x7f, 0x48, 0x44, 0x44, 0x38, 0x00, 0x00, 0x00,  # b
+    0x38, 0x44, 0x44, 0x44, 0x20, 0x00, 0x00, 0x00,  # c
+    0x38, 0x44, 0x44, 0x48, 0x7f, 0x00, 0x00, 0x00,  # d
+    0x38, 0x54, 0x54, 0x54, 0x18, 0x00, 0x00, 0x00,  # e
+    0x08, 0x7e, 0x09, 0x01, 0x02, 0x00, 0x00, 0x00,  # f
+    0x0c, 0x52, 0x52, 0x52, 0x3e, 0x00, 0x00, 0x00,  # g
+    0x7f, 0x08, 0x04, 0x04, 0x78, 0x00, 0x00, 0x00,  # h
+    0x00, 0x44, 0x7d, 0x40, 0x00, 0x00, 0x00, 0x00,  # i
+    0x20, 0x40, 0x44, 0x3d, 0x00, 0x00, 0x00, 0x00,  # j
+    0x7f, 0x10, 0x28, 0x44, 0x00, 0x00, 0x00, 0x00,  # k
+    0x00, 0x41, 0x7f, 0x40, 0x00, 0x00, 0x00, 0x00,  # l
+    0x7c, 0x04, 0x18, 0x04, 0x78, 0x00, 0x00, 0x00,  # m
+    0x7c, 0x08, 0x04, 0x04, 0x78, 0x00, 0x00, 0x00,  # n
+    0x38, 0x44, 0x44, 0x44, 0x38, 0x00, 0x00, 0x00,  # o
+    0x7c, 0x14, 0x14, 0x14, 0x08, 0x00, 0x00, 0x00,  # p
+    0x08, 0x14, 0x14, 0x18, 0x7c, 0x00, 0x00, 0x00,  # q
+    0x7c, 0x08, 0x04, 0x04, 0x08, 0x00, 0x00, 0x00,  # r
+    0x48, 0x54, 0x54, 0x54, 0x20, 0x00, 0x00, 0x00,  # s
+    0x04, 0x3f, 0x44, 0x40, 0x20, 0x00, 0x00, 0x00,  # t
+    0x3c, 0x40, 0x40, 0x20, 0x7c, 0x00, 0x00, 0x00,  # u
+    0x1c, 0x20, 0x40, 0x20, 0x1c, 0x00, 0x00, 0x00,  # v
+    0x3c, 0x40, 0x30, 0x40, 0x3c, 0x00, 0x00, 0x00,  # w
+    0x44, 0x28, 0x10, 0x28, 0x44, 0x00, 0x00, 0x00,  # x
+    0x0c, 0x50, 0x50, 0x50, 0x3c, 0x00, 0x00, 0x00,  # y
+    0x44, 0x64, 0x54, 0x4c, 0x44, 0x00, 0x00, 0x00,  # z
+    0x00, 0x08, 0x36, 0x41, 0x00, 0x00, 0x00, 0x00,  # {
+    0x00, 0x00, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00,  # |
+    0x00, 0x41, 0x36, 0x08, 0x00, 0x00, 0x00, 0x00,  # }
+    0x10, 0x08, 0x08, 0x10, 0x08, 0x00, 0x00, 0x00,  # ~
+    0x78, 0x46, 0x41, 0x46, 0x78, 0x00, 0x00, 0x00,  # DEL
+])
+
 
 class FrameBuffer:
     """
-    MicroPython-compatible FrameBuffer class
-    Supports RGB565 format for ThumbyColor compatibility
+    MicroPython FrameBuffer - 1:1 Python implementation
+    Based on micropython/extmod/modframebuf.c
     """
 
     def __init__(self, buffer, width, height, format=RGB565, stride=None):
-        """
-        Initialize framebuffer
-
-        Args:
-            buffer: bytearray to store pixel data
-            width: width in pixels
-            height: height in pixels
-            format: pixel format (RGB565 for ThumbyColor)
-            stride: bytes per line (optional)
-        """
         self.buffer = buffer
         self.width = width
         self.height = height
         self.format = format
+        self.stride = stride if stride is not None else width
 
-        if stride is None:
-            if format == RGB565:
-                stride = width * 2  # 2 bytes per pixel
-            elif format in (MONO_VLSB, MONO_HLSB, MONO_HMSB):
-                stride = (width + 7) // 8
-            elif format == GS2_HMSB:
-                stride = (width + 3) // 4
-            elif format == GS4_HMSB:
-                stride = (width + 1) // 2
-            elif format == GS8:
-                stride = width
-
-        self.stride = stride
-
-    def fill(self, color):
+    def fill(self, col):
         """Fill entire framebuffer with color"""
-        if self.format == RGB565:
-            # RGB565: 2 bytes per pixel
-            for i in range(0, len(self.buffer), 2):
-                self.buffer[i] = color & 0xFF
-                self.buffer[i + 1] = (color >> 8) & 0xFF
-        else:
-            # For other formats, fill with color value
-            for i in range(len(self.buffer)):
-                self.buffer[i] = color
+        self.fill_rect(0, 0, self.width, self.height, col)
 
-    def pixel(self, x, y, color=None):
+    def pixel(self, x, y, col=None):
         """Get or set pixel at (x, y)"""
         if not (0 <= x < self.width and 0 <= y < self.height):
-            return
+            return None if col is None else None
 
         if self.format == RGB565:
-            idx = (y * self.width + x) * 2
-            if color is None:
+            index = x + y * self.stride
+            if col is None:
                 # Get pixel
+                idx = index * 2
                 return self.buffer[idx] | (self.buffer[idx + 1] << 8)
             else:
                 # Set pixel
-                self.buffer[idx] = color & 0xFF
-                self.buffer[idx + 1] = (color >> 8) & 0xFF
-        elif self.format in (MONO_VLSB, MONO_HLSB, MONO_HMSB):
-            # Monochrome formats
-            if self.format == MONO_VLSB:
-                idx = x + (y // 8) * self.stride
-                bit = y & 7
-            elif self.format == MONO_HLSB:
-                idx = (x // 8) + y * self.stride
-                bit = x & 7
-            else:  # MONO_HMSB
-                idx = (x // 8) + y * self.stride
-                bit = 7 - (x & 7)
+                idx = index * 2
+                self.buffer[idx] = col & 0xFF
+                self.buffer[idx + 1] = (col >> 8) & 0xFF
 
-            if color is None:
-                return (self.buffer[idx] >> bit) & 1
-            elif color:
-                self.buffer[idx] |= 1 << bit
-            else:
-                self.buffer[idx] &= ~(1 << bit)
-
-    def hline(self, x, y, w, color):
+    def hline(self, x, y, w, col):
         """Draw horizontal line"""
-        for i in range(w):
-            self.pixel(x + i, y, color)
+        self.fill_rect(x, y, w, 1, col)
 
-    def vline(self, x, y, h, color):
+    def vline(self, x, y, h, col):
         """Draw vertical line"""
-        for i in range(h):
-            self.pixel(x, y + i, color)
+        self.fill_rect(x, y, 1, h, col)
 
-    def line(self, x1, y1, x2, y2, color):
+    def fill_rect(self, x, y, w, h, col):
+        """Fill rectangle - optimized like MicroPython"""
+        # Clip to framebuffer bounds
+        if x < 0:
+            w += x
+            x = 0
+        if y < 0:
+            h += y
+            y = 0
+        if x + w > self.width:
+            w = self.width - x
+        if y + h > self.height:
+            h = self.height - y
+
+        if w <= 0 or h <= 0:
+            return
+
+        if self.format == RGB565:
+            # RGB565: optimized row-by-row fill
+            col_lo = col & 0xFF
+            col_hi = (col >> 8) & 0xFF
+
+            for row in range(h):
+                idx = ((y + row) * self.stride + x) * 2
+                for _ in range(w):
+                    self.buffer[idx] = col_lo
+                    self.buffer[idx + 1] = col_hi
+                    idx += 2
+
+    def rect(self, x, y, w, h, col, fill=False):
+        """Draw rectangle outline or filled"""
+        if fill:
+            self.fill_rect(x, y, w, h, col)
+        else:
+            # Draw four edges
+            self.hline(x, y, w, col)
+            self.hline(x, y + h - 1, w, col)
+            self.vline(x, y, h, col)
+            self.vline(x + w - 1, y, h, col)
+
+    def line(self, x0, y0, x1, y1, col):
         """Draw line using Bresenham's algorithm"""
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
-        sx = 1 if x1 < x2 else -1
-        sy = 1 if y1 < y2 else -1
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
         err = dx - dy
 
         while True:
-            self.pixel(x1, y1, color)
-            if x1 == x2 and y1 == y2:
+            self.pixel(x0, y0, col)
+            if x0 == x1 and y0 == y1:
                 break
             e2 = 2 * err
             if e2 > -dy:
                 err -= dy
-                x1 += sx
+                x0 += sx
             if e2 < dx:
                 err += dx
-                y1 += sy
+                y0 += sy
 
-    def rect(self, x, y, w, h, color, fill=False):
-        """Draw rectangle"""
-        if fill:
-            for i in range(h):
-                self.hline(x, y + i, w, color)
-        else:
-            self.hline(x, y, w, color)
-            self.hline(x, y + h - 1, w, color)
-            self.vline(x, y, h, color)
-            self.vline(x + w - 1, y, h, color)
+    def text(self, s, x, y, col=1):
+        """Render text using 8x8 font - exact MicroPython implementation"""
+        for char in s:
+            char_code = ord(char)
+            if 32 <= char_code <= 127:
+                # Get font data for this character (8 bytes per char)
+                char_offset = (char_code - 32) * 8
 
-    def fill_rect(self, x, y, w, h, color):
-        """Draw filled rectangle"""
-        self.rect(x, y, w, h, color, fill=True)
-
-    def blit(self, source_fb, x, y, key=-1, palette=None):
-        """
-        Blit another framebuffer onto this one
-
-        Args:
-            source_fb: Source FrameBuffer
-            x, y: Position to blit to
-            key: Transparent color key (optional)
-            palette: Color palette for format conversion (optional)
-        """
-        for sy in range(source_fb.height):
-            for sx in range(source_fb.width):
-                color = source_fb.pixel(sx, sy)
-                if color != key:
-                    self.pixel(x + sx, y + sy, color)
+                # Draw 8x8 character
+                for char_x in range(8):
+                    char_byte = FONT_DATA[char_offset + char_x]
+                    for char_y in range(8):
+                        if char_byte & (1 << char_y):
+                            self.pixel(x + char_x, y + char_y, col)
+            x += 8  # Move to next character position
 
     def scroll(self, dx, dy):
-        """Scroll the framebuffer by dx, dy pixels"""
-        # Create a temporary copy
-        temp = bytearray(self.buffer)
-        temp_fb = FrameBuffer(temp, self.width, self.height, self.format, self.stride)
+        """Scroll framebuffer content"""
+        if dx == 0 and dy == 0:
+            return
 
-        # Clear current buffer
+        # Create temporary copy
+        temp = bytearray(self.buffer)
         self.fill(0)
 
-        # Blit with offset
+        # Calculate source and destination regions
         for y in range(self.height):
+            sy = y - dy
+            if not (0 <= sy < self.height):
+                continue
             for x in range(self.width):
                 sx = x - dx
-                sy = y - dy
-                if 0 <= sx < self.width and 0 <= sy < self.height:
-                    color = temp_fb.pixel(sx, sy)
-                    self.pixel(x, y, color)
+                if not (0 <= sx < self.width):
+                    continue
 
-    def text(self, string, x, y, color):
-        """Draw text (basic implementation)"""
-        # Basic 8x8 character drawing
-        for i, char in enumerate(string):
-            char_x = x + i * 8
-            # This is a simplified version - real implementation would need a font
-            self.rect(char_x, y, 8, 8, color)
+                # Copy pixel from temp to new position
+                if self.format == RGB565:
+                    src_idx = (sy * self.stride + sx) * 2
+                    dst_idx = (y * self.stride + x) * 2
+                    self.buffer[dst_idx] = temp[src_idx]
+                    self.buffer[dst_idx + 1] = temp[src_idx + 1]
+
+    def blit(self, source, x, y, key=-1, palette=None):
+        """Blit another framebuffer onto this one"""
+        for sy in range(source.height):
+            for sx in range(source.width):
+                col = source.pixel(sx, sy)
+                if col is not None and col != key:
+                    if palette:
+                        col = palette.pixel(col, 0)
+                    self.pixel(x + sx, y + sy, col)

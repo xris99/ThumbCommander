@@ -163,22 +163,8 @@ class ColorDisplay:
         self.internal_fb.rect(x, y, w, h, color, fill=True)
 
     def drawText(self, text, x, y, color):
-        """Draw text at (x, y)"""
-        if self.font:
-            # Use pygame font for better rendering on PC
-            for i, char in enumerate(str(text)):
-                char_x = x + i * (self.font_width + self.font_space)
-                # Draw simple character representation
-                for cy in range(self.font_height):
-                    for cx in range(self.font_width):
-                        # Simple pattern - this would be replaced with actual font data
-                        if (ord(char) * cx + cy) % 7 < 4:
-                            self.internal_fb.pixel(char_x + cx, y + cy, color)
-        else:
-            # Fallback text rendering
-            for i, char in enumerate(str(text)):
-                char_x = x + i * 6
-                self.internal_fb.rect(char_x, y, 5, 8, color)
+        """Draw text at (x, y) - delegate to FrameBuffer's text() method"""
+        self.internal_fb.text(str(text), x, y, color)
 
     def drawSprite(self, sprite):
         """Draw a sprite at its position"""
