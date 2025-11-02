@@ -45,7 +45,7 @@ def _init_key_mapping():
 
     _ensure_pygame()
     if pygame:
-        _key_mapping['A'] = pygame.K_z
+        _key_mapping['A'] = pygame.K_y  # Y key for German keyboard layout
         _key_mapping['B'] = pygame.K_x
         _key_mapping['UP'] = pygame.K_UP
         _key_mapping['DOWN'] = pygame.K_DOWN
@@ -127,10 +127,21 @@ class ButtonClass:
         return _is_key_pressed(self.button_id)
 
     def justPressed(self):
-        """Check if button was just pressed this frame"""
+        """
+        Check if button was just pressed this frame
+        Clears the stored state after reading to prevent double input
+        """
+        global _current_keys, _previous_keys
         current = _is_key_pressed(self.button_id)
         previous = _was_key_pressed(self.button_id)
-        return current and not previous
+        just_pressed = current and not previous
+
+        # Clear stored state to prevent double reading of the same press
+        if just_pressed:
+            _current_keys[self.button_id] = False
+            _previous_keys[self.button_id] = False
+
+        return just_pressed
 
     def setPressed(self, value):
         """Manually set button state (for testing)"""

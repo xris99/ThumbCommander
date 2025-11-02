@@ -34,8 +34,6 @@ import pc_wrapper.thumbyButton as thumbyButton
 import pc_wrapper.thumbyHardware as thumbyHardware
 import pc_wrapper.audio as audio
 # Note: cutscene_utils and thumbycolor_native imported from game directory
-import pc_wrapper.grayscale as grayscale
-import pc_wrapper.Intro as Intro
 import _thread  # Use low-level _thread module
 
 # Install modules in sys.modules so they're found by import statements
@@ -52,9 +50,7 @@ sys.modules['_thread'] = _thread
 sys.modules['thumbyButton'] = thumbyButton
 sys.modules['thumbyHardware'] = thumbyHardware
 sys.modules['audio'] = audio
-# cutscene_utils will be imported from the game directory
-sys.modules['grayscale'] = grayscale
-sys.modules['Intro'] = Intro
+# cutscene_utils, grayscale, and Intro imported from game directory (only used in Thumby mode, not ThumbyColor)
 
 # Create a dummy 'lib' directory if it doesn't exist
 lib_dir = os.path.join(SCRIPT_DIR, 'lib')
@@ -77,7 +73,7 @@ def main():
     print()
     print("Controls:")
     print("  Arrow Keys - Movement")
-    print("  Z - Button A (Fire)")
+    print("  Y - Button A (Fire)")
     print("  X - Button B")
     print("  A - Left Bumper")
     print("  S - Right Bumper")
