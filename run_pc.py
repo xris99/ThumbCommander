@@ -29,7 +29,7 @@ import pc_wrapper.gc_compat as gc
 import pc_wrapper.framebuf as framebuf
 import pc_wrapper.engine as engine
 import pc_wrapper.engine_io as engine_io
-import thumbycolor_base  # Base class for ColorDisplay
+import pc_wrapper.engine_draw as engine_draw
 import pc_wrapper.thumbycolor_native as thumbycolor_native
 import pc_wrapper.thumbyButton as thumbyButton
 import pc_wrapper.thumbyHardware as thumbyHardware
@@ -37,6 +37,7 @@ import pc_wrapper.audio as audio
 # Note: cutscene_utils is imported from the game directory, not pc_wrapper
 import pc_wrapper.grayscale as grayscale
 import pc_wrapper.Intro as Intro
+import threading as _thread  # Use standard threading as _thread stub
 
 # Install modules in sys.modules so they're found by import statements
 # micropython is already installed by micropython_compat
@@ -46,7 +47,8 @@ sys.modules['gc'] = gc
 sys.modules['framebuf'] = framebuf
 sys.modules['engine'] = engine
 sys.modules['engine_io'] = engine_io
-sys.modules['thumbycolor_base'] = thumbycolor_base
+sys.modules['engine_draw'] = engine_draw
+sys.modules['_thread'] = _thread
 sys.modules['thumbycolor_native'] = thumbycolor_native
 sys.modules['thumbyButton'] = thumbyButton
 sys.modules['thumbyHardware'] = thumbyHardware
