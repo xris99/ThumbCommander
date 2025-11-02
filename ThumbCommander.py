@@ -1,8 +1,14 @@
 # ThumbCommander.py - Complete updated version with dynamic resolution support
 from sys import path
 from time import sleep
-loc = "/Games/ThumbCommander/"
-path.insert(0, '/Games/ThumbCommander')
+import os
+# Use /Games/ThumbCommander/ on hardware, current directory on PC
+if os.path.exists("/Games/ThumbCommander/"):
+    loc = "/Games/ThumbCommander/"
+    path.insert(0, '/Games/ThumbCommander')
+else:
+    loc = ""  # Current directory for PC
+    path.insert(0, os.getcwd())
 
 from platform_loader import display, IS_THUMBY_COLOR, Sprite, PC, create_sprite, play_cutscene_animation, create_cancel_callback, audio_load, audio_play, audio_stop, audio_set_loop, audio_set_volume, audio_get_position, rumble, buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU, dpadPressed, inputJustPressed
 import micropython

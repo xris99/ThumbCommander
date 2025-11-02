@@ -33,7 +33,7 @@ import pc_wrapper.thumbycolor_native as thumbycolor_native
 import pc_wrapper.thumbyButton as thumbyButton
 import pc_wrapper.thumbyHardware as thumbyHardware
 import pc_wrapper.audio as audio
-import pc_wrapper.cutscene_utils as cutscene_utils
+# Note: cutscene_utils is imported from the game directory, not pc_wrapper
 import pc_wrapper.grayscale as grayscale
 import pc_wrapper.Intro as Intro
 
@@ -49,7 +49,7 @@ sys.modules['thumbycolor_native'] = thumbycolor_native
 sys.modules['thumbyButton'] = thumbyButton
 sys.modules['thumbyHardware'] = thumbyHardware
 sys.modules['audio'] = audio
-sys.modules['cutscene_utils'] = cutscene_utils
+# cutscene_utils will be imported from the game directory
 sys.modules['grayscale'] = grayscale
 sys.modules['Intro'] = Intro
 

@@ -1,6 +1,6 @@
 """
-ThumbyColor native display and sprite emulation for PC
-Uses pygame for rendering
+ThumbyColor display and sprite emulation for PC
+Minimal wrapper that extends the original ThumbyColor API
 """
 
 import os
@@ -32,69 +32,21 @@ def _ensure_pygame():
 
 class ColorDisplay:
     """
-    ThumbyColor display emulation using pygame
-    Implements the same API as the ThumbyColor display
+    ThumbyColor display emulation
+    Provides internal_fb FrameBuffer for game rendering
     """
 
     def __init__(self, width=128, height=128, scale=4):
-        """
-        Initialize pygame display
-
-        Args:
-            width: Display width in pixels (default 128)
-            height: Display height in pixels (default 128)
-            scale: Scale factor for the window (default 4 for 512x512 window)
-        """
         self.width = width
         self.height = height
         self.scale = scale
 
-        # Check if pygame is available
-        if not _ensure_pygame():
-            # pygame not available - create stub objects
-            self.screen = None
-            self.buffer = bytearray(width * height * 2)
-            self.internal_fb = FrameBuffer(self.buffer, width, height, RGB565)
-            self.clock = None
-            self.font = None
-            self.font_data = None
-            self.font_file = None
-            self.font_width = 8
-            self.font_height = 8
-            self.font_space = 0
-            self.fps = 60
-            self.grayscale_enabled = False
-            self._init_colors()
-            return
-
-        # Create window
-        self.screen = pygame.display.set_mode((width * scale, height * scale))
-        pygame.display.set_caption("ThumbCommander - ThumbyColor Edition (PC)")
-
-        # Create internal framebuffer (RGB565 format)
+        # Create internal framebuffer (RGB565 format) - THIS IS KEY!
+        # The game expects display.internal_fb to be a FrameBuffer object
         self.buffer = bytearray(width * height * 2)  # 2 bytes per pixel for RGB565
         self.internal_fb = FrameBuffer(self.buffer, width, height, RGB565)
 
-        # Font settings
-        self.font_file = None
-        self.font_width = 8
-        self.font_height = 8
-        self.font_space = 0
-        self.font = None
-        self.font_data = None
-
-        # FPS control
-        self.clock = pygame.time.Clock()
-        self.fps = 60
-
-        # Initialize colors
-        self._init_colors()
-
-        # Grayscale enabled flag
-        self.grayscale_enabled = False
-
-    def _init_colors(self):
-        """Initialize color constants (RGB565)"""
+        # Color constants (RGB565)
         self.BLACK = 0x0000
         self.WHITE = 0xFFFF
         self.DARKGRAY = 0x4208
@@ -107,7 +59,27 @@ class ColorDisplay:
         self.PURPLE = 0x8010
         self.YELLOW = 0xFFEE
         self.LASER_BLUE = 0x297F
+        self.LASER_COLOR = 0x297F
         self.ENEMY_PURPLE = 0x8010
+        self.HIT_COLOR = 0xF800
+
+        # Font settings (not used - internal_fb.text() uses embedded font)
+        self.font_file = None
+        self.font_width = 8
+        self.font_height = 8
+        self.font_space = 0
+
+        # FPS control
+        self.fps = 60
+        self.grayscale_enabled = False
+
+        # Initialize pygame if available
+        self.screen = None
+        self.clock = None
+        if _ensure_pygame():
+            self.screen = pygame.display.set_mode((width * scale, height * scale))
+            pygame.display.set_caption("ThumbCommander - ThumbyColor Edition (PC)")
+            self.clock = pygame.time.Clock()
 
     def enableGrayscale(self):
         """Enable grayscale mode (for compatibility)"""
@@ -118,26 +90,13 @@ class ColorDisplay:
         self.fps = fps
 
     def setFont(self, font_file, width, height, space):
-        """Set font parameters"""
+        """Set font parameters (for compatibility - internal_fb uses embedded font)"""
         self.font_file = font_file
         self.font_width = width
         self.font_height = height
         self.font_space = space
 
-        # Try to load font if it exists
-        try:
-            if font_file and os.path.exists(font_file):
-                with open(font_file, 'rb') as f:
-                    self.font_data = f.read()
-        except:
-            pass
-
-        # Fall back to pygame font
-        try:
-            self.font = pygame.font.Font(None, height * 2)
-        except:
-            self.font = None
-
+    # Drawing methods - delegate to internal_fb
     def fill(self, color):
         """Fill display with color"""
         self.internal_fb.fill(color)
@@ -160,10 +119,10 @@ class ColorDisplay:
 
     def drawFilledRectangle(self, x, y, w, h, color):
         """Draw filled rectangle"""
-        self.internal_fb.rect(x, y, w, h, color, fill=True)
+        self.internal_fb.fill_rect(x, y, w, h, color)
 
     def drawText(self, text, x, y, color):
-        """Draw text at (x, y) - delegate to FrameBuffer's text() method"""
+        """Draw text using internal_fb's embedded 8x8 font"""
         self.internal_fb.text(str(text), x, y, color)
 
     def drawSprite(self, sprite):
@@ -178,66 +137,43 @@ class ColorDisplay:
         else:
             self.drawSprite(sprite)
 
-    def draw_sprite_from_file(self, filename, x, y, frame=0):
-        """Draw sprite directly from color file"""
-        try:
-            if os.path.exists(filename):
-                # Load and draw the color bitmap
-                with open(filename, 'rb') as f:
-                    data = f.read()
-                    # Parse filename to get dimensions
-                    # Format: name_width_height.COL.bin
-                    basename = os.path.basename(filename)
-                    parts = basename.replace('.COL.bin', '').split('_')
+    def draw_fullwidth_sprite(self, filename, x=0, y=0):
+        """Draw full-width sprite from .COL.bin file"""
+        if not isinstance(filename, str):
+            return
 
-                    # Try to extract width and height from filename
+        if not os.path.exists(filename):
+            return
+
+        try:
+            with open(filename, 'rb') as f:
+                data = f.read()
+
+            # Parse dimensions from filename (format: name_width_height.COL.bin)
+            basename = os.path.basename(filename)
+            parts = basename.replace('.COL.bin', '').split('_')
+
+            if len(parts) >= 3:
+                try:
+                    sprite_width = int(parts[-2])
+                    sprite_height = int(parts[-1])
+                except ValueError:
                     sprite_width = self.width
                     sprite_height = self.height
+            else:
+                sprite_width = self.width
+                sprite_height = self.height
 
-                    if len(parts) >= 3:
-                        try:
-                            sprite_width = int(parts[-2])
-                            sprite_height = int(parts[-1])
-                        except ValueError:
-                            pass
+            # Create FrameBuffer and blit
+            if len(data) >= sprite_width * sprite_height * 2:
+                sprite_buffer = bytearray(sprite_width * sprite_height * 2)
+                for i in range(len(sprite_buffer)):
+                    sprite_buffer[i] = data[i]
 
-                    # Draw sprite data (RGB565 format: 2 bytes per pixel)
-                    bytes_per_pixel = 2
-                    bytes_per_frame = sprite_width * sprite_height * bytes_per_pixel
-
-                    # Calculate frame offset
-                    frame_offset = frame * bytes_per_frame
-
-                    if frame_offset + bytes_per_frame <= len(data):
-                        for py in range(sprite_height):
-                            for px in range(sprite_width):
-                                idx = frame_offset + (py * sprite_width + px) * bytes_per_pixel
-                                if idx + 1 < len(data):
-                                    # Read RGB565 color (little endian)
-                                    color = data[idx] | (data[idx + 1] << 8)
-                                    # Draw to screen
-                                    screen_x = x + px
-                                    screen_y = y + py
-                                    if 0 <= screen_x < self.width and 0 <= screen_y < self.height:
-                                        self.internal_fb.pixel(screen_x, screen_y, color)
+                sprite_fb = FrameBuffer(sprite_buffer, sprite_width, sprite_height, RGB565)
+                self.internal_fb.blit(sprite_fb, x, y)
         except Exception as e:
-            print(f"Error loading sprite from {filename}: {e}")
-
-    def draw_fullwidth_sprite(self, filename, x_or_y=0, y=0):
-        """Draw full-width sprite from file
-
-        Args:
-            filename: sprite filename
-            x_or_y: if only 2 args, this is y-offset. if 3 args, this is x-offset
-            y: y-offset (when 3 args provided)
-        """
-        # Handle both 2-arg and 3-arg calls
-        if y == 0 and x_or_y != 0:
-            # Likely called with (filename, y)
-            self.draw_sprite_from_file(filename, 0, x_or_y)
-        else:
-            # Called with (filename, x, y)
-            self.draw_sprite_from_file(filename, x_or_y, y)
+            print(f"Error drawing fullwidth sprite {filename}: {e}")
 
     def rgb565_to_rgb888(self, color565):
         """Convert RGB565 to RGB888 for pygame"""
@@ -247,25 +183,23 @@ class ColorDisplay:
         return (r, g, b)
 
     def update(self):
-        """Update display - blit framebuffer to screen"""
-        # If no pygame, do nothing
+        """Update display - blit framebuffer to pygame surface and handle events"""
         if self.screen is None:
             return
 
-        # Handle pygame events
+        # Handle pygame events (including button input)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 import sys
                 sys.exit()
 
-        # Convert framebuffer to pygame surface
+        # Blit internal_fb to pygame surface
         for y in range(self.height):
             for x in range(self.width):
                 color565 = self.internal_fb.pixel(x, y)
                 if color565 is not None:
                     rgb = self.rgb565_to_rgb888(color565)
-                    # Draw scaled pixel
                     pygame.draw.rect(
                         self.screen,
                         rgb,
@@ -279,21 +213,10 @@ class ColorDisplay:
 
 class ColorSprite:
     """
-    ThumbyColor sprite emulation
+    ThumbyColor sprite - loads and renders .COL.bin sprite files
     """
 
     def __init__(self, width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False):
-        """
-        Initialize sprite
-
-        Args:
-            width: Sprite width
-            height: Sprite height
-            bitmap_data: Either a filename (str) or tuple of (bitmap, shadow)
-            x, y: Position
-            key: Transparent color key
-            mirrorX, mirrorY: Mirroring flags
-        """
         self.width = width
         self.height = height
         self.x = x
@@ -313,22 +236,21 @@ class ColorSprite:
 
         # Load bitmap data
         if isinstance(bitmap_data, str):
-            # Load from color file
+            # Load from .COL.bin file
             self.load_from_file(bitmap_data)
         elif isinstance(bitmap_data, tuple):
-            # Load from bitmap/shadow pair (grayscale compatibility)
+            # Grayscale compatibility (not implemented for PC)
             self.bitmap = bitmap_data
             self.bitmapByteCount = (width * height + 7) // 8
 
     def load_from_file(self, filename):
-        """Load sprite from color file"""
+        """Load sprite from .COL.bin file"""
         try:
             if os.path.exists(filename):
                 with open(filename, 'rb') as f:
                     self.frame_data = f.read()
 
-                # Try to get dimensions from filename
-                # Format: name_width_height.COL.bin
+                # Parse dimensions from filename (format: name_width_height.COL.bin)
                 basename = os.path.basename(filename)
                 parts = basename.replace('.COL.bin', '').split('_')
 
@@ -339,12 +261,11 @@ class ColorSprite:
                     except ValueError:
                         pass
 
-                # Calculate frame count from file size
+                # Calculate frame count
                 bytes_per_frame = self.width * self.height * 2  # RGB565
                 if len(self.frame_data) >= bytes_per_frame:
                     self.frameCount = len(self.frame_data) // bytes_per_frame
 
-                # Initialize scaled dimensions
                 self.scaledWidth = self.width
                 self.scaledHeight = self.height
         except Exception as e:
@@ -370,60 +291,61 @@ class ColorSprite:
         return getattr(self, 'lifes', 0)
 
     def render(self, display):
-        """Render sprite to display"""
-        if self.frame_data:
-            # Render from frame data
-            bytes_per_frame = self.width * self.height * 2
-            frame_offset = self.currentFrame * bytes_per_frame
+        """Render sprite to display using blit"""
+        if not self.frame_data:
+            return
 
-            for py in range(self.height):
-                for px in range(self.width):
-                    idx = frame_offset + (py * self.width + px) * 2
-                    if idx + 1 < len(self.frame_data):
-                        color = self.frame_data[idx] | (self.frame_data[idx + 1] << 8)
-                        # Skip transparent pixels
-                        if color != self.key:
-                            screen_x = self.x + px
-                            screen_y = self.y + py
-                            if hasattr(display, 'internal_fb'):
-                                display.internal_fb.pixel(screen_x, screen_y, color)
-        else:
-            # Fallback - draw rectangle
-            if hasattr(display, 'drawRectangle'):
-                display.drawRectangle(self.x, self.y, self.width, self.height, display.WHITE)
+        # Create a FrameBuffer for this sprite frame
+        bytes_per_frame = self.width * self.height * 2
+        frame_offset = self.currentFrame * bytes_per_frame
+
+        if frame_offset + bytes_per_frame > len(self.frame_data):
+            return
+
+        # Extract frame data
+        frame_buffer = bytearray(bytes_per_frame)
+        for i in range(bytes_per_frame):
+            frame_buffer[i] = self.frame_data[frame_offset + i]
+
+        # Create FrameBuffer and blit to display
+        sprite_fb = FrameBuffer(frame_buffer, self.width, self.height, RGB565)
+        display.internal_fb.blit(sprite_fb, self.x, self.y, self.key)
 
     def render_scaled(self, display):
         """Render scaled sprite"""
-        if self.frame_data and self.scaledWidth > 0 and self.scaledHeight > 0:
-            # Render with scaling
-            bytes_per_frame = self.width * self.height * 2
-            frame_offset = self.currentFrame * bytes_per_frame
-
-            # Simple nearest-neighbor scaling
-            for screen_y in range(self.scaledHeight):
-                for screen_x in range(self.scaledWidth):
-                    # Map back to source pixel
-                    src_x = (screen_x * self.width) // self.scaledWidth
-                    src_y = (screen_y * self.height) // self.scaledHeight
-
-                    # Apply mirroring if needed
-                    if self.mirrorX:
-                        src_x = self.width - 1 - src_x
-                    if self.mirrorY:
-                        src_y = self.height - 1 - src_y
-
-                    idx = frame_offset + (src_y * self.width + src_x) * 2
-                    if idx + 1 < len(self.frame_data):
-                        color = self.frame_data[idx] | (self.frame_data[idx + 1] << 8)
-                        # Skip transparent pixels
-                        if color != self.key:
-                            final_x = self.x + screen_x
-                            final_y = self.y + screen_y
-                            if hasattr(display, 'internal_fb'):
-                                display.internal_fb.pixel(final_x, final_y, color)
-        else:
-            # Fallback
+        if not self.frame_data or self.scaledWidth <= 0 or self.scaledHeight <= 0:
             self.render(display)
+            return
+
+        # For scaled rendering, we need to manually scale pixels
+        bytes_per_frame = self.width * self.height * 2
+        frame_offset = self.currentFrame * bytes_per_frame
+
+        if frame_offset + bytes_per_frame > len(self.frame_data):
+            return
+
+        # Render with scaling (nearest-neighbor)
+        for screen_y in range(self.scaledHeight):
+            for screen_x in range(self.scaledWidth):
+                # Map back to source pixel
+                src_x = (screen_x * self.width) // self.scaledWidth
+                src_y = (screen_y * self.height) // self.scaledHeight
+
+                # Apply mirroring
+                if self.mirrorX:
+                    src_x = self.width - 1 - src_x
+                if self.mirrorY:
+                    src_y = self.height - 1 - src_y
+
+                # Read pixel from frame data
+                idx = frame_offset + (src_y * self.width + src_x) * 2
+                if idx + 1 < len(self.frame_data):
+                    color = self.frame_data[idx] | (self.frame_data[idx + 1] << 8)
+                    # Skip transparent pixels
+                    if color != self.key:
+                        final_x = self.x + screen_x
+                        final_y = self.y + screen_y
+                        display.internal_fb.pixel(final_x, final_y, color)
 
 
 def _rumble(duration):
