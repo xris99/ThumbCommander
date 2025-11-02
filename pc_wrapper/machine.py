@@ -352,14 +352,17 @@ class PWM:
                     else:  # Mono
                         sound = pygame.sndarray.make_sound(samples_signed)
 
-                    # Queue sound on dedicated channel
-                    if PWM._channel.get_queue() is None:
+                    # Play sound - queue if channel is busy, otherwise start playback
+                    if not PWM._channel.get_busy():
                         PWM._channel.play(sound)
+                        if chunks_played <= 5:
+                            print(f"[Audio] Started playback of chunk #{chunks_played}", flush=True)
                     else:
                         PWM._channel.queue(sound)
 
-                except:
-                    pass  # Silently fail if audio has issues
+                except Exception as e:
+                    if chunks_played <= 5:
+                        print(f"[Audio] Error playing chunk: {e}", flush=True)
             else:
                 # No chunk ready, sleep briefly
                 time.sleep(0.01)
