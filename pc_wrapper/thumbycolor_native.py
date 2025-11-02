@@ -13,15 +13,21 @@ except ImportError:
 
 # Lazy import pygame - only when display is created
 pygame = None
+_pygame_available = None
 
 
 def _ensure_pygame():
     """Ensure pygame is imported and initialized"""
-    global pygame
-    if pygame is None:
-        import pygame as pg
-        pg.init()
-        pygame = pg
+    global pygame, _pygame_available
+    if _pygame_available is None:
+        try:
+            import pygame as pg
+            pg.init()
+            pygame = pg
+            _pygame_available = True
+        except ImportError:
+            _pygame_available = False
+    return _pygame_available
 
 
 class ColorDisplay:
@@ -39,10 +45,27 @@ class ColorDisplay:
             height: Display height in pixels (default 128)
             scale: Scale factor for the window (default 4 for 512x512 window)
         """
-        _ensure_pygame()
         self.width = width
         self.height = height
         self.scale = scale
+
+        # Check if pygame is available
+        if not _ensure_pygame():
+            # pygame not available - create stub objects
+            self.screen = None
+            self.buffer = bytearray(width * height * 2)
+            self.internal_fb = FrameBuffer(self.buffer, width, height, RGB565)
+            self.clock = None
+            self.font = None
+            self.font_data = None
+            self.font_file = None
+            self.font_width = 8
+            self.font_height = 8
+            self.font_space = 0
+            self.fps = 60
+            self.grayscale_enabled = False
+            self._init_colors()
+            return
 
         # Create window
         self.screen = pygame.display.set_mode((width * scale, height * scale))
@@ -64,7 +87,14 @@ class ColorDisplay:
         self.clock = pygame.time.Clock()
         self.fps = 60
 
-        # Color constants (RGB565)
+        # Initialize colors
+        self._init_colors()
+
+        # Grayscale enabled flag
+        self.grayscale_enabled = False
+
+    def _init_colors(self):
+        """Initialize color constants (RGB565)"""
         self.BLACK = 0x0000
         self.WHITE = 0xFFFF
         self.DARKGRAY = 0x4208
@@ -78,9 +108,6 @@ class ColorDisplay:
         self.YELLOW = 0xFFEE
         self.LASER_BLUE = 0x297F
         self.ENEMY_PURPLE = 0x8010
-
-        # Grayscale enabled flag
-        self.grayscale_enabled = False
 
     def enableGrayscale(self):
         """Enable grayscale mode (for compatibility)"""
@@ -210,9 +237,21 @@ class ColorDisplay:
         except Exception as e:
             print(f"Error loading sprite from {filename}: {e}")
 
-    def draw_fullwidth_sprite(self, filename, y=0):
-        """Draw full-width sprite from file"""
-        self.draw_sprite_from_file(filename, 0, y)
+    def draw_fullwidth_sprite(self, filename, x_or_y=0, y=0):
+        """Draw full-width sprite from file
+
+        Args:
+            filename: sprite filename
+            x_or_y: if only 2 args, this is y-offset. if 3 args, this is x-offset
+            y: y-offset (when 3 args provided)
+        """
+        # Handle both 2-arg and 3-arg calls
+        if y == 0 and x_or_y != 0:
+            # Likely called with (filename, y)
+            self.draw_sprite_from_file(filename, 0, x_or_y)
+        else:
+            # Called with (filename, x, y)
+            self.draw_sprite_from_file(filename, x_or_y, y)
 
     def rgb565_to_rgb888(self, color565):
         """Convert RGB565 to RGB888 for pygame"""
@@ -223,6 +262,10 @@ class ColorDisplay:
 
     def update(self):
         """Update display - blit framebuffer to screen"""
+        # If no pygame, do nothing
+        if self.screen is None:
+            return
+
         # Handle pygame events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -244,7 +287,8 @@ class ColorDisplay:
                     )
 
         pygame.display.flip()
-        self.clock.tick(self.fps)
+        if self.clock:
+            self.clock.tick(self.fps)
 
 
 class ColorSprite:

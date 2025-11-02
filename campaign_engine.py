@@ -5,6 +5,7 @@ import json
 import os
 from machine import freq
 from gc import collect
+import micropython
 try:
     from micropython import const
 except ImportError:
