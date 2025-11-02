@@ -70,7 +70,7 @@ def update_button_state():
 
     _init_key_mapping()
 
-    # Store previous state
+    # Store previous state BEFORE reading new state
     _previous_keys = _current_keys.copy()
 
     # Read current pygame key state
@@ -93,6 +93,19 @@ def _is_key_pressed(button_id):
 def _was_key_pressed(button_id):
     """Check if a button was pressed in the previous frame"""
     return _previous_keys.get(button_id, False)
+
+
+def clear_inputs():
+    """
+    Clear all pending button inputs
+    Useful for screen transitions to prevent input bleed-through
+    """
+    global _current_keys, _previous_keys
+    # Set both current and previous to pressed state
+    # This makes justPressed return False until the button is released and pressed again
+    for button_id in _key_mapping.keys():
+        if _current_keys.get(button_id, False):
+            _previous_keys[button_id] = True
 
 
 class ButtonClass:
@@ -129,19 +142,13 @@ class ButtonClass:
     def justPressed(self):
         """
         Check if button was just pressed this frame
-        Clears the stored state after reading to prevent double input
+        Returns True only on the transition from unpressed to pressed
+        No state clearing - the state machine naturally handles preventing double reads
         """
-        global _current_keys, _previous_keys
         current = _is_key_pressed(self.button_id)
         previous = _was_key_pressed(self.button_id)
-        just_pressed = current and not previous
-
-        # Clear stored state to prevent double reading of the same press
-        if just_pressed:
-            _current_keys[self.button_id] = False
-            _previous_keys[self.button_id] = False
-
-        return just_pressed
+        # Returns True only when: button IS pressed now AND was NOT pressed before
+        return current and not previous
 
     def setPressed(self, value):
         """Manually set button state (for testing)"""
