@@ -32,13 +32,13 @@ import pc_wrapper.engine_io as engine_io
 import pc_wrapper.engine_draw as engine_draw
 import pc_wrapper.thumbyButton as thumbyButton
 import pc_wrapper.thumbyHardware as thumbyHardware
-import pc_wrapper.audio as audio
-# Note: cutscene_utils and thumbycolor_native imported from game directory
+# Note: audio, cutscene_utils and thumbycolor_native imported from game directory
 import _thread  # Use low-level _thread module
 
 # Install modules in sys.modules so they're found by import statements
 # micropython is already installed by micropython_compat
 sys.modules['utime'] = utime
+sys.modules['time'] = utime  # audio.py uses 'import time' and expects ticks_us()
 sys.modules['machine'] = machine
 sys.modules['gc'] = gc
 sys.modules['framebuf'] = framebuf
@@ -49,8 +49,7 @@ sys.modules['_thread'] = _thread
 # thumbycolor_native will be imported from root directory (original hardware version)
 sys.modules['thumbyButton'] = thumbyButton
 sys.modules['thumbyHardware'] = thumbyHardware
-sys.modules['audio'] = audio
-# cutscene_utils, grayscale, and Intro imported from game directory (only used in Thumby mode, not ThumbyColor)
+# audio, cutscene_utils, grayscale, and Intro imported from game directory (audio used by ThumbyColor, others only by Thumby mode)
 
 # Create a dummy 'lib' directory if it doesn't exist
 lib_dir = os.path.join(SCRIPT_DIR, 'lib')

@@ -20,6 +20,11 @@ def ticks_diff(end, start):
     return end - start
 
 
+def ticks_add(ticks, delta):
+    """Add delta to ticks value"""
+    return ticks + delta
+
+
 def sleep(seconds):
     """Sleep for seconds"""
     _time.sleep(seconds)
