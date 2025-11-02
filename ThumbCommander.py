@@ -5,6 +5,11 @@ loc = "/Games/ThumbCommander/"
 path.insert(0, '/Games/ThumbCommander')
 
 from platform_loader import display, IS_THUMBY_COLOR, Sprite, PC, create_sprite, play_cutscene_animation, create_cancel_callback, audio_load, audio_play, audio_stop, audio_set_loop, audio_set_volume, audio_get_position, rumble, buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU, dpadPressed, inputJustPressed
+try:
+    from micropython import const
+except ImportError:
+    def const(x):
+        return x
 display.enableGrayscale()
 
 # Set platform-appropriate frequency
