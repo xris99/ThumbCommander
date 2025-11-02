@@ -115,3 +115,6 @@ builtins.ptr16 = ptr16
 
 # Install micropython module in sys.modules so it can be imported
 sys.modules['micropython'] = micropython_module
+
+# Also install micropython as a builtin so it's available everywhere (needed for @micropython.viper decorators)
+builtins.micropython = micropython_module
