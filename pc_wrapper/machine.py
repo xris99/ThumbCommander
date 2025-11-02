@@ -91,7 +91,7 @@ class Pin:
 class PWM:
     """
     PWM class that outputs audio through pygame.mixer
-    Implements real-time sample rate conversion to match pygame mixer rate
+    Reinitializes mixer to match source sample rate (no resampling!)
     """
 
     # Class-level audio state
@@ -101,18 +101,10 @@ class PWM:
     _playback_thread = None
     _stop_playback = False
     _channel = None
-
-    # Resampling state
-    _source_sample_rate = None
-    _target_sample_rate = 16000  # Pygame mixer rate
-    _resample_ratio = 1.0
-    _resample_position = 0.0  # Fractional sample position
-    _last_input_sample = 32768  # Previous sample for interpolation
-    _resampler_initialized = False
+    _current_mixer_rate = 16000  # Current pygame.mixer rate
 
     # Debug tracking
     _samples_in = 0
-    _samples_out = 0
     _last_debug_time = 0
 
     def __init__(self, pin, freq=120000, duty=0):
@@ -154,34 +146,39 @@ class PWM:
                         PWM._channel.stop()
                         print(f"[Audio] Stopped old mixer channel", flush=True)
 
+            # Detect source sample rate from audio.py and reinitialize mixer
+            import sys
+            source_rate = None
+            if 'audio' in sys.modules:
+                audio_mod = sys.modules['audio']
+                if hasattr(audio_mod, 'audio') and hasattr(audio_mod.audio, 'sample_rate'):
+                    source_rate = audio_mod.audio.sample_rate
+                    print(f"[Audio] Detected source sample rate: {source_rate} Hz", flush=True)
+
+            # Reinitialize pygame.mixer with source sample rate (no resampling needed!)
+            if source_rate and source_rate != PWM._current_mixer_rate:
+                print(f"[Audio] Reinitializing mixer from {PWM._current_mixer_rate} Hz to {source_rate} Hz", flush=True)
+                pygame.mixer.quit()
+                time.sleep(0.05)  # Brief pause for cleanup
+                pygame.mixer.pre_init(frequency=source_rate, size=-16, channels=1, buffer=512)
+                pygame.mixer.init()
+                PWM._current_mixer_rate = source_rate
+                print(f"[Audio] Mixer reinitialized: {pygame.mixer.get_init()}", flush=True)
+
             with PWM._lock:
                 PWM._active_pwm = self
                 PWM._sample_buffer = []
                 PWM._stop_playback = False
 
-                # Reset resampler state - CRITICAL for each new audio file
-                PWM._source_sample_rate = None
-                PWM._resample_ratio = 1.0
-                PWM._resample_position = 0.0
-                PWM._last_input_sample = 32768
-                PWM._resampler_initialized = False
-
-                # Reset debug tracking
+                # No resampling needed - direct sample passthrough
                 PWM._samples_in = 0
-                PWM._samples_out = 0
                 PWM._last_debug_time = time.time()
 
-                # Get mixer rate
-                mixer_info = pygame.mixer.get_init()
-                if mixer_info:
-                    PWM._target_sample_rate = mixer_info[0]
-
                 import sys
-                print(f"[Audio] PWM reinitialized, buffer cleared, resampler reset", flush=True)
+                print(f"[Audio] PWM initialized for direct passthrough (no resampling)", flush=True)
                 sys.stdout.flush()
 
                 # ALWAYS create a fresh mixer channel for each audio file
-                # This ensures the channel is in a clean state
                 PWM._channel = pygame.mixer.Channel(0)
                 print(f"[Audio] Created fresh mixer channel", flush=True)
 
@@ -206,7 +203,7 @@ class PWM:
         """
         Get or set 16-bit duty cycle (0-65535)
         This is the main method used by audio.py to output samples
-        Implements real-time sample rate conversion
+        Direct passthrough - no resampling (mixer matches source rate)
         """
         if val is None:
             return self._duty
@@ -218,73 +215,21 @@ class PWM:
         if PWM._active_pwm is not self:
             return  # Silently discard samples from inactive PWM instances
 
-        # Process sample (resampling and buffering)
-        if True:
-            # Detect source sample rate on first samples
-            if not PWM._resampler_initialized:
-                import sys
-                try:
-                    if 'audio' in sys.modules:
-                        audio_mod = sys.modules['audio']
-                        if hasattr(audio_mod, 'audio') and hasattr(audio_mod.audio, 'sample_rate'):
-                            PWM._source_sample_rate = audio_mod.audio.sample_rate
-                            PWM._resample_ratio = PWM._target_sample_rate / PWM._source_sample_rate
-                            PWM._resampler_initialized = True
-                            print(f"[Audio] Resampler config: {PWM._source_sample_rate} Hz → {PWM._target_sample_rate} Hz (ratio: {PWM._resample_ratio:.4f})")
-                except Exception as e:
-                    print(f"[Audio] Error detecting sample rate: {e}")
-                    pass
-
-                # If we still don't have rate info, assume 1:1 (no resampling)
-                if not PWM._resampler_initialized:
-                    PWM._resample_ratio = 1.0
-                    PWM._resampler_initialized = True
-                    print(f"[Audio] No sample rate detected, using 1:1 passthrough")
-
-            # Track input samples
+        # Direct passthrough - just append sample to buffer
+        with PWM._lock:
+            PWM._sample_buffer.append(val)
             PWM._samples_in += 1
 
-            # Apply resampling if needed
-            if PWM._resample_ratio == 1.0:
-                # No resampling needed - direct passthrough
-                with PWM._lock:
-                    PWM._sample_buffer.append(val)
-                    PWM._samples_out += 1
-            else:
-                # Resample using linear interpolation
-                with PWM._lock:
-                    # How many output samples does this input sample generate?
-                    # Add the resampling ratio to our position
-                    PWM._resample_position += PWM._resample_ratio
-
-                    # Generate interpolated samples
-                    while PWM._resample_position >= 1.0:
-                        # Calculate interpolation factor
-                        frac = 1.0 - (PWM._resample_position - PWM._resample_ratio) / PWM._resample_ratio
-                        frac = max(0.0, min(1.0, frac))
-
-                        # Linear interpolation between last and current sample
-                        interpolated = int(PWM._last_input_sample + frac * (val - PWM._last_input_sample))
-                        PWM._sample_buffer.append(interpolated)
-                        PWM._samples_out += 1
-
-                        PWM._resample_position -= 1.0
-
-                    # Store current sample for next interpolation
-                    PWM._last_input_sample = val
-
-            # Debug output every 5 seconds
-            current_time = time.time()
-            if current_time - PWM._last_debug_time >= 5.0:
-                with PWM._lock:
-                    buffer_size = len(PWM._sample_buffer)
-                elapsed = current_time - PWM._last_debug_time
-                in_rate = PWM._samples_in / elapsed
-                out_rate = PWM._samples_out / elapsed
-                print(f"[Audio] Rates: in={in_rate:.0f} Hz, out={out_rate:.0f} Hz, buffer={buffer_size}, ratio={PWM._resample_ratio:.4f}")
-                PWM._samples_in = 0
-                PWM._samples_out = 0
-                PWM._last_debug_time = current_time
+        # Debug output every 5 seconds
+        current_time = time.time()
+        if current_time - PWM._last_debug_time >= 5.0:
+            with PWM._lock:
+                buffer_size = len(PWM._sample_buffer)
+            elapsed = current_time - PWM._last_debug_time
+            sample_rate = PWM._samples_in / elapsed
+            print(f"[Audio] Sample rate: {sample_rate:.0f} Hz, buffer={buffer_size} samples")
+            PWM._samples_in = 0
+            PWM._last_debug_time = current_time
 
     @staticmethod
     def _audio_player_thread():
