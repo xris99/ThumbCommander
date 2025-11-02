@@ -36,7 +36,7 @@ import pc_wrapper.audio as audio
 # Note: cutscene_utils and thumbycolor_native imported from game directory
 import pc_wrapper.grayscale as grayscale
 import pc_wrapper.Intro as Intro
-import threading as _thread  # Use standard threading as _thread stub
+import _thread  # Use low-level _thread module
 
 # Install modules in sys.modules so they're found by import statements
 # micropython is already installed by micropython_compat
