@@ -131,17 +131,22 @@ class PWM:
         # Only set as active PWM if pygame is available
         pygame_available = _ensure_pygame()
         print(f"[Audio] PWM.__init__: pygame available = {pygame_available}, pygame.mixer.get_init() = {pygame.mixer.get_init() if pygame else None}", flush=True)
-        if pygame_available:
-            with PWM._lock:
-                # If there's already an active PWM, stop it
-                if PWM._active_pwm is not None and PWM._active_pwm is not self:
-                    PWM._active_pwm._cleanup()
 
+        if pygame_available:
+            # CRITICAL: Cleanup old PWM OUTSIDE the lock first to avoid deadlock
+            if PWM._active_pwm is not None:
+                print(f"[Audio] Cleaning up old PWM instance before creating new one", flush=True)
+                old_pwm = PWM._active_pwm
+                PWM._active_pwm = None  # Disconnect it first
+                old_pwm.deinit()  # Force cleanup
+                time.sleep(0.05)  # Give playback thread time to see None and exit
+
+            with PWM._lock:
                 PWM._active_pwm = self
                 PWM._sample_buffer = []
                 PWM._stop_playback = False
 
-                # Reset resampler state
+                # Reset resampler state - CRITICAL for each new audio file
                 PWM._source_sample_rate = None
                 PWM._resample_ratio = 1.0
                 PWM._resample_position = 0.0
@@ -194,7 +199,11 @@ class PWM:
 
         self._duty = val
 
-        # Send sample to audio buffer if we're the active PWM
+        # Send sample to audio buffer ONLY if we're the active PWM
+        # This prevents old audio threads from polluting the buffer
+        if PWM._active_pwm is not self:
+            return  # Silently discard samples from inactive PWM instances
+
         if PWM._active_pwm is self:
             # Detect source sample rate on first samples
             if not PWM._resampler_initialized:
@@ -265,12 +274,35 @@ class PWM:
     @staticmethod
     def _audio_player_thread():
         """Background thread that continuously plays audio from buffer"""
-        chunk_size = 1024  # Samples per chunk
+        chunk_size = 512  # Samples per chunk (reduced from 1024 for more frequent refills)
+        headroom = 3072  # Wait for this many samples before starting (Option 2: larger buffer)
         chunks_played = 0
         underrun_count = 0
+        playback_started = False
+
+        print(f"[Audio] Playback thread starting, will wait for {headroom} samples before playing", flush=True)
 
         while not PWM._stop_playback:
             # Check if we have enough samples to play
+            with PWM._lock:
+                buffer_size = len(PWM._sample_buffer)
+                active_pwm = PWM._active_pwm  # Get current active PWM
+
+            # If no active PWM, exit thread
+            if active_pwm is None:
+                print(f"[Audio] No active PWM, playback thread exiting", flush=True)
+                break
+
+            # Wait for buffer to fill before starting playback (reduces underruns)
+            if not playback_started:
+                if buffer_size >= headroom:
+                    playback_started = True
+                    print(f"[Audio] Buffer filled to {buffer_size} samples, starting playback", flush=True)
+                else:
+                    time.sleep(0.01)
+                    continue
+
+            # Extract chunk if available
             with PWM._lock:
                 buffer_size = len(PWM._sample_buffer)
                 if buffer_size >= chunk_size:
@@ -315,17 +347,21 @@ class PWM:
 
     def _cleanup(self):
         """Stop audio playback"""
+        print(f"[Audio] PWM._cleanup() called", flush=True)
         with PWM._lock:
             PWM._sample_buffer = []
             if PWM._channel:
                 PWM._channel.stop()
+                print(f"[Audio] Stopped pygame mixer channel", flush=True)
 
     def deinit(self):
         """Deinitialize PWM"""
+        print(f"[Audio] PWM.deinit() called, is_active={PWM._active_pwm is self}", flush=True)
         if PWM._active_pwm is self:
             self._cleanup()
             with PWM._lock:
                 PWM._active_pwm = None
+            print(f"[Audio] PWM deinitialized, active_pwm set to None", flush=True)
 
 
 class Timer:
