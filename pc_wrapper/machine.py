@@ -233,29 +233,30 @@ class PWM:
 
     @staticmethod
     def _audio_player_thread():
-        """Background thread that continuously plays audio from buffer"""
-        chunk_size = 512  # Preferred chunk size
-        min_chunk = 64   # Minimum chunk size - play smaller chunks when decoder is slow
-        headroom = 8192  # Wait for this many samples before starting (~512ms buffer at 16kHz)
+        """
+        Background thread for audio playback
+        Uses large chunks and waits for completion (no queueing)
+        This approach is simpler and more reliable than pygame's limited queue
+        """
+        chunk_size = 2048  # Large chunks for smooth playback (~131ms at 15625 Hz)
+        headroom = 8192    # Initial buffer before starting
         chunks_played = 0
-        small_chunk_count = 0
         playback_started = False
-        queue_full_count = 0
 
-        print(f"[Audio] Playback thread starting, will wait for {headroom} samples (512ms) before playing", flush=True)
+        print(f"[Audio] Playback thread starting, waiting for {headroom} samples", flush=True)
 
         while not PWM._stop_playback:
-            # Check if we have enough samples to play
+            # Check if we have enough samples
             with PWM._lock:
                 buffer_size = len(PWM._sample_buffer)
-                active_pwm = PWM._active_pwm  # Get current active PWM
+                active_pwm = PWM._active_pwm
 
             # If no active PWM, exit thread
             if active_pwm is None:
                 print(f"[Audio] No active PWM, playback thread exiting", flush=True)
                 break
 
-            # Wait for buffer to fill before starting playback (reduces underruns)
+            # Wait for initial buffer fill
             if not playback_started:
                 if buffer_size >= headroom:
                     playback_started = True
@@ -264,69 +265,47 @@ class PWM:
                     time.sleep(0.01)
                     continue
 
-            # Extract chunk - play whatever is available (eliminates underruns)
-            # CRITICAL: Only extract if channel can accept it (prevents queue overflow)
+            # Wait for channel to be idle before playing next chunk
+            # This ensures no overlap or queue issues
+            if PWM._channel.get_busy():
+                time.sleep(0.001)  # Poll every 1ms for channel to finish
+                continue
+
+            # Channel is idle - extract and play next chunk
+            chunk = None
             with PWM._lock:
                 buffer_size = len(PWM._sample_buffer)
-
-            # Check if channel can accept a new chunk
-            can_accept_chunk = False
-            if not PWM._channel.get_busy():
-                can_accept_chunk = True  # Channel idle, will play()
-            elif PWM._channel.get_queue() is None:
-                can_accept_chunk = True  # Channel busy but queue empty, will queue()
-            else:
-                # Channel busy AND queue full - wait for queue to empty
-                queue_full_count += 1
-                if queue_full_count <= 3 or queue_full_count % 50 == 0:
-                    print(f"[Audio] Queue full #{queue_full_count}, buffer: {buffer_size} samples (waiting...)", flush=True)
-
-            chunk = None
-            if can_accept_chunk and buffer_size >= min_chunk:
-                with PWM._lock:
-                    # Play whatever we have, up to chunk_size
+                if buffer_size > 0:
                     actual_chunk_size = min(buffer_size, chunk_size)
                     chunk = PWM._sample_buffer[:actual_chunk_size]
                     PWM._sample_buffer = PWM._sample_buffer[actual_chunk_size:]
 
-                    # Track small chunks (indicates decoder is slow)
-                    if actual_chunk_size < chunk_size:
-                        small_chunk_count += 1
-                        if small_chunk_count <= 5 or small_chunk_count % 20 == 0:
-                            print(f"[Audio] Small chunk #{small_chunk_count}: {actual_chunk_size} samples (buffer: {buffer_size})")
-
             if chunk and pygame:
                 chunks_played += 1
-                if chunks_played <= 3 or chunks_played % 100 == 0:
-                    print(f"[Audio] Played chunk #{chunks_played}, buffer: {buffer_size} samples")
+                if chunks_played <= 5 or chunks_played % 50 == 0:
+                    print(f"[Audio] Playing chunk #{chunks_played}: {len(chunk)} samples, buffer: {buffer_size}", flush=True)
+
                 try:
                     # Convert 16-bit unsigned (0-65535) to 16-bit signed (-32768 to 32767)
                     samples = np.array(chunk, dtype=np.int32)
                     samples_signed = (samples - 32768).astype(np.int16)
 
-                    # Reshape for stereo if needed
+                    # Create pygame sound
                     mixer_info = pygame.mixer.get_init()
-                    if mixer_info and mixer_info[2] == 2:  # If stereo
+                    if mixer_info and mixer_info[2] == 2:  # Stereo
                         samples_stereo = np.column_stack((samples_signed, samples_signed))
                         sound = pygame.sndarray.make_sound(samples_stereo)
                     else:  # Mono
                         sound = pygame.sndarray.make_sound(samples_signed)
 
-                    # Play sound - queue if channel is busy, otherwise start playback
-                    if not PWM._channel.get_busy():
-                        PWM._channel.play(sound)
-                        if chunks_played <= 5:
-                            print(f"[Audio] Started playback of chunk #{chunks_played}", flush=True)
-                    else:
-                        PWM._channel.queue(sound)
+                    # Play sound (channel is guaranteed idle)
+                    PWM._channel.play(sound)
 
                 except Exception as e:
-                    if chunks_played <= 5:
-                        print(f"[Audio] Error playing chunk: {e}", flush=True)
+                    print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
             else:
-                # No chunk ready (either buffer empty or channel queue full)
-                # Sleep briefly to let channel drain
-                time.sleep(0.005)  # 5ms sleep (chunk is ~32ms at 15625 Hz)
+                # Buffer empty, wait for decoder to fill it
+                time.sleep(0.01)
 
     def _cleanup(self):
         """Stop audio playback"""
