@@ -43,3 +43,18 @@ def sleep_us(microseconds):
 def time():
     """Get current time in seconds since epoch"""
     return int(_time.time())
+
+
+def monotonic():
+    """Get monotonic time in seconds"""
+    return _time.monotonic()
+
+
+def localtime(secs=None):
+    """Convert seconds to local time tuple"""
+    return _time.localtime(secs)
+
+
+def gmtime(secs=None):
+    """Convert seconds to UTC time tuple"""
+    return _time.gmtime(secs)

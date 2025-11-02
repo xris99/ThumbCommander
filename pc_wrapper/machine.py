@@ -5,8 +5,12 @@ Provides PWM and Timer that work with pygame for audio output
 
 import threading
 import time
-import queue
+import os
 import numpy as np
+
+# Set dummy audio driver for headless environments
+if 'SDL_AUDIODRIVER' not in os.environ:
+    os.environ['SDL_AUDIODRIVER'] = 'dummy'
 
 # Lazy pygame import
 pygame = None
@@ -72,17 +76,17 @@ class Pin:
 class PWM:
     """
     PWM class that outputs audio through pygame.mixer
-    Collects 16-bit unsigned samples (0-65535) and plays them as audio
+    Collects 16-bit unsigned samples (0-65535) and plays them as continuous audio stream
     """
 
-    # Class-level audio queue and playback thread
+    # Class-level audio state
     _sample_buffer = []
-    _buffer_size = 2048  # Number of samples per chunk
-    _sample_rate = 8000  # Default sample rate
+    _sample_rate = 8000  # Will be set based on actual audio
     _active_pwm = None
-    _playback_active = False
-    _playback_thread = None
     _lock = threading.Lock()
+    _playback_thread = None
+    _stop_playback = False
+    _channel = None
 
     def __init__(self, pin, freq=120000, duty=0):
         """
@@ -90,7 +94,7 @@ class PWM:
 
         Args:
             pin: Pin object (ignored for audio)
-            freq: PWM frequency (used to set audio sample rate if reasonable)
+            freq: PWM frequency (120kHz carrier, not audio sample rate)
             duty: Initial duty cycle
         """
         self.pin = pin
@@ -102,21 +106,20 @@ class PWM:
             with PWM._lock:
                 # If there's already an active PWM, stop it
                 if PWM._active_pwm is not None and PWM._active_pwm is not self:
-                    PWM._active_pwm._stop_playback()
+                    PWM._active_pwm._cleanup()
 
                 PWM._active_pwm = self
                 PWM._sample_buffer = []
+                PWM._stop_playback = False
 
-                # Determine sample rate from freq if it seems like an audio rate
-                if 4000 <= freq <= 48000:
-                    PWM._sample_rate = freq
-                    # Reinitialize mixer with correct rate
-                    try:
-                        pygame.mixer.quit()
-                        pygame.mixer.pre_init(frequency=freq, size=-16, channels=1, buffer=512)
-                        pygame.mixer.init()
-                    except:
-                        pass
+                # Get a dedicated mixer channel for audio streaming
+                if PWM._channel is None:
+                    PWM._channel = pygame.mixer.Channel(0)
+
+                # Start playback thread if not running
+                if PWM._playback_thread is None or not PWM._playback_thread.is_alive():
+                    PWM._playback_thread = threading.Thread(target=self._audio_player_thread, daemon=True)
+                    PWM._playback_thread.start()
 
     def freq(self, val=None):
         """Get or set PWM frequency"""
@@ -140,46 +143,68 @@ class PWM:
 
         self._duty = val
 
-        # Send sample to audio output if we're the active PWM
-        if pygame and PWM._active_pwm is self:
+        # Send sample to audio buffer if we're the active PWM
+        if PWM._active_pwm is self:
             with PWM._lock:
                 PWM._sample_buffer.append(val)
 
-                # When buffer is full, play it
-                if len(PWM._sample_buffer) >= PWM._buffer_size:
-                    self._play_buffer()
+    @staticmethod
+    def _audio_player_thread():
+        """Background thread that continuously plays audio from buffer"""
+        chunk_size = 1024  # Samples per chunk
+        chunks_played = 0
 
-    def _play_buffer(self):
-        """Convert buffer to pygame Sound and play it"""
-        if not pygame or len(PWM._sample_buffer) == 0:
-            return
+        while not PWM._stop_playback:
+            # Check if we have enough samples to play
+            with PWM._lock:
+                if len(PWM._sample_buffer) >= chunk_size:
+                    # Extract chunk
+                    chunk = PWM._sample_buffer[:chunk_size]
+                    PWM._sample_buffer = PWM._sample_buffer[chunk_size:]
+                else:
+                    chunk = None
 
-        try:
-            # Convert 16-bit unsigned (0-65535) to 16-bit signed (-32768 to 32767)
-            samples = np.array(PWM._sample_buffer, dtype=np.uint16)
-            samples_signed = samples.astype(np.int16) - 32768
+            if chunk and pygame:
+                try:
+                    # Convert 16-bit unsigned (0-65535) to 16-bit signed (-32768 to 32767)
+                    # Must subtract 32768 as int32 first, then convert to int16
+                    samples = np.array(chunk, dtype=np.int32)  # Use int32 to avoid overflow
+                    samples_signed = (samples - 32768).astype(np.int16)  # Subtract then convert
 
-            # Create and play sound
-            sound = pygame.sndarray.make_sound(samples_signed)
-            sound.play()
+                    # Reshape for stereo if needed (duplicate mono channel)
+                    if pygame.mixer.get_init()[2] == 2:  # If stereo (2 channels)
+                        # Duplicate mono to stereo
+                        samples_stereo = np.column_stack((samples_signed, samples_signed))
+                        sound = pygame.sndarray.make_sound(samples_stereo)
+                    else:  # Mono
+                        sound = pygame.sndarray.make_sound(samples_signed)
 
-            # Clear buffer for next chunk
-            PWM._sample_buffer = []
-        except Exception as e:
-            # Silently fail if audio playback has issues
-            PWM._sample_buffer = []
+                    # Queue sound on dedicated channel for seamless playback
+                    if PWM._channel.get_queue() is None:
+                        # Channel is empty, play immediately
+                        PWM._channel.play(sound)
+                    else:
+                        # Queue for seamless continuation
+                        PWM._channel.queue(sound)
 
-    def _stop_playback(self):
+                    chunks_played += 1
+                except:
+                    pass  # Silently fail if audio has issues
+            else:
+                # No chunk ready, sleep briefly
+                time.sleep(0.01)
+
+    def _cleanup(self):
         """Stop audio playback"""
         with PWM._lock:
             PWM._sample_buffer = []
-            if pygame:
-                pygame.mixer.stop()
+            if PWM._channel:
+                PWM._channel.stop()
 
     def deinit(self):
         """Deinitialize PWM"""
         if PWM._active_pwm is self:
-            self._stop_playback()
+            self._cleanup()
             with PWM._lock:
                 PWM._active_pwm = None
 
