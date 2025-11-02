@@ -17,14 +17,26 @@ def _ensure_pygame():
     if pygame is None:
         try:
             import pygame as pg
+            import os
             # IMPORTANT: Initialize mixer BEFORE pygame.init() to set audio parameters
             # This must match the settings in machine.py PWM class
-            # Note: pygame will auto-detect audio hardware. Set SDL_AUDIODRIVER=dummy to force headless mode.
+            # Try real audio hardware first, fall back to dummy if that fails
             pg.mixer.pre_init(frequency=16000, size=-16, channels=1, buffer=512)
-            pg.init()
+            try:
+                pg.init()
+                print("[Audio] Pygame initialized with real audio hardware", flush=True)
+            except Exception as e:
+                # Real audio failed, try dummy mode
+                print(f"[Audio] Real audio hardware failed ({e}), falling back to dummy mode", flush=True)
+                os.environ['SDL_AUDIODRIVER'] = 'dummy'
+                pg.mixer.quit()  # Clean up failed attempt
+                pg.mixer.pre_init(frequency=16000, size=-16, channels=1, buffer=512)
+                pg.init()
+                print("[Audio] Pygame initialized with dummy audio driver", flush=True)
             pygame = pg
             _pygame_initialized = True
-        except ImportError:
+        except ImportError as e:
+            print(f"[Audio] Failed to import pygame: {e}", flush=True)
             _pygame_initialized = False
     return _pygame_initialized
 

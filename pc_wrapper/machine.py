@@ -29,18 +29,26 @@ def _ensure_pygame():
             # Check if mixer is already initialized (by engine_draw.py)
             existing_init = pygame.mixer.get_init()
             if existing_init is not None:
+                print(f"[Audio] Mixer already initialized: {existing_init}", flush=True)
                 _audio_initialized = True
             else:
-                # Initialize pygame.mixer for audio playback
+                # Mixer not initialized, try to initialize with dummy mode
+                import os
+                print(f"[Audio] Mixer not initialized, trying dummy mode", flush=True)
+                os.environ['SDL_AUDIODRIVER'] = 'dummy'
+                pygame.mixer.quit()  # Clean up any failed state
                 pygame.mixer.pre_init(frequency=16000, size=-16, channels=1, buffer=512)
                 pygame.mixer.init()
+                mixer_check = pygame.mixer.get_init()
+                print(f"[Audio] Mixer initialized with dummy: {mixer_check}", flush=True)
                 _audio_initialized = True
         except Exception as e:
-            # Mixer initialization failed, but we can still continue
+            # Mixer initialization failed completely
+            print(f"[Audio] Mixer initialization failed: {e}", flush=True)
             _audio_initialized = True  # Don't keep trying
             return False
 
-    return pygame is not None
+    return pygame is not None and pygame.mixer.get_init() is not None
 
 
 def freq(frequency=None):
@@ -102,6 +110,11 @@ class PWM:
     _last_input_sample = 32768  # Previous sample for interpolation
     _resampler_initialized = False
 
+    # Debug tracking
+    _samples_in = 0
+    _samples_out = 0
+    _last_debug_time = 0
+
     def __init__(self, pin, freq=120000, duty=0):
         """
         Initialize PWM
@@ -116,7 +129,9 @@ class PWM:
         self._duty = 0
 
         # Only set as active PWM if pygame is available
-        if _ensure_pygame():
+        pygame_available = _ensure_pygame()
+        print(f"[Audio] PWM.__init__: pygame available = {pygame_available}, pygame.mixer.get_init() = {pygame.mixer.get_init() if pygame else None}", flush=True)
+        if pygame_available:
             with PWM._lock:
                 # If there's already an active PWM, stop it
                 if PWM._active_pwm is not None and PWM._active_pwm is not self:
@@ -133,10 +148,19 @@ class PWM:
                 PWM._last_input_sample = 32768
                 PWM._resampler_initialized = False
 
+                # Reset debug tracking
+                PWM._samples_in = 0
+                PWM._samples_out = 0
+                PWM._last_debug_time = time.time()
+
                 # Get mixer rate
                 mixer_info = pygame.mixer.get_init()
                 if mixer_info:
                     PWM._target_sample_rate = mixer_info[0]
+
+                import sys
+                print(f"[Audio] PWM reinitialized, buffer cleared, resampler reset", flush=True)
+                sys.stdout.flush()
 
                 # Get a dedicated mixer channel for audio streaming
                 if PWM._channel is None:
@@ -182,19 +206,26 @@ class PWM:
                             PWM._source_sample_rate = audio_mod.audio.sample_rate
                             PWM._resample_ratio = PWM._target_sample_rate / PWM._source_sample_rate
                             PWM._resampler_initialized = True
-                except:
+                            print(f"[Audio] Resampler config: {PWM._source_sample_rate} Hz → {PWM._target_sample_rate} Hz (ratio: {PWM._resample_ratio:.4f})")
+                except Exception as e:
+                    print(f"[Audio] Error detecting sample rate: {e}")
                     pass
 
                 # If we still don't have rate info, assume 1:1 (no resampling)
                 if not PWM._resampler_initialized:
                     PWM._resample_ratio = 1.0
                     PWM._resampler_initialized = True
+                    print(f"[Audio] No sample rate detected, using 1:1 passthrough")
+
+            # Track input samples
+            PWM._samples_in += 1
 
             # Apply resampling if needed
             if PWM._resample_ratio == 1.0:
                 # No resampling needed - direct passthrough
                 with PWM._lock:
                     PWM._sample_buffer.append(val)
+                    PWM._samples_out += 1
             else:
                 # Resample using linear interpolation
                 with PWM._lock:
@@ -211,28 +242,52 @@ class PWM:
                         # Linear interpolation between last and current sample
                         interpolated = int(PWM._last_input_sample + frac * (val - PWM._last_input_sample))
                         PWM._sample_buffer.append(interpolated)
+                        PWM._samples_out += 1
 
                         PWM._resample_position -= 1.0
 
                     # Store current sample for next interpolation
                     PWM._last_input_sample = val
 
+            # Debug output every second
+            current_time = time.time()
+            if current_time - PWM._last_debug_time >= 1.0:
+                with PWM._lock:
+                    buffer_size = len(PWM._sample_buffer)
+                elapsed = current_time - PWM._last_debug_time
+                in_rate = PWM._samples_in / elapsed
+                out_rate = PWM._samples_out / elapsed
+                print(f"[Audio] Rates: in={in_rate:.0f} Hz, out={out_rate:.0f} Hz, buffer={buffer_size}, ratio={PWM._resample_ratio:.4f}")
+                PWM._samples_in = 0
+                PWM._samples_out = 0
+                PWM._last_debug_time = current_time
+
     @staticmethod
     def _audio_player_thread():
         """Background thread that continuously plays audio from buffer"""
         chunk_size = 1024  # Samples per chunk
+        chunks_played = 0
+        underrun_count = 0
 
         while not PWM._stop_playback:
             # Check if we have enough samples to play
             with PWM._lock:
-                if len(PWM._sample_buffer) >= chunk_size:
+                buffer_size = len(PWM._sample_buffer)
+                if buffer_size >= chunk_size:
                     # Extract chunk
                     chunk = PWM._sample_buffer[:chunk_size]
                     PWM._sample_buffer = PWM._sample_buffer[chunk_size:]
                 else:
                     chunk = None
+                    if buffer_size > 0:
+                        underrun_count += 1
+                        if underrun_count <= 5 or underrun_count % 10 == 0:
+                            print(f"[Audio] Buffer underrun #{underrun_count}: only {buffer_size} samples available (need {chunk_size})")
 
             if chunk and pygame:
+                chunks_played += 1
+                if chunks_played <= 3 or chunks_played % 50 == 0:
+                    print(f"[Audio] Played chunk #{chunks_played}, buffer was {buffer_size} samples")
                 try:
                     # Convert 16-bit unsigned (0-65535) to 16-bit signed (-32768 to 32767)
                     samples = np.array(chunk, dtype=np.int32)
