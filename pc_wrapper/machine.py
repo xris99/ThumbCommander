@@ -141,11 +141,12 @@ class PWM:
                         time.sleep(0.01)
                     print(f"[Audio] Old thread exited: {not old_thread.is_alive()}", flush=True)
 
-                # Stop the mixer channel
-                with PWM._lock:
-                    if PWM._channel:
-                        PWM._channel.stop()
-                        print(f"[Audio] Stopped old mixer channel", flush=True)
+                # Stop any playing music
+                try:
+                    pygame.mixer.music.stop()
+                    print(f"[Audio] Stopped old mixer music", flush=True)
+                except:
+                    pass
 
             # Detect source sample rate from audio.py and reinitialize mixer
             import sys
@@ -179,14 +180,16 @@ class PWM:
                 print(f"[Audio] PWM initialized for direct passthrough (no resampling)", flush=True)
                 sys.stdout.flush()
 
-                # ALWAYS create a fresh mixer channel for each audio file
-                PWM._channel = pygame.mixer.Channel(0)
-                print(f"[Audio] Created fresh mixer channel", flush=True)
+                # Stop any currently playing music
+                try:
+                    pygame.mixer.music.stop()
+                except:
+                    pass
 
                 # Always start a new playback thread (old one has been stopped)
                 PWM._playback_thread = threading.Thread(target=self._audio_player_thread, daemon=True)
                 PWM._playback_thread.start()
-                print(f"[Audio] Started new playback thread", flush=True)
+                print(f"[Audio] Started new playback thread (WAV file mode)", flush=True)
 
     def freq(self, val=None):
         """Get or set PWM frequency"""
@@ -243,18 +246,25 @@ class PWM:
     @staticmethod
     def _audio_player_thread():
         """
-        Background thread for audio playback
-        Uses bytes conversion (no numpy) to avoid segfaults
+        Background thread for audio playback using temporary WAV files
+        This approach works better than Sound objects from buffers
         """
-        chunk_size = 2048  # Chunk size in samples
+        chunk_size = 4096  # Larger chunks for WAV files (reduces file operations)
         headroom = 8192    # Initial buffer before starting
         chunks_played = 0
         playback_started = False
 
-        # Import struct for bytes conversion
+        # Import required modules
         import struct
+        import wave
+        import tempfile
+        import os
 
-        print(f"[Audio] Playback thread starting, waiting for {headroom} samples", flush=True)
+        print(f"[Audio] Playback thread starting (WAV file mode), waiting for {headroom} samples", flush=True)
+
+        # Create temp directory for audio chunks
+        temp_dir = tempfile.mkdtemp(prefix="thumby_audio_")
+        print(f"[Audio] Using temp directory: {temp_dir}", flush=True)
 
         while not PWM._stop_playback:
             # Check if we have enough samples
@@ -264,7 +274,7 @@ class PWM:
 
             # If no active PWM, exit thread
             if active_pwm is None:
-                print(f"[Audio] No active PWM, playback thread exiting", flush=True)
+                print(f"[Audio] No active PWM, exiting playback thread", flush=True)
                 break
 
             # Wait for initial buffer fill
@@ -291,28 +301,36 @@ class PWM:
                     print(f"[Audio] Playing chunk #{chunks_played}: {len(chunk)} samples, buffer: {buffer_size}", flush=True)
 
                 try:
-                    # Check if mixer is still initialized (prevent crash on shutdown)
+                    # Check if mixer is still initialized
                     if not pygame.mixer.get_init():
                         print(f"[Audio] Mixer shut down, exiting playback thread", flush=True)
                         break
 
-                    # Convert to bytes without numpy (avoids segfaults)
-                    # Convert samples to signed 16-bit integers
+                    # Convert samples to signed 16-bit
                     signed_samples = [max(-32768, min(32767, int(s) - 32768)) for s in chunk]
-
-                    # Pack all samples at once using format string (much faster)
                     audio_bytes = struct.pack('<' + 'h' * len(signed_samples), *signed_samples)
 
-                    # Create sound and keep reference (prevents garbage collection)
-                    PWM._current_sound = pygame.mixer.Sound(buffer=audio_bytes)
+                    # Write to temporary WAV file
+                    temp_wav = os.path.join(temp_dir, f"chunk_{chunks_played}.wav")
+                    with wave.open(temp_wav, 'wb') as wav_file:
+                        wav_file.setnchannels(1)  # Mono
+                        wav_file.setsampwidth(2)  # 16-bit
+                        wav_file.setframerate(PWM._current_mixer_rate)
+                        wav_file.writeframes(audio_bytes)
 
-                    # Play sound immediately (backpressure controls buffer growth)
-                    PWM._channel.play(PWM._current_sound)
+                    # Play using pygame.mixer.music (designed for files)
+                    pygame.mixer.music.load(temp_wav)
+                    pygame.mixer.music.play()
 
-                    # Simple wait for channel to finish (let pygame handle timing)
-                    # Don't use complex adaptive logic - backpressure handles it
-                    while PWM._channel.get_busy() and not PWM._stop_playback:
-                        time.sleep(0.010)  # Check every 10ms
+                    # Wait for playback to finish
+                    while pygame.mixer.music.get_busy() and not PWM._stop_playback:
+                        time.sleep(0.010)
+
+                    # Clean up temp file
+                    try:
+                        os.remove(temp_wav)
+                    except:
+                        pass
 
                     if chunks_played <= 10:
                         with PWM._lock:
@@ -321,21 +339,30 @@ class PWM:
 
                 except Exception as e:
                     print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
-                    # If mixer error, exit thread
                     if "mixer" in str(e).lower():
                         break
             else:
                 # Buffer empty, wait for decoder
                 time.sleep(0.01)
 
+        # Cleanup temp directory
+        try:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            print(f"[Audio] Cleaned up temp directory", flush=True)
+        except:
+            pass
+
     def _cleanup(self):
         """Stop audio playback"""
         print(f"[Audio] PWM._cleanup() called", flush=True)
         with PWM._lock:
             PWM._sample_buffer = []
-            if PWM._channel:
-                PWM._channel.stop()
-                print(f"[Audio] Stopped pygame mixer channel", flush=True)
+        try:
+            pygame.mixer.music.stop()
+            print(f"[Audio] Stopped pygame mixer music", flush=True)
+        except:
+            pass
 
     def deinit(self):
         """Deinitialize PWM"""
