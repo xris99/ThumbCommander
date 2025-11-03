@@ -13,9 +13,6 @@ _start_time = _time.perf_counter()
 _TICKS_MAX = 0x3FFFFFFF  # 2^30 - 1
 _TICKS_PERIOD = 0x40000000  # 2^30
 
-# GIL yielding: Prevent decoder thread from starving other threads
-_ticks_call_count = 0
-
 
 def ticks_ms():
     """Get millisecond counter with microsecond precision and wrapping"""
@@ -26,17 +23,8 @@ def ticks_ms():
 
 def ticks_us():
     """Get microsecond counter with sub-microsecond precision and wrapping at 2^30"""
-    global _ticks_call_count
-
-    # Yield GIL periodically to allow Timer callback thread to run fill_buffers()
-    # The decoder's busy-wait loop calls this thousands of times/sec
-    # Without yielding, Timer thread can't acquire GIL to fill audio buffers
-    _ticks_call_count += 1
-    if _ticks_call_count >= 1000:
-        _time.sleep(0)  # Yields GIL without actually sleeping
-        _ticks_call_count = 0
-
-    # Use perf_counter() which is faster than perf_counter_ns() and sufficient precision
+    # NOTE: Removed GIL yielding - it caused massive overhead and starved playback thread
+    # Python's threading model (GIL) cannot replicate RP2350's dual-core parallelism
     elapsed_sec = _time.perf_counter() - _start_time
     us = int(elapsed_sec * 1000000) & _TICKS_MAX
     return us
