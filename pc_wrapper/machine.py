@@ -224,6 +224,10 @@ class PWM:
             PWM._sample_buffer.append(val)
             PWM._samples_in += 1
 
+            # Debug: log first few samples to detect corruption
+            if PWM._samples_in <= 10 or (4090 <= PWM._samples_in <= 4100) or (8190 <= PWM._samples_in <= 8200):
+                print(f"[Audio] Sample #{PWM._samples_in}: {val} (type: {type(val).__name__})", flush=True)
+
         # Debug output only every 5000 samples (reduces overhead)
         if PWM._samples_in % 5000 == 0:
             current_time = time.time()

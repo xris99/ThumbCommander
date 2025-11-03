@@ -5,8 +5,8 @@ MicroPython utime module compatibility for PC
 import time as _time
 
 # Use high-precision monotonic timer for microsecond accuracy
-# perf_counter_ns() has nanosecond precision, critical for audio timing
-_start_time_ns = _time.perf_counter_ns()
+# perf_counter() has sub-microsecond precision, sufficient for audio timing
+_start_time = _time.perf_counter()
 
 # MicroPython's ticks_us() wraps at 2^30 microseconds (~17.9 minutes)
 # This is critical for @viper mode's 32-bit integer arithmetic
@@ -16,16 +16,17 @@ _TICKS_PERIOD = 0x40000000  # 2^30
 
 def ticks_ms():
     """Get millisecond counter with microsecond precision and wrapping"""
-    elapsed_ns = _time.perf_counter_ns() - _start_time_ns
-    ms = (elapsed_ns // 1_000_000) & _TICKS_MAX
-    return int(ms)
+    elapsed_sec = _time.perf_counter() - _start_time
+    ms = int(elapsed_sec * 1000) & _TICKS_MAX
+    return ms
 
 
 def ticks_us():
-    """Get microsecond counter with nanosecond precision and wrapping at 2^30"""
-    elapsed_ns = _time.perf_counter_ns() - _start_time_ns
-    us = (elapsed_ns // 1_000) & _TICKS_MAX
-    return int(us)
+    """Get microsecond counter with sub-microsecond precision and wrapping at 2^30"""
+    # Use perf_counter() which is faster than perf_counter_ns() and sufficient precision
+    elapsed_sec = _time.perf_counter() - _start_time
+    us = int(elapsed_sec * 1000000) & _TICKS_MAX
+    return us
 
 
 def ticks_diff(end, start):
