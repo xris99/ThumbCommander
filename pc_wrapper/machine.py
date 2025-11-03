@@ -221,6 +221,16 @@ class PWM:
 
         # Direct passthrough - NO BLOCKING (must be instant like hardware PWM)
         with PWM._lock:
+            # Detect if decoder is stuck (same value repeated - "waiting for buffers" state)
+            if len(PWM._sample_buffer) >= 1:
+                if PWM._sample_buffer[-1] == val:
+                    PWM._stuck_count = getattr(PWM, '_stuck_count', 0) + 1
+                    # Warn if stuck for 100+ samples (indicates buffer filling problem)
+                    if PWM._stuck_count == 100:
+                        print(f"[Audio] WARNING: Decoder stuck outputting {val} (buffers not being filled?)", flush=True)
+                else:
+                    PWM._stuck_count = 0
+
             PWM._sample_buffer.append(val)
             PWM._samples_in += 1
 
@@ -323,9 +333,10 @@ class PWM:
                     while pygame.mixer.music.get_busy() and not PWM._stop_playback:
                         time.sleep(0.005)  # Short sleep to avoid busy-wait
 
-                    # Small safety delay after get_busy() to ensure chunk fully played
-                    # get_busy() can return False slightly early
-                    time.sleep(0.010)
+                    # Longer safety delay after get_busy() to ensure chunk fully played
+                    # get_busy() is known to return False before audio finishes
+                    # This delay prevents next chunk from starting too early
+                    time.sleep(0.050)  # 50ms to ensure clean chunk boundary
 
                     # Clean up temp file
                     try:
