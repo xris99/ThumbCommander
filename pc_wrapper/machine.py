@@ -314,7 +314,12 @@ class PWM:
                     pygame.mixer.music.load(temp_wav)
                     pygame.mixer.music.play()
 
-                    # Wait for playback to finish
+                    # Calculate expected playback duration and wait for it
+                    # This is more reliable than get_busy() which has known issues
+                    duration_sec = len(chunk) / PWM._current_mixer_rate
+                    time.sleep(duration_sec)
+
+                    # Brief additional wait for pygame to finish cleanup
                     while pygame.mixer.music.get_busy() and not PWM._stop_playback:
                         time.sleep(0.010)
 
