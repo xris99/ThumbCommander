@@ -326,11 +326,6 @@ class PWM:
                     while pygame.mixer.music.get_busy() and not PWM._stop_playback:
                         time.sleep(0.010)
 
-                    # Critical: Explicitly stop and wait for pygame to clean up
-                    # This ensures mixer.music is in clean state before next load()
-                    pygame.mixer.music.stop()
-                    time.sleep(0.020)  # 20ms cleanup buffer
-
                     # Clean up temp file
                     try:
                         os.remove(temp_wav)
@@ -344,9 +339,7 @@ class PWM:
 
                 except Exception as e:
                     print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
-                    import traceback
-                    traceback.print_exc()
-                    if "mixer" in str(e).lower() or "audio" in str(e).lower():
+                    if "mixer" in str(e).lower():
                         break
             else:
                 # Buffer empty, wait for decoder
