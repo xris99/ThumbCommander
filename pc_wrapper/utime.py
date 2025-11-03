@@ -4,15 +4,21 @@ MicroPython utime module compatibility for PC
 
 import time as _time
 
+# Use high-precision monotonic timer for microsecond accuracy
+# perf_counter_ns() has nanosecond precision, critical for audio timing
+_start_time_ns = _time.perf_counter_ns()
+
 
 def ticks_ms():
-    """Get millisecond counter"""
-    return int(_time.time() * 1000)
+    """Get millisecond counter with microsecond precision"""
+    elapsed_ns = _time.perf_counter_ns() - _start_time_ns
+    return int(elapsed_ns // 1_000_000)
 
 
 def ticks_us():
-    """Get microsecond counter"""
-    return int(_time.time() * 1000000)
+    """Get microsecond counter with nanosecond precision"""
+    elapsed_ns = _time.perf_counter_ns() - _start_time_ns
+    return int(elapsed_ns // 1_000)
 
 
 def ticks_diff(end, start):
