@@ -224,10 +224,6 @@ class PWM:
             PWM._sample_buffer.append(val)
             PWM._samples_in += 1
 
-            # Debug: log first few samples to detect corruption
-            if PWM._samples_in <= 10 or (4090 <= PWM._samples_in <= 4100) or (8190 <= PWM._samples_in <= 8200):
-                print(f"[Audio] Sample #{PWM._samples_in}: {val} (type: {type(val).__name__})", flush=True)
-
         # Debug output only every 5000 samples (reduces overhead)
         if PWM._samples_in % 5000 == 0:
             current_time = time.time()
@@ -414,12 +410,19 @@ class Timer:
 
     def _periodic_worker(self):
         """Worker thread for periodic callbacks"""
+        callback_count = 0
         while not self._stop_event.is_set():
             try:
                 if self._callback:
                     self._callback(self)
-            except:
-                pass
+                    callback_count += 1
+                    # Log first 5 callbacks and every 30th after
+                    if callback_count <= 5 or callback_count % 30 == 0:
+                        print(f"[Timer] Callback #{callback_count} completed", flush=True)
+            except Exception as e:
+                print(f"[Timer] ERROR in callback: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
             timeout = self._period_ms / 1000.0
             self._stop_event.wait(timeout)
 
