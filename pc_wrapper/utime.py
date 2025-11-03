@@ -8,27 +8,41 @@ import time as _time
 # perf_counter_ns() has nanosecond precision, critical for audio timing
 _start_time_ns = _time.perf_counter_ns()
 
+# MicroPython's ticks_us() wraps at 2^30 microseconds (~17.9 minutes)
+# This is critical for @viper mode's 32-bit integer arithmetic
+_TICKS_MAX = 0x3FFFFFFF  # 2^30 - 1
+_TICKS_PERIOD = 0x40000000  # 2^30
+
 
 def ticks_ms():
-    """Get millisecond counter with microsecond precision"""
+    """Get millisecond counter with microsecond precision and wrapping"""
     elapsed_ns = _time.perf_counter_ns() - _start_time_ns
-    return int(elapsed_ns // 1_000_000)
+    ms = (elapsed_ns // 1_000_000) & _TICKS_MAX
+    return int(ms)
 
 
 def ticks_us():
-    """Get microsecond counter with nanosecond precision"""
+    """Get microsecond counter with nanosecond precision and wrapping at 2^30"""
     elapsed_ns = _time.perf_counter_ns() - _start_time_ns
-    return int(elapsed_ns // 1_000)
+    us = (elapsed_ns // 1_000) & _TICKS_MAX
+    return int(us)
 
 
 def ticks_diff(end, start):
-    """Calculate difference between two tick values"""
-    return end - start
+    """
+    Calculate difference between two tick values, handling wrapping.
+    Returns the signed difference modulo the tick period.
+    """
+    diff = (end - start) & _TICKS_MAX
+    # Handle sign: if diff > 2^29, it's actually a negative difference
+    if diff & 0x20000000:  # Check bit 29 (half of period)
+        diff -= _TICKS_PERIOD
+    return diff
 
 
 def ticks_add(ticks, delta):
-    """Add delta to ticks value"""
-    return ticks + delta
+    """Add delta to ticks value with wrapping"""
+    return (ticks + delta) & _TICKS_MAX
 
 
 def sleep(seconds):
