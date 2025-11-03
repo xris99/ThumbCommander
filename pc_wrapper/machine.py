@@ -219,18 +219,10 @@ class PWM:
         if PWM._active_pwm is not self:
             return  # Silently discard samples from inactive PWM instances
 
-        # Direct passthrough with smart backpressure
+        # Direct passthrough - NO BLOCKING (must be instant like hardware PWM)
         with PWM._lock:
-            buffer_size = len(PWM._sample_buffer)
             PWM._sample_buffer.append(val)
             PWM._samples_in += 1
-
-        # Smart backpressure: only sleep every Nth sample when buffer too large
-        # This prevents lag (not called on every sample) while controlling growth
-        if buffer_size > 9000 and PWM._samples_in % 100 == 0:
-            # Buffer over target - sleep briefly every 100 samples
-            # At 17000 Hz: 170 sleeps/sec * 1ms = 170ms overhead (acceptable)
-            time.sleep(0.001)  # 1ms sleep every 100 samples
 
         # Debug output every 5 seconds
         current_time = time.time()
