@@ -224,16 +224,19 @@ class PWM:
             PWM._sample_buffer.append(val)
             PWM._samples_in += 1
 
-        # Debug output every 5 seconds
-        current_time = time.time()
-        if current_time - PWM._last_debug_time >= 5.0:
-            with PWM._lock:
-                buffer_size = len(PWM._sample_buffer)
-            elapsed = current_time - PWM._last_debug_time
-            sample_rate = PWM._samples_in / elapsed
-            print(f"[Audio] Sample rate: {sample_rate:.0f} Hz, buffer={buffer_size} samples")
-            PWM._samples_in = 0
-            PWM._last_debug_time = current_time
+        # Debug output only every 5000 samples (reduces overhead)
+        if PWM._samples_in % 5000 == 0:
+            current_time = time.time()
+            if PWM._last_debug_time > 0:
+                elapsed = current_time - PWM._last_debug_time
+                if elapsed >= 0.1:  # At least 100ms between prints
+                    sample_rate = 5000 / elapsed
+                    with PWM._lock:
+                        buffer_size = len(PWM._sample_buffer)
+                    print(f"[Audio] Decoder: {sample_rate:.0f} Hz (last 5000 samples), buffer={buffer_size}", flush=True)
+                    PWM._last_debug_time = current_time
+            else:
+                PWM._last_debug_time = current_time
 
     @staticmethod
     def _audio_player_thread():
