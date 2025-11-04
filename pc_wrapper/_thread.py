@@ -6,11 +6,23 @@ Uses multiprocessing for audio_loop to achieve true parallelism (bypass GIL)
 import threading
 import multiprocessing as mp
 from multiprocessing import Queue
+import sys
+
+# Set multiprocessing start method to 'fork' on Unix systems (avoids re-import issues)
+# Must be done before any multiprocessing operations
+if sys.platform != 'win32':
+    try:
+        mp.set_start_method('fork', force=True)
+        print("[_thread] Using 'fork' start method for multiprocessing")
+    except RuntimeError:
+        # Already set, that's fine
+        pass
 
 # Global state for audio decoder process
 _audio_sample_queue = None
 _audio_process = None
 _is_audio_process = False  # Flag to detect if we're IN the audio process
+_process_started = False  # Track if we already started a process
 
 
 # Export standard _thread module attributes (required by other Python modules)
@@ -30,14 +42,22 @@ def start_new_thread(function, args):
     - Core 0 (main process): Game loop, Timer callbacks, playback
     - Core 1 (audio process): audio_loop with busy-wait timing
     """
-    global _audio_sample_queue, _audio_process
+    global _audio_sample_queue, _audio_process, _process_started
 
     # Detect if this is the audio decoder thread
     if function.__name__ == 'audio_loop':
-        print("[_thread] Detected audio_loop - using multiprocessing.Process for true parallelism")
+        print("[_thread] Detected audio_loop - using multiprocessing.Process for true parallelism", flush=True)
+
+        # Prevent re-entry when multiprocessing re-imports module
+        if _process_started:
+            print("[_thread] Audio process already started, skipping duplicate", flush=True)
+            return 0
+
+        _process_started = True
 
         # Create IPC queue for samples (50K capacity = ~3 seconds at 15625 Hz)
         _audio_sample_queue = Queue(maxsize=50000)
+        print(f"[_thread] Created multiprocessing.Queue with capacity 50000", flush=True)
 
         # Wrapper to run audio_loop in separate process
         def audio_process_wrapper():
@@ -52,29 +72,39 @@ def start_new_thread(function, args):
             except ImportError:
                 pass
 
-            print(f"[_thread] Audio decoder process started (PID: {mp.current_process().pid})")
+            print(f"[_thread] Audio decoder process started (PID: {mp.current_process().pid})", flush=True)
 
             # Run the audio loop
             try:
                 function(*args)
             except Exception as e:
-                print(f"[_thread] Audio process error: {e}")
+                print(f"[_thread] Audio process error: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
             finally:
-                print("[_thread] Audio decoder process exiting")
+                print("[_thread] Audio decoder process exiting", flush=True)
 
         # Start as separate process (bypasses GIL!)
-        _audio_process = mp.Process(target=audio_process_wrapper, daemon=True)
-        _audio_process.start()
+        try:
+            _audio_process = mp.Process(target=audio_process_wrapper, daemon=True)
+            _audio_process.start()
 
-        print(f"[_thread] Audio process started with PID: {_audio_process.pid}")
+            print(f"[_thread] Audio process started with PID: {_audio_process.pid}", flush=True)
 
-        # Return process ID (mimics thread ID)
-        return _audio_process.pid
+            # Return process ID (mimics thread ID)
+            return _audio_process.pid
+        except Exception as e:
+            print(f"[_thread] ERROR: Failed to start audio process: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            # Fall back to threading
+            print(f"[_thread] Falling back to threading.Thread", flush=True)
+            t = threading.Thread(target=function, args=args, daemon=True)
+            t.start()
+            return t.ident
     else:
         # Use normal threading for other threads (Timer callbacks, etc.)
-        print(f"[_thread] Starting thread for {function.__name__} using threading.Thread")
+        print(f"[_thread] Starting thread for {function.__name__} using threading.Thread", flush=True)
         t = threading.Thread(target=function, args=args, daemon=True)
         t.start()
         return t.ident
