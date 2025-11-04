@@ -32,8 +32,8 @@ import pc_wrapper.engine_io as engine_io
 import pc_wrapper.engine_draw as engine_draw
 import pc_wrapper.thumbyButton as thumbyButton
 import pc_wrapper.thumbyHardware as thumbyHardware
+import pc_wrapper._thread as _thread  # Use our multiprocessing-enabled wrapper
 # Note: audio, cutscene_utils and thumbycolor_native imported from game directory
-import _thread  # Use low-level _thread module
 
 # Install modules in sys.modules so they're found by import statements
 # micropython is already installed by micropython_compat
