@@ -52,16 +52,23 @@ def start_new_thread(function, args):
             else:
                 print("[_thread] Old audio process died, starting new one", flush=True)
 
-        # Create IPC queue for samples (50K capacity = ~3 seconds at 15625 Hz)
-        print("[_thread] Creating multiprocessing.Queue...", flush=True)
+        # Create IPC queue for samples
+        # Note: macOS has SEM_VALUE_MAX limit (~32767), so use 16K capacity
+        # 16K samples = ~1 second at 15625 Hz (sufficient buffering)
+        queue_size = 16000
+        print(f"[_thread] Creating multiprocessing.Queue with maxsize={queue_size}...", flush=True)
         try:
-            _audio_sample_queue = Queue(maxsize=50000)
-            print(f"[_thread] Successfully created multiprocessing.Queue with capacity 50000", flush=True)
+            _audio_sample_queue = Queue(maxsize=queue_size)
+            print(f"[_thread] Successfully created multiprocessing.Queue with capacity {queue_size}", flush=True)
         except Exception as e:
             print(f"[_thread] ERROR creating Queue: {e}", flush=True)
             import traceback
             traceback.print_exc()
-            raise
+            print(f"[_thread] Falling back to threading.Thread (no multiprocessing)", flush=True)
+            # Fall back to threading
+            t = threading.Thread(target=function, args=args, daemon=True)
+            t.start()
+            return t.ident
 
         # CRITICAL: Create PWM in main process for playback BEFORE starting decoder
         print("[_thread] Creating PWM in main process for playback...", flush=True)
