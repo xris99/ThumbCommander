@@ -10,6 +10,17 @@ without modifying any of the game code.
 import sys
 import os
 
+# CRITICAL: Set multiprocessing start method BEFORE any other imports
+# This must be done before pygame or any module that might use multiprocessing
+import multiprocessing as mp
+if sys.platform != 'win32':
+    try:
+        mp.set_start_method('fork')
+        print("[Launcher] Set multiprocessing to use 'fork' method", flush=True)
+    except RuntimeError as e:
+        print(f"[Launcher] Could not set fork method: {e}", flush=True)
+        print(f"[Launcher] Current method: {mp.get_start_method()}", flush=True)
+
 # Get the directory containing this script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 

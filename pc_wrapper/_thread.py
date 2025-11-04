@@ -6,23 +6,14 @@ Uses multiprocessing for audio_loop to achieve true parallelism (bypass GIL)
 import threading
 import multiprocessing as mp
 from multiprocessing import Queue
-import sys
 
-# Set multiprocessing start method to 'fork' on Unix systems (avoids re-import issues)
-# Must be done before any multiprocessing operations
-if sys.platform != 'win32':
-    try:
-        mp.set_start_method('fork', force=True)
-        print("[_thread] Using 'fork' start method for multiprocessing")
-    except RuntimeError:
-        # Already set, that's fine
-        pass
+# Note: Multiprocessing start method must be set in run_pc.py BEFORE any imports
+# that might use multiprocessing (like pygame). This ensures 'fork' method is used.
 
 # Global state for audio decoder process
 _audio_sample_queue = None
 _audio_process = None
 _is_audio_process = False  # Flag to detect if we're IN the audio process
-_process_started = False  # Track if we already started a process
 
 
 # Export standard _thread module attributes (required by other Python modules)
@@ -42,18 +33,20 @@ def start_new_thread(function, args):
     - Core 0 (main process): Game loop, Timer callbacks, playback
     - Core 1 (audio process): audio_loop with busy-wait timing
     """
-    global _audio_sample_queue, _audio_process, _process_started
+    global _audio_sample_queue, _audio_process
 
     # Detect if this is the audio decoder thread
     if function.__name__ == 'audio_loop':
         print("[_thread] Detected audio_loop - using multiprocessing.Process for true parallelism", flush=True)
 
-        # Prevent re-entry when multiprocessing re-imports module
-        if _process_started:
-            print("[_thread] Audio process already started, skipping duplicate", flush=True)
-            return 0
+        # Check if we already have a running process
+        if _audio_process is not None and _audio_process.is_alive():
+            print("[_thread] Audio process already running, skipping duplicate", flush=True)
+            return _audio_process.pid
 
-        _process_started = True
+        # Allow starting new process if old one died
+        if _audio_process is not None:
+            print("[_thread] Old audio process died, starting new one", flush=True)
 
         # Create IPC queue for samples (50K capacity = ~3 seconds at 15625 Hz)
         _audio_sample_queue = Queue(maxsize=50000)
