@@ -15,11 +15,43 @@ _audio_sample_queue = None
 _audio_process = None
 _is_audio_process = False  # Flag to detect if we're IN the audio process
 
+# Store function/args for audio process (needed for 'spawn' method pickling)
+_audio_function = None
+_audio_args = None
+
 
 # Export standard _thread module attributes (required by other Python modules)
 allocate_lock = threading.Lock
 LockType = threading.Lock
 error = RuntimeError  # _thread.error is RuntimeError
+
+
+def _audio_process_wrapper():
+    """
+    Wrapper that runs in the decoder process
+    Must be module-level function for 'spawn' method pickling
+    """
+    global _is_audio_process, _audio_function, _audio_args
+    _is_audio_process = True
+
+    # Set process title for debugging
+    try:
+        import setproctitle
+        setproctitle.setproctitle('thumby-audio-decoder')
+    except ImportError:
+        pass
+
+    print(f"[_thread] Audio decoder process started (PID: {mp.current_process().pid})", flush=True)
+
+    # Run the audio loop
+    try:
+        _audio_function(*_audio_args)
+    except Exception as e:
+        print(f"[_thread] Audio process error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("[_thread] Audio decoder process exiting", flush=True)
 
 
 def start_new_thread(function, args):
@@ -37,6 +69,8 @@ def start_new_thread(function, args):
 
     # Detect if this is the audio decoder thread
     if function.__name__ == 'audio_loop':
+        global _audio_function, _audio_args
+
         print(f"[_thread] Detected audio_loop - using multiprocessing.Process for true parallelism", flush=True)
         print(f"[_thread] Current _audio_process: {_audio_process}", flush=True)
         print(f"[_thread] Current mp method: {mp.get_start_method()}", flush=True)
@@ -82,35 +116,14 @@ def start_new_thread(function, args):
             import traceback
             traceback.print_exc()
 
-        # Wrapper to run audio_loop in separate process
-        def audio_process_wrapper():
-            """Wrapper that runs in the decoder process"""
-            global _is_audio_process
-            _is_audio_process = True
-
-            # Set process title for debugging
-            try:
-                import setproctitle
-                setproctitle.setproctitle('thumby-audio-decoder')
-            except ImportError:
-                pass
-
-            print(f"[_thread] Audio decoder process started (PID: {mp.current_process().pid})", flush=True)
-
-            # Run the audio loop
-            try:
-                function(*args)
-            except Exception as e:
-                print(f"[_thread] Audio process error: {e}", flush=True)
-                import traceback
-                traceback.print_exc()
-            finally:
-                print("[_thread] Audio decoder process exiting", flush=True)
+        # Store function and args for the process wrapper (needed for 'spawn' pickling)
+        _audio_function = function
+        _audio_args = args
 
         # Start as separate process (bypasses GIL!)
         print("[_thread] Creating mp.Process...", flush=True)
         try:
-            _audio_process = mp.Process(target=audio_process_wrapper, daemon=True)
+            _audio_process = mp.Process(target=_audio_process_wrapper, daemon=True)
             print(f"[_thread] Process object created: {_audio_process}", flush=True)
 
             print("[_thread] Starting process...", flush=True)

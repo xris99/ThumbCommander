@@ -17,18 +17,24 @@ print(f"[Launcher] Platform: {sys.platform}", flush=True)
 
 # CRITICAL: Set multiprocessing start method BEFORE any other imports
 # This must be done before pygame or any module that might use multiprocessing
+# NOTE: Do NOT call get_start_method() before set_start_method() - it locks the method!
 import multiprocessing as mp
-print(f"[Launcher] Initial multiprocessing method: {mp.get_start_method()}", flush=True)
 
 if sys.platform != 'win32':
     try:
-        mp.set_start_method('fork')
+        # Set 'fork' method (needed for audio_loop function pickling)
+        # Note: On macOS, this may show warnings about Core Foundation in forked child
+        # but it's necessary for the audio decoder process to work
+        mp.set_start_method('fork', force=False)
         print("[Launcher] Successfully set multiprocessing to use 'fork' method", flush=True)
     except RuntimeError as e:
-        print(f"[Launcher] Could not set fork method (already set?): {e}", flush=True)
-    print(f"[Launcher] Final multiprocessing method: {mp.get_start_method()}", flush=True)
+        print(f"[Launcher] Could not set fork method: {e}", flush=True)
+        print(f"[Launcher] Will use default method: {mp.get_start_method()}", flush=True)
 else:
-    print(f"[Launcher] Windows detected, using default method: {mp.get_start_method()}", flush=True)
+    print(f"[Launcher] Windows detected, using default method", flush=True)
+
+# Now safe to check the method
+print(f"[Launcher] Multiprocessing start method: {mp.get_start_method()}", flush=True)
 
 # Get the directory containing this script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
