@@ -230,15 +230,20 @@ class PWM:
 
         if audio_queue is not None and _thread_module.is_audio_process():
             # IN DECODER PROCESS: Send to multiprocessing Queue (IPC to main process)
+            # Use blocking put with timeout to provide backpressure when Queue is full
+            # The decoder should not run faster than playback can consume
             try:
-                audio_queue.put_nowait(val)  # Non-blocking put
+                audio_queue.put(val, block=True, timeout=0.1)  # Wait up to 100ms for space
                 PWM._samples_in += 1
-            except:
-                pass  # Queue full, drop sample (shouldn't happen with 50K capacity)
+            except queue.Full:
+                # Queue still full after 100ms - playback thread may have died
+                if PWM._samples_in % 1000 == 0:
+                    print(f"[Audio] WARNING: Queue full, dropping sample #{PWM._samples_in}", flush=True)
+                pass  # Drop this sample
 
             # Debug output every 5000 samples
             if PWM._samples_in % 5000 == 0:
-                print(f"[Audio] Decoder process: {PWM._samples_in} samples sent", flush=True)
+                print(f"[Audio] Decoder process: {PWM._samples_in} samples queued successfully", flush=True)
         else:
             # IN MAIN PROCESS: Use local buffer (fallback, shouldn't normally happen)
             with PWM._lock:
