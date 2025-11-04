@@ -181,14 +181,21 @@ class PWM:
                 print(f"[Audio] PWM initialized for direct passthrough (no resampling)", flush=True)
                 sys.stdout.flush()
 
-                # Create dedicated mixer channel for audio playback
-                PWM._channel = pygame.mixer.Channel(0)
-                print(f"[Audio] Created fresh mixer channel", flush=True)
+                # CRITICAL: Only start playback thread in MAIN process, not in decoder process
+                if _thread_module.is_audio_process():
+                    print(f"[Audio] Running in decoder process - NO playback thread (will send samples via Queue)", flush=True)
+                else:
+                    # In main process - start playback thread
+                    print(f"[Audio] Running in main process - starting playback thread", flush=True)
 
-                # Always start a new playback thread (old one has been stopped)
-                PWM._playback_thread = threading.Thread(target=self._audio_player_thread, daemon=True)
-                PWM._playback_thread.start()
-                print(f"[Audio] Started new playback thread", flush=True)
+                    # Create dedicated mixer channel for audio playback
+                    PWM._channel = pygame.mixer.Channel(0)
+                    print(f"[Audio] Created fresh mixer channel", flush=True)
+
+                    # Always start a new playback thread (old one has been stopped)
+                    PWM._playback_thread = threading.Thread(target=self._audio_player_thread, daemon=True)
+                    PWM._playback_thread.start()
+                    print(f"[Audio] Started new playback thread", flush=True)
 
     def freq(self, val=None):
         """Get or set PWM frequency"""
@@ -255,9 +262,16 @@ class PWM:
         # Get the multiprocessing queue
         audio_queue = _thread_module.get_audio_queue()
 
+        if audio_queue is None:
+            print(f"[Audio] ERROR: audio_queue is None! Cannot consume samples", flush=True)
+            return
+
         print(f"[Audio] Playback thread starting, consuming from multiprocessing.Queue", flush=True)
+        print(f"[Audio] Queue object: {audio_queue}", flush=True)
+        print(f"[Audio] Queue type: {type(audio_queue)}", flush=True)
         print(f"[Audio] Waiting for {headroom} samples before playback", flush=True)
 
+        consume_count = 0
         while not PWM._stop_playback:
             # Consume samples from multiprocessing Queue into local buffer
             try:
@@ -266,7 +280,14 @@ class PWM:
                     sample = audio_queue.get(timeout=0.01)
                     with PWM._lock:
                         PWM._sample_buffer.append(sample)
+                    consume_count += 1
+                    if consume_count % 1000 == 0:
+                        print(f"[Audio] Consumed {consume_count} samples from Queue, buffer size: {len(PWM._sample_buffer)}", flush=True)
             except queue.Empty:
+                if consume_count < 100:  # Only log early in playback
+                    with PWM._lock:
+                        buf_size = len(PWM._sample_buffer)
+                    print(f"[Audio] Queue empty, buffer size: {buf_size}", flush=True)
                 pass  # No samples available, continue
 
             # Check buffer size

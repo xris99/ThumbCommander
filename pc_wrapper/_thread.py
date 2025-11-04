@@ -37,20 +37,43 @@ def start_new_thread(function, args):
 
     # Detect if this is the audio decoder thread
     if function.__name__ == 'audio_loop':
-        print("[_thread] Detected audio_loop - using multiprocessing.Process for true parallelism", flush=True)
+        print(f"[_thread] Detected audio_loop - using multiprocessing.Process for true parallelism", flush=True)
+        print(f"[_thread] Current _audio_process: {_audio_process}", flush=True)
+        print(f"[_thread] Current mp method: {mp.get_start_method()}", flush=True)
 
         # Check if we already have a running process
-        if _audio_process is not None and _audio_process.is_alive():
-            print("[_thread] Audio process already running, skipping duplicate", flush=True)
-            return _audio_process.pid
-
-        # Allow starting new process if old one died
         if _audio_process is not None:
-            print("[_thread] Old audio process died, starting new one", flush=True)
+            print(f"[_thread] Found existing _audio_process, checking if alive...", flush=True)
+            is_alive = _audio_process.is_alive()
+            print(f"[_thread] Process is_alive: {is_alive}", flush=True)
+            if is_alive:
+                print("[_thread] Audio process already running, skipping duplicate", flush=True)
+                return _audio_process.pid
+            else:
+                print("[_thread] Old audio process died, starting new one", flush=True)
 
         # Create IPC queue for samples (50K capacity = ~3 seconds at 15625 Hz)
-        _audio_sample_queue = Queue(maxsize=50000)
-        print(f"[_thread] Created multiprocessing.Queue with capacity 50000", flush=True)
+        print("[_thread] Creating multiprocessing.Queue...", flush=True)
+        try:
+            _audio_sample_queue = Queue(maxsize=50000)
+            print(f"[_thread] Successfully created multiprocessing.Queue with capacity 50000", flush=True)
+        except Exception as e:
+            print(f"[_thread] ERROR creating Queue: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raise
+
+        # CRITICAL: Create PWM in main process for playback BEFORE starting decoder
+        print("[_thread] Creating PWM in main process for playback...", flush=True)
+        try:
+            from machine import PWM, Pin
+            # Create PWM instance in main process - this will start the playback thread
+            main_pwm = PWM(Pin(23), freq=120000)
+            print(f"[_thread] PWM created in main process", flush=True)
+        except Exception as e:
+            print(f"[_thread] ERROR creating main process PWM: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
 
         # Wrapper to run audio_loop in separate process
         def audio_process_wrapper():
@@ -78,9 +101,14 @@ def start_new_thread(function, args):
                 print("[_thread] Audio decoder process exiting", flush=True)
 
         # Start as separate process (bypasses GIL!)
+        print("[_thread] Creating mp.Process...", flush=True)
         try:
             _audio_process = mp.Process(target=audio_process_wrapper, daemon=True)
+            print(f"[_thread] Process object created: {_audio_process}", flush=True)
+
+            print("[_thread] Starting process...", flush=True)
             _audio_process.start()
+            print("[_thread] Process.start() returned", flush=True)
 
             print(f"[_thread] Audio process started with PID: {_audio_process.pid}", flush=True)
 

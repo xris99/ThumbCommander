@@ -7,19 +7,28 @@ This launcher sets up the MicroPython compatibility layer and launches the game
 without modifying any of the game code.
 """
 
+print("[Launcher] ========== LAUNCHER STARTING ==========", flush=True)
+
 import sys
 import os
+
+print(f"[Launcher] Python version: {sys.version}", flush=True)
+print(f"[Launcher] Platform: {sys.platform}", flush=True)
 
 # CRITICAL: Set multiprocessing start method BEFORE any other imports
 # This must be done before pygame or any module that might use multiprocessing
 import multiprocessing as mp
+print(f"[Launcher] Initial multiprocessing method: {mp.get_start_method()}", flush=True)
+
 if sys.platform != 'win32':
     try:
         mp.set_start_method('fork')
-        print("[Launcher] Set multiprocessing to use 'fork' method", flush=True)
+        print("[Launcher] Successfully set multiprocessing to use 'fork' method", flush=True)
     except RuntimeError as e:
-        print(f"[Launcher] Could not set fork method: {e}", flush=True)
-        print(f"[Launcher] Current method: {mp.get_start_method()}", flush=True)
+        print(f"[Launcher] Could not set fork method (already set?): {e}", flush=True)
+    print(f"[Launcher] Final multiprocessing method: {mp.get_start_method()}", flush=True)
+else:
+    print(f"[Launcher] Windows detected, using default method: {mp.get_start_method()}", flush=True)
 
 # Get the directory containing this script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
