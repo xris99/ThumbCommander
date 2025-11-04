@@ -1,12 +1,14 @@
 """
 MicroPython machine module for PC with audio support
 Provides PWM and Timer that work with pygame for audio output
+Uses multiprocessing for true parallel audio decoding (bypasses GIL)
 """
 
 import threading
 import time
 import os
-import numpy as np
+import queue
+import pc_wrapper._thread as _thread_module
 
 # Lazy pygame import
 pygame = None
@@ -141,12 +143,11 @@ class PWM:
                         time.sleep(0.01)
                     print(f"[Audio] Old thread exited: {not old_thread.is_alive()}", flush=True)
 
-                # Stop any playing music
-                try:
-                    pygame.mixer.music.stop()
-                    print(f"[Audio] Stopped old mixer music", flush=True)
-                except:
-                    pass
+                # Stop the mixer channel
+                with PWM._lock:
+                    if PWM._channel:
+                        PWM._channel.stop()
+                        print(f"[Audio] Stopped old mixer channel", flush=True)
 
             # Detect source sample rate from audio.py and reinitialize mixer
             import sys
@@ -180,16 +181,14 @@ class PWM:
                 print(f"[Audio] PWM initialized for direct passthrough (no resampling)", flush=True)
                 sys.stdout.flush()
 
-                # Stop any currently playing music
-                try:
-                    pygame.mixer.music.stop()
-                except:
-                    pass
+                # Create dedicated mixer channel for audio playback
+                PWM._channel = pygame.mixer.Channel(0)
+                print(f"[Audio] Created fresh mixer channel", flush=True)
 
                 # Always start a new playback thread (old one has been stopped)
                 PWM._playback_thread = threading.Thread(target=self._audio_player_thread, daemon=True)
                 PWM._playback_thread.start()
-                print(f"[Audio] Started new playback thread (WAV file mode)", flush=True)
+                print(f"[Audio] Started new playback thread", flush=True)
 
     def freq(self, val=None):
         """Get or set PWM frequency"""
@@ -219,60 +218,58 @@ class PWM:
         if PWM._active_pwm is not self:
             return  # Silently discard samples from inactive PWM instances
 
-        # Direct passthrough - NO BLOCKING (must be instant like hardware PWM)
-        with PWM._lock:
-            # Detect if decoder is stuck (same value repeated - "waiting for buffers" state)
-            if len(PWM._sample_buffer) >= 1:
-                if PWM._sample_buffer[-1] == val:
-                    PWM._stuck_count = getattr(PWM, '_stuck_count', 0) + 1
-                    # Warn if stuck for 100+ samples (indicates buffer filling problem)
-                    if PWM._stuck_count == 100:
-                        print(f"[Audio] WARNING: Decoder stuck outputting {val} (buffers not being filled?)", flush=True)
-                else:
-                    PWM._stuck_count = 0
+        # Check if we're in the audio decoder process (multiprocessing)
+        audio_queue = _thread_module.get_audio_queue()
 
-            PWM._sample_buffer.append(val)
-            PWM._samples_in += 1
+        if audio_queue is not None and _thread_module.is_audio_process():
+            # IN DECODER PROCESS: Send to multiprocessing Queue (IPC to main process)
+            try:
+                audio_queue.put_nowait(val)  # Non-blocking put
+                PWM._samples_in += 1
+            except:
+                pass  # Queue full, drop sample (shouldn't happen with 50K capacity)
 
-        # Debug output only every 5000 samples (reduces overhead)
-        if PWM._samples_in % 5000 == 0:
-            current_time = time.time()
-            if PWM._last_debug_time > 0:
-                elapsed = current_time - PWM._last_debug_time
-                if elapsed >= 0.1:  # At least 100ms between prints
-                    sample_rate = 5000 / elapsed
-                    with PWM._lock:
-                        buffer_size = len(PWM._sample_buffer)
-                    print(f"[Audio] Decoder: {sample_rate:.0f} Hz (last 5000 samples), buffer={buffer_size}", flush=True)
-                    PWM._last_debug_time = current_time
-            else:
-                PWM._last_debug_time = current_time
+            # Debug output every 5000 samples
+            if PWM._samples_in % 5000 == 0:
+                print(f"[Audio] Decoder process: {PWM._samples_in} samples sent", flush=True)
+        else:
+            # IN MAIN PROCESS: Use local buffer (fallback, shouldn't normally happen)
+            with PWM._lock:
+                PWM._sample_buffer.append(val)
+                PWM._samples_in += 1
 
     @staticmethod
     def _audio_player_thread():
         """
-        Background thread for audio playback using temporary WAV files
-        This approach works better than Sound objects from buffers
+        Background thread for audio playback using pygame.mixer.Sound
+        Consumes samples from multiprocessing.Queue (sent by decoder process)
         """
-        chunk_size = 4096  # Larger chunks for WAV files (reduces file operations)
+        chunk_size = 2048  # Chunk size in samples
         headroom = 8192    # Initial buffer before starting
         chunks_played = 0
         playback_started = False
 
-        # Import required modules
+        # Import struct for bytes conversion
         import struct
-        import wave
-        import tempfile
-        import os
 
-        print(f"[Audio] Playback thread starting (WAV file mode), waiting for {headroom} samples", flush=True)
+        # Get the multiprocessing queue
+        audio_queue = _thread_module.get_audio_queue()
 
-        # Create temp directory for audio chunks
-        temp_dir = tempfile.mkdtemp(prefix="thumby_audio_")
-        print(f"[Audio] Using temp directory: {temp_dir}", flush=True)
+        print(f"[Audio] Playback thread starting, consuming from multiprocessing.Queue", flush=True)
+        print(f"[Audio] Waiting for {headroom} samples before playback", flush=True)
 
         while not PWM._stop_playback:
-            # Check if we have enough samples
+            # Consume samples from multiprocessing Queue into local buffer
+            try:
+                while len(PWM._sample_buffer) < headroom + chunk_size:
+                    # Get sample from decoder process (with timeout to allow checking stop flag)
+                    sample = audio_queue.get(timeout=0.01)
+                    with PWM._lock:
+                        PWM._sample_buffer.append(sample)
+            except queue.Empty:
+                pass  # No samples available, continue
+
+            # Check buffer size
             with PWM._lock:
                 buffer_size = len(PWM._sample_buffer)
                 active_pwm = PWM._active_pwm
@@ -311,38 +308,22 @@ class PWM:
                         print(f"[Audio] Mixer shut down, exiting playback thread", flush=True)
                         break
 
-                    # Convert samples to signed 16-bit
+                    # Convert to bytes without numpy (avoids segfaults)
+                    # Convert samples to signed 16-bit integers
                     signed_samples = [max(-32768, min(32767, int(s) - 32768)) for s in chunk]
+
+                    # Pack all samples at once using format string (much faster)
                     audio_bytes = struct.pack('<' + 'h' * len(signed_samples), *signed_samples)
 
-                    # Write to temporary WAV file
-                    temp_wav = os.path.join(temp_dir, f"chunk_{chunks_played}.wav")
-                    with wave.open(temp_wav, 'wb') as wav_file:
-                        wav_file.setnchannels(1)  # Mono
-                        wav_file.setsampwidth(2)  # 16-bit
-                        wav_file.setframerate(PWM._current_mixer_rate)
-                        wav_file.writeframes(audio_bytes)
+                    # Create Sound and keep reference (prevents garbage collection)
+                    PWM._current_sound = pygame.mixer.Sound(buffer=audio_bytes)
 
-                    # Play using pygame.mixer.music (designed for files)
-                    pygame.mixer.music.load(temp_wav)
-                    pygame.mixer.music.play()
+                    # Play sound immediately on dedicated channel
+                    PWM._channel.play(PWM._current_sound)
 
-                    # Wait for playback to finish using get_busy()
-                    # Don't sleep for calculated duration - let audio hardware handle timing
-                    # This prevents buffer growth from playback falling behind
-                    while pygame.mixer.music.get_busy() and not PWM._stop_playback:
-                        time.sleep(0.005)  # Short sleep to avoid busy-wait
-
-                    # Longer safety delay after get_busy() to ensure chunk fully played
-                    # get_busy() is known to return False before audio finishes
-                    # This delay prevents next chunk from starting too early
-                    time.sleep(0.050)  # 50ms to ensure clean chunk boundary
-
-                    # Clean up temp file
-                    try:
-                        os.remove(temp_wav)
-                    except:
-                        pass
+                    # Wait for channel to finish playback
+                    while PWM._channel.get_busy() and not PWM._stop_playback:
+                        time.sleep(0.010)  # Check every 10ms
 
                     if chunks_played <= 10:
                         with PWM._lock:
@@ -351,30 +332,23 @@ class PWM:
 
                 except Exception as e:
                     print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    # If mixer error, exit thread
                     if "mixer" in str(e).lower():
                         break
             else:
                 # Buffer empty, wait for decoder
                 time.sleep(0.01)
 
-        # Cleanup temp directory
-        try:
-            import shutil
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            print(f"[Audio] Cleaned up temp directory", flush=True)
-        except:
-            pass
-
     def _cleanup(self):
         """Stop audio playback"""
         print(f"[Audio] PWM._cleanup() called", flush=True)
         with PWM._lock:
             PWM._sample_buffer = []
-        try:
-            pygame.mixer.music.stop()
-            print(f"[Audio] Stopped pygame mixer music", flush=True)
-        except:
-            pass
+            if PWM._channel:
+                PWM._channel.stop()
+                print(f"[Audio] Stopped pygame mixer channel", flush=True)
 
     def deinit(self):
         """Deinitialize PWM"""
