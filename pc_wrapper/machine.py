@@ -272,7 +272,12 @@ class PWM:
         print(f"[Audio] Waiting for {headroom} samples before playback", flush=True)
 
         consume_count = 0
+        loop_count = 0
         while not PWM._stop_playback:
+            loop_count += 1
+            if loop_count <= 10 or loop_count % 100 == 0:
+                print(f"[Audio] Playback loop #{loop_count}, _stop_playback={PWM._stop_playback}", flush=True)
+
             # Consume samples from multiprocessing Queue into local buffer
             try:
                 while len(PWM._sample_buffer) < headroom + chunk_size:
