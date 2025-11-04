@@ -20,18 +20,25 @@ print(f"[Launcher] Platform: {sys.platform}", flush=True)
 # NOTE: Do NOT call get_start_method() before set_start_method() - it locks the method!
 import multiprocessing as mp
 
-if sys.platform != 'win32':
+if sys.platform == 'darwin':
+    # macOS: Force 'fork' method (needed for audio_loop function to be accessible in child process)
+    # Note: macOS may show warnings about Core Foundation, but 'fork' is required for
+    # the audio decoder process to access the audio_loop function
     try:
-        # Set 'fork' method (needed for audio_loop function pickling)
-        # Note: On macOS, this may show warnings about Core Foundation in forked child
-        # but it's necessary for the audio decoder process to work
+        mp.set_start_method('fork', force=True)
+        print("[Launcher] Forced multiprocessing to use 'fork' method on macOS", flush=True)
+    except Exception as e:
+        print(f"[Launcher] ERROR: Could not force fork method: {e}", flush=True)
+        print(f"[Launcher] WARNING: Audio may not work properly with spawn method", flush=True)
+elif sys.platform != 'win32':
+    # Linux/Unix: Use fork (default)
+    try:
         mp.set_start_method('fork', force=False)
-        print("[Launcher] Successfully set multiprocessing to use 'fork' method", flush=True)
-    except RuntimeError as e:
-        print(f"[Launcher] Could not set fork method: {e}", flush=True)
-        print(f"[Launcher] Will use default method: {mp.get_start_method()}", flush=True)
+        print("[Launcher] Set multiprocessing to use 'fork' method", flush=True)
+    except RuntimeError:
+        pass  # Already set
 else:
-    print(f"[Launcher] Windows detected, using default method", flush=True)
+    print(f"[Launcher] Windows: Using default spawn method", flush=True)
 
 # Now safe to check the method
 print(f"[Launcher] Multiprocessing start method: {mp.get_start_method()}", flush=True)
