@@ -13,6 +13,12 @@ _audio_process = None
 _is_audio_process = False  # Flag to detect if we're IN the audio process
 
 
+# Export standard _thread module attributes (required by other Python modules)
+allocate_lock = threading.Lock
+LockType = threading.Lock
+error = RuntimeError  # _thread.error is RuntimeError
+
+
 def start_new_thread(function, args):
     """
     Start a new thread or process
@@ -92,6 +98,13 @@ def exit():
         # In main process - exit thread
         import sys
         sys.exit()
+
+
+def stack_size(size=None):
+    """Get/set thread stack size (ignored, for compatibility)"""
+    if size is None:
+        return threading.stack_size()
+    return threading.stack_size(size)
 
 
 # Expose the sample queue for PWM to use
