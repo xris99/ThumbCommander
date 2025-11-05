@@ -261,6 +261,11 @@ class PWM:
         """
         Background thread for audio playback using pygame.mixer.Sound
         Consumes samples from multiprocessing.Queue (sent by decoder process)
+
+        ARCHITECTURE:
+        1. Consume ALL available samples from Queue into buffer (fast!)
+        2. Feed chunks from buffer to pygame when ready (controlled rate)
+        3. pygame.mixer.Channel can only queue ONE sound at a time
         """
         chunk_size = 2048  # Chunk size in samples (131ms at 15625 Hz)
         chunks_played = 0
@@ -276,107 +281,107 @@ class PWM:
             print(f"[Audio] ERROR: audio_queue is None! Cannot consume samples", flush=True)
             return
 
-        print(f"[Audio] Playback thread starting, consuming from multiprocessing.Queue", flush=True)
-        print(f"[Audio] Queue object: {audio_queue}", flush=True)
-        print(f"[Audio] Queue type: {type(audio_queue)}", flush=True)
+        print(f"[Audio] Playback thread starting", flush=True)
 
         consume_count = 0
         last_consume_log = 0
 
-        # Main playback loop
+        # Main loop: SEPARATE consumption from playback!
         while not PWM._stop_playback:
-            # === CONSUMPTION PHASE ===
-            # Consume samples in BATCHES (not one at a time!) to minimize lock overhead
-            # Don't throttle consumption - keep consuming to empty the Queue!
-            batch = []
-            try:
-                # Get up to 512 samples in a batch (no per-sample locking!)
-                for _ in range(512):
-                    batch.append(audio_queue.get_nowait())
-            except queue.Empty:
-                pass  # Got all available samples
+            # === PHASE 1: CONSUME ALL AVAILABLE SAMPLES ===
+            # This runs as fast as possible to empty the Queue
+            consumed_this_round = 0
+            while True:  # Keep consuming until Queue is empty
+                batch = []
+                try:
+                    # Get up to 1024 samples in one batch
+                    for _ in range(1024):
+                        batch.append(audio_queue.get_nowait())
+                except queue.Empty:
+                    pass  # No more samples available
 
-            # Add batch to buffer with single lock
-            if batch:
-                with PWM._lock:
-                    PWM._sample_buffer.extend(batch)
-                consume_count += len(batch)
+                if batch:
+                    with PWM._lock:
+                        PWM._sample_buffer.extend(batch)
+                    consumed_this_round += len(batch)
+                else:
+                    break  # Queue is empty, move to playback phase
 
-                # Log every 5000 samples
+            if consumed_this_round > 0:
+                consume_count += consumed_this_round
                 if consume_count - last_consume_log >= 5000:
                     with PWM._lock:
                         buf_size = len(PWM._sample_buffer)
                     print(f"[Audio] Consumed {consume_count} total, buffer: {buf_size}", flush=True)
                     last_consume_log = consume_count
 
-            # === PLAYBACK PHASE ===
-            # Check buffer size
+            # === PHASE 2: PLAYBACK ===
+            # Check buffer size and active PWM
             with PWM._lock:
                 buffer_size = len(PWM._sample_buffer)
                 active_pwm = PWM._active_pwm
 
-            # If no active PWM, exit thread
             if active_pwm is None:
                 print(f"[Audio] No active PWM, exiting playback thread", flush=True)
                 break
 
-            # Start playback as soon as we have one chunk ready (immediate start!)
+            # Start playback as soon as we have one chunk
             if not playback_started:
                 if buffer_size >= chunk_size:
                     playback_started = True
-                    print(f"[Audio] Starting playback immediately with {buffer_size} samples", flush=True)
+                    print(f"[Audio] Starting playback with {buffer_size} samples buffered", flush=True)
                 else:
-                    time.sleep(0.001)  # 1ms wait, then loop back to consume more
+                    time.sleep(0.001)  # Wait briefly for more samples
                     continue
 
-            # Extract chunk if we have enough samples
-            chunk = None
+            # Check if pygame is ready for next chunk
+            # pygame.mixer.Channel can only have ONE queued sound!
+            if PWM._channel.get_queue() is not None:
+                # Already have a queued sound, wait for it to start playing
+                time.sleep(0.001)  # Brief wait
+                continue
+
+            # Extract chunk if available
             if buffer_size >= chunk_size:
                 with PWM._lock:
                     chunk = PWM._sample_buffer[:chunk_size]
                     PWM._sample_buffer = PWM._sample_buffer[chunk_size:]
 
-            if chunk:
                 chunks_played += 1
-                if chunks_played <= 5 or chunks_played % 50 == 0:
-                    print(f"[Audio] Playing chunk #{chunks_played}: {len(chunk)} samples, buffer: {buffer_size}", flush=True)
 
                 try:
                     # Check if mixer is still initialized
                     if not pygame.mixer.get_init():
-                        print(f"[Audio] Mixer shut down, exiting playback thread", flush=True)
+                        print(f"[Audio] Mixer shut down, exiting", flush=True)
                         break
 
-                    # Convert to bytes without numpy (avoids segfaults)
-                    # Convert samples to signed 16-bit integers
+                    # Convert to signed 16-bit PCM
                     signed_samples = [max(-32768, min(32767, int(s) - 32768)) for s in chunk]
-
-                    # Pack all samples at once using format string (much faster)
                     audio_bytes = struct.pack('<' + 'h' * len(signed_samples), *signed_samples)
 
-                    # Create Sound and keep reference (prevents garbage collection)
-                    PWM._current_sound = pygame.mixer.Sound(buffer=audio_bytes)
+                    # Create Sound
+                    sound = pygame.mixer.Sound(buffer=audio_bytes)
 
-                    # Play sound immediately on dedicated channel
-                    # Queue it if channel is busy, pygame handles this automatically
-                    PWM._channel.queue(PWM._current_sound)
+                    # Queue to channel (will play after current sound finishes)
+                    # First chunk uses play(), rest use queue()
+                    if chunks_played == 1:
+                        PWM._channel.play(sound)
+                    else:
+                        PWM._channel.queue(sound)
 
-                    if chunks_played <= 10:
+                    if chunks_played <= 10 or chunks_played % 50 == 0:
                         with PWM._lock:
-                            current_buffer = len(PWM._sample_buffer)
-                        print(f"[Audio] Queued chunk #{chunks_played}, buffer={current_buffer}", flush=True)
+                            buf = len(PWM._sample_buffer)
+                        print(f"[Audio] Chunk #{chunks_played} queued, buffer={buf}", flush=True)
 
                 except Exception as e:
-                    print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
+                    print(f"[Audio] Error: {e}", flush=True)
                     import traceback
                     traceback.print_exc()
-                    # If mixer error, exit thread
-                    if "mixer" in str(e).lower():
-                        break
+                    break
             else:
-                # No chunk ready yet, loop back to consume more
-                # Don't sleep - consume as fast as possible!
-                pass
+                # Not enough samples for a chunk yet
+                time.sleep(0.001)  # Wait briefly
 
     def _cleanup(self):
         """Stop audio playback"""
