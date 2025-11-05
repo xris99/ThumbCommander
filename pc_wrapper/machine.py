@@ -230,20 +230,26 @@ class PWM:
 
         if audio_queue is not None and _thread_module.is_audio_process():
             # IN DECODER PROCESS: Send to multiprocessing Queue (IPC to main process)
-            # Use blocking put with timeout to provide backpressure when Queue is full
-            # The decoder should not run faster than playback can consume
+            # CRITICAL: Must use put_nowait() to preserve decoder's microsecond-precise timing!
+            # The audio_loop uses busy-wait to maintain exact 15625 Hz sample rate.
+            # Any blocking (even 1ms) breaks this precision and causes audio glitches.
+            # If Queue fills, playback can't keep up - drop samples to maintain timing.
             try:
-                audio_queue.put(val, block=True, timeout=0.1)  # Wait up to 100ms for space
+                audio_queue.put_nowait(val)  # Non-blocking - critical for timing precision!
                 PWM._samples_in += 1
             except queue.Full:
-                # Queue still full after 100ms - playback thread may have died
-                if PWM._samples_in % 1000 == 0:
-                    print(f"[Audio] WARNING: Queue full, dropping sample #{PWM._samples_in}", flush=True)
-                pass  # Drop this sample
+                # Queue full (32K samples = ~2 sec) - playback severely lagging
+                # Drop sample to maintain decoder timing (critical for busy-wait loop)
+                if not hasattr(PWM, '_samples_dropped'):
+                    PWM._samples_dropped = 0
+                PWM._samples_dropped += 1
+                if PWM._samples_dropped % 5000 == 0:
+                    print(f"[Audio] WARNING: Dropped {PWM._samples_dropped} samples (Queue full)", flush=True)
 
-            # Debug output every 5000 samples
-            if PWM._samples_in % 5000 == 0:
-                print(f"[Audio] Decoder process: {PWM._samples_in} samples queued successfully", flush=True)
+            # Debug output every 10000 samples
+            if PWM._samples_in % 10000 == 0:
+                dropped = getattr(PWM, '_samples_dropped', 0)
+                print(f"[Audio] Decoder: {PWM._samples_in} queued, {dropped} dropped", flush=True)
         else:
             # IN MAIN PROCESS: Use local buffer (fallback, shouldn't normally happen)
             with PWM._lock:
@@ -350,11 +356,12 @@ class PWM:
                     PWM._current_sound = pygame.mixer.Sound(buffer=audio_bytes)
 
                     # Play sound immediately on dedicated channel
-                    PWM._channel.play(PWM._current_sound)
+                    # DON'T wait for channel to finish - this blocks consumption from Queue!
+                    # Wait if channel already has a sound queued (limit to 1 queued sound)
+                    while PWM._channel.get_queue() is not None and not PWM._stop_playback:
+                        time.sleep(0.005)  # Wait 5ms and check again
 
-                    # Wait for channel to finish playback
-                    while PWM._channel.get_busy() and not PWM._stop_playback:
-                        time.sleep(0.010)  # Check every 10ms
+                    PWM._channel.play(PWM._current_sound)
 
                     if chunks_played <= 10:
                         with PWM._lock:
