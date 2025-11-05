@@ -262,8 +262,8 @@ class PWM:
         Background thread for audio playback using pygame.mixer.Sound
         Consumes samples from multiprocessing.Queue (sent by decoder process)
         """
-        chunk_size = 2048  # Chunk size in samples
-        headroom = 8192    # Initial buffer before starting
+        chunk_size = 2048  # Chunk size in samples (131ms at 15625 Hz)
+        headroom = chunk_size  # Start immediately when first chunk ready (like real hardware!)
         chunks_played = 0
         playback_started = False
 

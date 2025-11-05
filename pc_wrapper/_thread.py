@@ -87,9 +87,9 @@ def start_new_thread(function, args):
                 print("[_thread] Old audio process died, starting new one", flush=True)
 
         # Create IPC queue for samples
-        # Note: macOS has SEM_VALUE_MAX limit (~32767)
-        # Use maximum safe size for best buffering (playback thread has delays)
-        queue_size = 32000  # ~2 seconds at 15625 Hz
+        # Note: macOS has SEM_VALUE_MAX limit (~32767), stay well below it
+        # Smaller queue = lower latency (immediate playback like real hardware)
+        queue_size = 10000  # ~640ms at 15625 Hz - enough buffering, safe for macOS
         print(f"[_thread] Creating multiprocessing.Queue with maxsize={queue_size}...", flush=True)
         try:
             _audio_sample_queue = Queue(maxsize=queue_size)
