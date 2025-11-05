@@ -75,16 +75,21 @@ def start_new_thread(function, args):
         print(f"[_thread] Current _audio_process: {_audio_process}", flush=True)
         print(f"[_thread] Current mp method: {mp.get_start_method()}", flush=True)
 
-        # Check if we already have a running process
+        # Check if we already have a running process - TERMINATE it for new audio!
         if _audio_process is not None:
             print(f"[_thread] Found existing _audio_process, checking if alive...", flush=True)
             is_alive = _audio_process.is_alive()
             print(f"[_thread] Process is_alive: {is_alive}", flush=True)
             if is_alive:
-                print("[_thread] Audio process already running, skipping duplicate", flush=True)
-                return _audio_process.pid
+                print("[_thread] Terminating old audio process for new audio file", flush=True)
+                _audio_process.terminate()
+                _audio_process.join(timeout=0.5)  # Wait up to 500ms
+                if _audio_process.is_alive():
+                    print("[_thread] WARNING: Old process didn't terminate, killing it", flush=True)
+                    _audio_process.kill()
+                print("[_thread] Old audio process terminated", flush=True)
             else:
-                print("[_thread] Old audio process died, starting new one", flush=True)
+                print("[_thread] Old audio process already dead", flush=True)
 
         # Create IPC queue for samples
         # Note: macOS has SEM_VALUE_MAX limit (~32767), stay well below it

@@ -263,7 +263,6 @@ class PWM:
         Consumes samples from multiprocessing.Queue (sent by decoder process)
         """
         chunk_size = 2048  # Chunk size in samples (131ms at 15625 Hz)
-        headroom = chunk_size  # Start immediately when first chunk ready (like real hardware!)
         chunks_played = 0
         playback_started = False
 
@@ -280,32 +279,37 @@ class PWM:
         print(f"[Audio] Playback thread starting, consuming from multiprocessing.Queue", flush=True)
         print(f"[Audio] Queue object: {audio_queue}", flush=True)
         print(f"[Audio] Queue type: {type(audio_queue)}", flush=True)
-        print(f"[Audio] Waiting for {headroom} samples before playback", flush=True)
 
         consume_count = 0
-        loop_count = 0
-        while not PWM._stop_playback:
-            loop_count += 1
-            if loop_count <= 10 or loop_count % 100 == 0:
-                print(f"[Audio] Playback loop #{loop_count}, _stop_playback={PWM._stop_playback}", flush=True)
+        last_consume_log = 0
 
-            # Consume samples from multiprocessing Queue into local buffer
+        # Main playback loop
+        while not PWM._stop_playback:
+            # === CONSUMPTION PHASE ===
+            # Consume samples in BATCHES (not one at a time!) to minimize lock overhead
+            # Don't throttle consumption - keep consuming to empty the Queue!
+            batch = []
             try:
-                while len(PWM._sample_buffer) < headroom + chunk_size:
-                    # Get sample from decoder process (with timeout to allow checking stop flag)
-                    sample = audio_queue.get(timeout=0.01)
-                    with PWM._lock:
-                        PWM._sample_buffer.append(sample)
-                    consume_count += 1
-                    if consume_count % 1000 == 0:
-                        print(f"[Audio] Consumed {consume_count} samples from Queue, buffer size: {len(PWM._sample_buffer)}", flush=True)
+                # Get up to 512 samples in a batch (no per-sample locking!)
+                for _ in range(512):
+                    batch.append(audio_queue.get_nowait())
             except queue.Empty:
-                if consume_count < 100:  # Only log early in playback
+                pass  # Got all available samples
+
+            # Add batch to buffer with single lock
+            if batch:
+                with PWM._lock:
+                    PWM._sample_buffer.extend(batch)
+                consume_count += len(batch)
+
+                # Log every 5000 samples
+                if consume_count - last_consume_log >= 5000:
                     with PWM._lock:
                         buf_size = len(PWM._sample_buffer)
-                    print(f"[Audio] Queue empty, buffer size: {buf_size}", flush=True)
-                pass  # No samples available, continue
+                    print(f"[Audio] Consumed {consume_count} total, buffer: {buf_size}", flush=True)
+                    last_consume_log = consume_count
 
+            # === PLAYBACK PHASE ===
             # Check buffer size
             with PWM._lock:
                 buffer_size = len(PWM._sample_buffer)
@@ -316,23 +320,21 @@ class PWM:
                 print(f"[Audio] No active PWM, exiting playback thread", flush=True)
                 break
 
-            # Wait for initial buffer fill
+            # Start playback as soon as we have one chunk ready (immediate start!)
             if not playback_started:
-                if buffer_size >= headroom:
+                if buffer_size >= chunk_size:
                     playback_started = True
-                    print(f"[Audio] Buffer filled to {buffer_size} samples, starting playback", flush=True)
+                    print(f"[Audio] Starting playback immediately with {buffer_size} samples", flush=True)
                 else:
-                    time.sleep(0.01)
+                    time.sleep(0.001)  # 1ms wait, then loop back to consume more
                     continue
 
-            # Extract chunk
+            # Extract chunk if we have enough samples
             chunk = None
-            with PWM._lock:
-                buffer_size = len(PWM._sample_buffer)
-                if buffer_size > 0:
-                    actual_chunk_size = min(buffer_size, chunk_size)
-                    chunk = PWM._sample_buffer[:actual_chunk_size]
-                    PWM._sample_buffer = PWM._sample_buffer[actual_chunk_size:]
+            if buffer_size >= chunk_size:
+                with PWM._lock:
+                    chunk = PWM._sample_buffer[:chunk_size]
+                    PWM._sample_buffer = PWM._sample_buffer[chunk_size:]
 
             if chunk:
                 chunks_played += 1
@@ -356,17 +358,13 @@ class PWM:
                     PWM._current_sound = pygame.mixer.Sound(buffer=audio_bytes)
 
                     # Play sound immediately on dedicated channel
-                    # DON'T wait for channel to finish - this blocks consumption from Queue!
-                    # Wait if channel already has a sound queued (limit to 1 queued sound)
-                    while PWM._channel.get_queue() is not None and not PWM._stop_playback:
-                        time.sleep(0.005)  # Wait 5ms and check again
-
-                    PWM._channel.play(PWM._current_sound)
+                    # Queue it if channel is busy, pygame handles this automatically
+                    PWM._channel.queue(PWM._current_sound)
 
                     if chunks_played <= 10:
                         with PWM._lock:
                             current_buffer = len(PWM._sample_buffer)
-                        print(f"[Audio] Played chunk #{chunks_played}, buffer={current_buffer}", flush=True)
+                        print(f"[Audio] Queued chunk #{chunks_played}, buffer={current_buffer}", flush=True)
 
                 except Exception as e:
                     print(f"[Audio] Error playing chunk #{chunks_played}: {e}", flush=True)
@@ -376,8 +374,9 @@ class PWM:
                     if "mixer" in str(e).lower():
                         break
             else:
-                # Buffer empty, wait for decoder
-                time.sleep(0.01)
+                # No chunk ready yet, loop back to consume more
+                # Don't sleep - consume as fast as possible!
+                pass
 
     def _cleanup(self):
         """Stop audio playback"""
