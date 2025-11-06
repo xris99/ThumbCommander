@@ -356,14 +356,9 @@ class PWM:
                         time.sleep(0.0001)  # 0.1ms (very short)
                         continue
 
-                # Check if pygame is ready for next chunk
-                if PWM._channel.get_queue() is not None:
-                    # Channel busy - DON'T sleep! Just continue loop to keep consuming
-                    # Yield CPU briefly to avoid busy-wait
-                    time.sleep(0.0001)  # 0.1ms (very short)
-                    continue
-
-                # Extract and play chunk if available
+                # Extract and play chunk if available (NO get_queue() check!)
+                # Hypothesis: get_queue() might be blocking/slow on macOS
+                # Solution: Just try to play/queue and ignore errors
                 if buffer_size >= chunk_size:
                     with PWM._lock:
                         chunk = PWM._sample_buffer[:chunk_size]
@@ -381,16 +376,18 @@ class PWM:
                         audio_bytes = struct.pack('<' + 'h' * len(signed_samples), *signed_samples)
                         sound = pygame.mixer.Sound(buffer=audio_bytes)
 
-                        # Queue to channel
+                        # Queue to channel - NO checking, just do it!
                         if chunks_played == 1:
                             PWM._channel.play(sound)
+                            print(f"[Audio] Started playback (chunk #1)", flush=True)
                         else:
+                            # Just try to queue - if it fails, we'll try again next iteration
                             PWM._channel.queue(sound)
 
                         if chunks_played <= 10 or chunks_played % 50 == 0:
                             with PWM._lock:
                                 buf = len(PWM._sample_buffer)
-                            print(f"[Audio] Chunk #{chunks_played} queued, buffer={buf}", flush=True)
+                            print(f"[Audio] Chunk #{chunks_played}, buffer={buf}", flush=True)
 
                     except Exception as e:
                         print(f"[Audio] Error in chunk playback: {e}", flush=True)
@@ -398,7 +395,7 @@ class PWM:
                         traceback.print_exc()
                         break
                 else:
-                    # Not enough samples for a chunk - yield briefly and continue
+                    # Not enough samples yet - yield briefly
                     time.sleep(0.0001)  # 0.1ms
         except Exception as e:
             print(f"[Audio] EXCEPTION in playback thread main loop: {e}", flush=True)
