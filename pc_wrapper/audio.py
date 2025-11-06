@@ -28,11 +28,11 @@ def _ensure_pygame():
         try:
             mixer_init = pygame.mixer.get_init()
             if not mixer_init:
-                # Initialize pygame.mixer at 15625 Hz (hardware sample rate)
-                pygame.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=1024)
+                # Initialize pygame.mixer at 11025 Hz (reduced from 15625 to match actual hardware speed)
+                pygame.mixer.pre_init(frequency=11025, size=-16, channels=1, buffer=1024)
                 try:
                     pygame.mixer.init()
-                    print(f"[Audio PC] Initialized pygame.mixer at 15625 Hz")
+                    print(f"[Audio PC] Initialized pygame.mixer at 11025 Hz")
                 except pygame.error as e:
                     # If real audio fails, try dummy driver (for headless environments)
                     print(f"[Audio PC] Real audio failed: {e}")
@@ -175,7 +175,7 @@ class AudioState:
     def __init__(self):
         self.current_sound = None
         self.current_channel = None
-        self.sample_rate = 15625
+        self.sample_rate = 11025  # Reduced from 15625 to match actual hardware speed
         self.volume = 100
         self.loop_enabled = False
         self.loop_start = 0
