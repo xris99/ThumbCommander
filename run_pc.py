@@ -66,7 +66,8 @@ import pc_wrapper.engine_draw as engine_draw
 import pc_wrapper.thumbyButton as thumbyButton
 import pc_wrapper.thumbyHardware as thumbyHardware
 import pc_wrapper._thread as _thread  # Use our multiprocessing-enabled wrapper
-# Note: audio, cutscene_utils and thumbycolor_native imported from game directory
+import pc_wrapper.audio as audio  # PC-specific audio implementation (no GIL issues!)
+# Note: cutscene_utils and thumbycolor_native imported from game directory
 
 # Install modules in sys.modules so they're found by import statements
 # micropython is already installed by micropython_compat
@@ -79,10 +80,11 @@ sys.modules['engine'] = engine
 sys.modules['engine_io'] = engine_io
 sys.modules['engine_draw'] = engine_draw
 sys.modules['_thread'] = _thread
+sys.modules['audio'] = audio  # PC-specific audio (bypasses GIL issues!)
 # thumbycolor_native will be imported from root directory (original hardware version)
 sys.modules['thumbyButton'] = thumbyButton
 sys.modules['thumbyHardware'] = thumbyHardware
-# audio, cutscene_utils, grayscale, and Intro imported from game directory (audio used by ThumbyColor, others only by Thumby mode)
+# cutscene_utils, grayscale, and Intro imported from game directory
 
 # Create a dummy 'lib' directory if it doesn't exist
 lib_dir = os.path.join(SCRIPT_DIR, 'lib')
