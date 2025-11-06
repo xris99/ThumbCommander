@@ -51,6 +51,47 @@ def _ensure_pygame():
     return True
 
 
+def _resample_audio(samples, source_rate, target_rate):
+    """
+    Resample audio from source_rate to target_rate using linear interpolation
+
+    Args:
+        samples: array of 16-bit PCM samples
+        source_rate: original sample rate (e.g., 8000 Hz)
+        target_rate: target sample rate (e.g., 15625 Hz)
+
+    Returns:
+        array of resampled 16-bit PCM samples
+    """
+    if source_rate == target_rate:
+        return samples
+
+    # Calculate resampling ratio
+    ratio = target_rate / source_rate
+    new_length = int(len(samples) * ratio)
+
+    # Create output array
+    resampled = array.array('h', [0] * new_length)
+
+    # Linear interpolation
+    for i in range(new_length):
+        # Calculate position in source array
+        src_pos = i / ratio
+        src_idx = int(src_pos)
+
+        # Bounds check
+        if src_idx >= len(samples) - 1:
+            resampled[i] = samples[-1]
+        else:
+            # Linear interpolation between two samples
+            frac = src_pos - src_idx
+            sample1 = samples[src_idx]
+            sample2 = samples[src_idx + 1]
+            resampled[i] = int(sample1 + (sample2 - sample1) * frac)
+
+    return resampled
+
+
 class IMA_ADPCM_Decoder:
     """IMA ADPCM decoder - same algorithm as hardware"""
 
@@ -184,16 +225,24 @@ def load(ima_filename):
         decoder = IMA_ADPCM_Decoder()
         pcm_samples = decoder.decode_data(ima_data)
 
-        # Convert to signed 16-bit for pygame
-        signed_samples = []
+        # Convert to signed 16-bit array
+        signed_samples = array.array('h')
         for sample in pcm_samples[:sample_count]:  # Only use declared sample count
             signed = int(sample) - 32768
             signed = max(-32768, min(32767, signed))
             signed_samples.append(signed)
 
+        # Resample to match pygame.mixer frequency if needed
+        mixer_freq = audio.sample_rate  # This is the pygame.mixer frequency (15625 Hz)
+        if sample_rate != mixer_freq:
+            print(f"[Audio PC] Resampling from {sample_rate} Hz to {mixer_freq} Hz")
+            signed_samples = _resample_audio(signed_samples, sample_rate, mixer_freq)
+            # Update sample_count for resampled audio
+            sample_count = len(signed_samples)
+
         # Apply volume
         if audio.volume != 100:
-            signed_samples = [int(s * audio.volume / 100) for s in signed_samples]
+            signed_samples = array.array('h', [int(s * audio.volume / 100) for s in signed_samples])
 
         # Create pygame Sound
         audio_bytes = struct.pack('<' + 'h' * len(signed_samples), *signed_samples)
@@ -397,23 +446,33 @@ def open_id(ima_filename, file_id=None):
         decoder = IMA_ADPCM_Decoder()
         pcm_samples = decoder.decode_data(ima_data)
 
-        # Convert to signed 16-bit
-        signed_samples = []
+        # Convert to signed 16-bit array
+        signed_samples = array.array('h')
         for sample in pcm_samples[:sample_count]:
             signed = int(sample) - 32768
             signed = max(-32768, min(32767, signed))
             signed_samples.append(signed)
 
+        # Resample to match pygame.mixer frequency if needed
+        mixer_freq = audio.sample_rate  # This is the pygame.mixer frequency (15625 Hz)
+        original_sample_rate = sample_rate
+        if sample_rate != mixer_freq:
+            print(f"[Audio PC] Resampling {ima_filename}: {sample_rate} Hz -> {mixer_freq} Hz")
+            signed_samples = _resample_audio(signed_samples, sample_rate, mixer_freq)
+            # Update sample_count for resampled audio
+            sample_count = len(signed_samples)
+            sample_rate = mixer_freq  # Update to match actual playback rate
+
         # Apply volume
         if audio.volume != 100:
-            signed_samples = [int(s * audio.volume / 100) for s in signed_samples]
+            signed_samples = array.array('h', [int(s * audio.volume / 100) for s in signed_samples])
 
         # Create pygame Sound
         audio_bytes = struct.pack('<' + 'h' * len(signed_samples), *signed_samples)
         sound = pygame.mixer.Sound(buffer=audio_bytes)
 
-        # Store in file handles
-        file_info = (sound, sample_rate, sample_count)
+        # Store in file handles (with original sample rate for reference)
+        file_info = (sound, original_sample_rate, sample_count)
 
         if file_id is None:
             audio.file_handles.append(file_info)
