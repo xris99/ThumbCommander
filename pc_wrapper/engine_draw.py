@@ -19,20 +19,21 @@ def _ensure_pygame():
             import pygame as pg
             import os
             # IMPORTANT: Initialize mixer BEFORE pygame.init() to set audio parameters
-            # This must match the settings in machine.py PWM class
+            # CRITICAL: Use 15625 Hz (audio.py sample rate) to avoid reinit later!
+            # Reinitializing pygame.mixer breaks Channel playback on macOS!
             # Try real audio hardware first, fall back to dummy if that fails
-            pg.mixer.pre_init(frequency=16000, size=-16, channels=1, buffer=512)
+            pg.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=512)
             try:
                 pg.init()
-                print("[Audio] Pygame initialized with real audio hardware", flush=True)
+                print("[Audio] Pygame initialized at 15625 Hz with real audio hardware", flush=True)
             except Exception as e:
                 # Real audio failed, try dummy mode
                 print(f"[Audio] Real audio hardware failed ({e}), falling back to dummy mode", flush=True)
                 os.environ['SDL_AUDIODRIVER'] = 'dummy'
                 pg.mixer.quit()  # Clean up failed attempt
-                pg.mixer.pre_init(frequency=16000, size=-16, channels=1, buffer=512)
+                pg.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=512)
                 pg.init()
-                print("[Audio] Pygame initialized with dummy audio driver", flush=True)
+                print("[Audio] Pygame initialized at 15625 Hz with dummy audio driver", flush=True)
             pygame = pg
             _pygame_initialized = True
         except ImportError as e:
