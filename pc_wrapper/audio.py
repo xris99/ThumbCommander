@@ -28,12 +28,11 @@ def _ensure_pygame():
         try:
             mixer_init = pygame.mixer.get_init()
             if not mixer_init:
-                # Initialize pygame.mixer at 8000 Hz to match sound effects speed
-                # Cutscenes (15625 Hz) will resample down for slower playback
-                pygame.mixer.pre_init(frequency=8000, size=-16, channels=1, buffer=1024)
+                # Initialize pygame.mixer at 15625 Hz (hardware sample rate)
+                pygame.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=1024)
                 try:
                     pygame.mixer.init()
-                    print(f"[Audio PC] Initialized pygame.mixer at 8000 Hz")
+                    print(f"[Audio PC] Initialized pygame.mixer at 15625 Hz")
                 except pygame.error as e:
                     # If real audio fails, try dummy driver (for headless environments)
                     print(f"[Audio PC] Real audio failed: {e}")
@@ -176,7 +175,7 @@ class AudioState:
     def __init__(self):
         self.current_sound = None
         self.current_channel = None
-        self.sample_rate = 8000  # Set to 8000 Hz for correct sound effects speed
+        self.sample_rate = 15625
         self.volume = 100
         self.loop_enabled = False
         self.loop_start = 0
