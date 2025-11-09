@@ -1,6 +1,8 @@
 # color_enhancements.py - Color-specific enhancements loaded via exec() on ThumbyColor only
 from random import randint
 from platform_loader import audio_load, audio_play, audio_stop, audio_set_loop, audio_set_volume, audio_get_position, audio_set_end_callback, audio_clear_end_callback, audio_open_id, audio_play_id, audio_close_ids, buttonMENU
+import time
+import gc
 
 # Import game globals that we'll be modifying
 from platform_constants import get_constants
