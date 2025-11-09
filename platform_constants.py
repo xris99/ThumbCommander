@@ -1,5 +1,10 @@
 # platform_constants.py - Platform-specific constants
-from micropython import const
+try:
+    from micropython import const
+except ImportError:
+    # Fallback for systems without micropython
+    def const(x):
+        return x
 
 class PlatformConstants:
     """All platform-specific constants in one place"""

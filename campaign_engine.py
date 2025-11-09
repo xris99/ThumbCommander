@@ -5,6 +5,12 @@ import json
 import os
 from machine import freq
 from gc import collect
+import micropython
+try:
+    from micropython import const
+except ImportError:
+    def const(x):
+        return x
 
 # Constants
 MAX_TEXT_WIDTH = const(70)
