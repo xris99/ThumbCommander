@@ -233,7 +233,7 @@ def load(ima_filename):
             signed_samples.append(signed)
 
         # Resample to match pygame.mixer frequency if needed
-        mixer_freq = audio.sample_rate  # This is the pygame.mixer frequency (15625 Hz)
+        mixer_freq = 15625  # pygame.mixer is always initialized at 15625 Hz
         if sample_rate != mixer_freq:
             print(f"[Audio PC] Resampling from {sample_rate} Hz to {mixer_freq} Hz")
             signed_samples = _resample_audio(signed_samples, sample_rate, mixer_freq)
@@ -249,7 +249,6 @@ def load(ima_filename):
 
         with audio.lock:
             audio.current_sound = pygame.mixer.Sound(buffer=audio_bytes)
-            audio.sample_rate = sample_rate
             audio.loop_enabled = False
             audio.loop_start = 0
             audio.loop_end = sample_count
@@ -454,7 +453,7 @@ def open_id(ima_filename, file_id=None):
             signed_samples.append(signed)
 
         # Resample to match pygame.mixer frequency if needed
-        mixer_freq = audio.sample_rate  # This is the pygame.mixer frequency (15625 Hz)
+        mixer_freq = 15625  # pygame.mixer is always initialized at 15625 Hz
         original_sample_rate = sample_rate
         if sample_rate != mixer_freq:
             print(f"[Audio PC] Resampling {ima_filename}: {sample_rate} Hz -> {mixer_freq} Hz")
@@ -503,7 +502,6 @@ def play_id(file_id=0):
 
         with audio.lock:
             audio.current_sound = sound
-            audio.sample_rate = sample_rate
 
             # Get or create channel
             if audio.current_channel is None:
