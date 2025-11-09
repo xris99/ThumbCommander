@@ -8,7 +8,8 @@ import time
 # FPS control
 _fps_limit_value = 60
 _fps_limit_period_ms = 1000.0 / 60.0  # milliseconds per frame
-_last_tick_time = time.time()
+# Use perf_counter for high-precision timing (not time.time() which returns int on MicroPython)
+_last_tick_time = time.perf_counter()
 _fps_limit_enabled = True
 
 # Import button update function for input polling
@@ -62,7 +63,7 @@ def time_to_next_tick():
         return 0
 
     # Calculate elapsed time since last tick
-    current_time = time.time()
+    current_time = time.perf_counter()
     elapsed_ms = (current_time - _last_tick_time) * 1000.0
 
     # Calculate remaining time
@@ -101,6 +102,6 @@ def tick():
         update_button_state()
 
     # Update tick time
-    _last_tick_time = time.time()
+    _last_tick_time = time.perf_counter()
 
     return True

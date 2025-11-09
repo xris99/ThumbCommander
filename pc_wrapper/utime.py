@@ -72,6 +72,11 @@ def monotonic():
     return _time.monotonic()
 
 
+def perf_counter():
+    """Get performance counter for high-precision timing"""
+    return _time.perf_counter()
+
+
 def localtime(secs=None):
     """Convert seconds to local time tuple"""
     return _time.localtime(secs)
