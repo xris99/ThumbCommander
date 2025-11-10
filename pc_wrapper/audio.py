@@ -92,6 +92,46 @@ def _resample_audio(samples, source_rate, target_rate):
     return resampled
 
 
+def _resample_audio_to_count(samples, target_count):
+    """
+    Resample audio to a specific sample count using linear interpolation.
+    Used for dynamic cutscene sync where we need exact duration.
+
+    Args:
+        samples: Input audio samples (array of signed 16-bit integers)
+        target_count: Target number of samples
+
+    Returns:
+        Resampled audio array
+    """
+    if len(samples) == target_count:
+        return samples
+
+    # Create output array
+    resampled = array.array('h', [0] * target_count)
+
+    # Calculate ratio
+    ratio = len(samples) / target_count
+
+    # Linear interpolation
+    for i in range(target_count):
+        # Calculate position in source array
+        src_pos = i * ratio
+        src_idx = int(src_pos)
+
+        # Bounds check
+        if src_idx >= len(samples) - 1:
+            resampled[i] = samples[-1]
+        else:
+            # Linear interpolation between two samples
+            frac = src_pos - src_idx
+            sample1 = samples[src_idx]
+            sample2 = samples[src_idx + 1]
+            resampled[i] = int(sample1 + (sample2 - sample1) * frac)
+
+    return resampled
+
+
 class IMA_ADPCM_Decoder:
     """IMA ADPCM decoder - same algorithm as hardware"""
 
@@ -198,6 +238,15 @@ class AudioState:
 # Global audio state
 audio = AudioState()
 
+# Target duration for dynamic resampling (used for cutscene sync)
+_target_duration = None
+
+def set_target_duration(duration_seconds):
+    """Set target duration for next audio load (for cutscene sync)"""
+    global _target_duration
+    _target_duration = duration_seconds
+    print(f"[Audio PC] Target duration set to {duration_seconds:.3f}s for dynamic sync")
+
 
 def load(ima_filename):
     """Load and play IMA ADPCM file"""
@@ -232,9 +281,29 @@ def load(ima_filename):
             signed = max(-32768, min(32767, signed))
             signed_samples.append(signed)
 
-        # Resample to match pygame.mixer frequency if needed
+        # Resample to match pygame.mixer frequency or target duration if needed
+        global _target_duration
         mixer_freq = 15625  # pygame.mixer is always initialized at 15625 Hz
-        if sample_rate != mixer_freq:
+
+        # If target duration is set (for cutscene sync), calculate required rate
+        if _target_duration is not None and _target_duration > 0:
+            # Calculate what sample rate would give us the target duration
+            required_rate = sample_count / _target_duration
+            print(f"[Audio PC] Dynamic sync: target duration {_target_duration:.3f}s requires {required_rate:.0f} Hz")
+
+            # Now resample from source rate to required rate, then to mixer freq
+            # Actually, we resample directly to mixer freq but adjust sample count
+            # to achieve target duration: target_samples = mixer_freq * target_duration
+            target_sample_count = int(mixer_freq * _target_duration)
+            print(f"[Audio PC] Resampling {sample_count} samples to {target_sample_count} samples for {_target_duration:.3f}s playback")
+
+            # Resample to target sample count
+            signed_samples = _resample_audio_to_count(signed_samples, target_sample_count)
+            sample_count = len(signed_samples)
+
+            # Clear target duration after use
+            _target_duration = None
+        elif sample_rate != mixer_freq:
             print(f"[Audio PC] Resampling from {sample_rate} Hz to {mixer_freq} Hz")
             signed_samples = _resample_audio(signed_samples, sample_rate, mixer_freq)
             # Update sample_count for resampled audio
