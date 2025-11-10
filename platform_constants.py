@@ -1,4 +1,6 @@
 # platform_constants.py - Platform-specific constants
+import os
+
 try:
     from micropython import const
 except ImportError:
@@ -8,10 +10,15 @@ except ImportError:
 
 class PlatformConstants:
     """All platform-specific constants in one place"""
-    
+
     def __init__(self, is_thumby_color):
+        # Detect if running on PC
+        is_running_on_pc = os.environ.get('RUNNING_ON_PC') == '1'
+
         if is_thumby_color:
             # ThumbyColor constants (128x128)
+            # On PC, use current directory; on hardware, use /Games/ThumbCommander/
+            self.GAME_PATH = "" if is_running_on_pc else "/Games/ThumbCommander/"
             self.WIDTH = const(128)
             self.HEIGHT = const(128)
             self.CENTER_X = const(64)
@@ -85,6 +92,8 @@ class PlatformConstants:
             
         else:
             # Original Thumby constants (72x40)
+            # On PC, use current directory; on hardware, use /Games/ThumbCommander/
+            self.GAME_PATH = "" if is_running_on_pc else "/Games/ThumbCommander/"
             self.WIDTH = const(72)
             self.HEIGHT = const(40)
             self.CENTER_X = const(36)

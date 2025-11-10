@@ -121,6 +121,17 @@ def main():
 
     # Set environment variable to force ThumbyColor mode
     os.environ['FORCE_THUMBY_COLOR'] = '1'
+    # Set PC mode flag so platform_constants can adjust paths
+    os.environ['RUNNING_ON_PC'] = '1'
+
+    # HACK: Monkey-patch builtins.open to redirect /Games/ThumbCommander/ paths to current directory
+    import builtins
+    _original_open = builtins.open
+    def patched_open(file, mode='r', *args, **kwargs):
+        if isinstance(file, str) and file.startswith('/Games/ThumbCommander/'):
+            file = file.replace('/Games/ThumbCommander/', '')
+        return _original_open(file, mode, *args, **kwargs)
+    builtins.open = patched_open
 
     # Now import and run the game
     # We need to be careful here because the game modifies sys.path
@@ -128,6 +139,11 @@ def main():
         # The game expects to be run from its directory
         # Import the main game module
         import ThumbCommander
+
+        # IMPORTANT: Override the hardcoded path with current directory for PC
+        # The game sets loc = "/Games/ThumbCommander/" which doesn't exist on PC
+        # We need to fix this after import but the module code already ran...
+        # So this needs a different approach - see below
     except Exception as e:
         print(f"Error running game: {e}")
         import traceback
