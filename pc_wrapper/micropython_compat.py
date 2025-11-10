@@ -121,3 +121,57 @@ builtins.micropython = micropython_module
 
 # Install const as a builtin so it can be used directly (needed for const(4) in methods)
 builtins.const = const
+
+# Patch array module to support 'O' typecode (object arrays) used in MicroPython
+import array as _array_module
+_original_array = _array_module.array
+
+class MicroPythonArray:
+    """Array wrapper that supports MicroPython's 'O' typecode for object arrays"""
+    def __init__(self, typecode, initializer=None):
+        if typecode == 'O':
+            # Object array - just use a list
+            self._is_object_array = True
+            self._data = list(initializer) if initializer is not None else []
+        else:
+            # Use standard array for other types
+            self._is_object_array = False
+            if initializer is not None:
+                self._data = _original_array(typecode, initializer)
+            else:
+                self._data = _original_array(typecode)
+
+    def __getitem__(self, index):
+        return self._data[index]
+
+    def __setitem__(self, index, value):
+        self._data[index] = value
+
+    def __len__(self):
+        return len(self._data)
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def append(self, value):
+        if self._is_object_array:
+            self._data.append(value)
+        else:
+            self._data.append(value)
+
+    def extend(self, iterable):
+        if self._is_object_array:
+            self._data.extend(iterable)
+        else:
+            self._data.extend(iterable)
+
+    def __repr__(self):
+        if self._is_object_array:
+            return f"array('O', {self._data!r})"
+        return repr(self._data)
+
+# Replace array.array with our wrapper
+_array_module.array = MicroPythonArray
+
+# Also install it in builtins for direct import
+builtins.array = MicroPythonArray
