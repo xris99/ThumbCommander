@@ -51,15 +51,35 @@ PC_WRAPPER_DIR = os.path.join(SCRIPT_DIR, 'pc_wrapper')
 sys.path.insert(0, PC_WRAPPER_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
-# CRITICAL: Monkey-patch builtins.open BEFORE importing any modules
+# CRITICAL: Monkey-patch file operations BEFORE importing any modules
 # This redirects /Games/ThumbCommander/ paths to current directory
 import builtins
+
+# Patch open()
 _original_open = builtins.open
 def patched_open(file, mode='r', *args, **kwargs):
     if isinstance(file, str) and file.startswith('/Games/ThumbCommander/'):
         file = file.replace('/Games/ThumbCommander/', '')
     return _original_open(file, mode, *args, **kwargs)
 builtins.open = patched_open
+
+# Patch os.stat() (used by cutscene_utils to check if file exists)
+# cutscene_utils does: from os import stat
+# So we need to patch it in the os module before cutscene_utils is imported
+_original_stat = os.stat
+def patched_stat(path, *args, **kwargs):
+    if isinstance(path, str) and path.startswith('/Games/ThumbCommander/'):
+        path = path.replace('/Games/ThumbCommander/', '')
+    return _original_stat(path, *args, **kwargs)
+os.stat = patched_stat
+
+# Also patch other file operations that might be used
+_original_exists = os.path.exists
+def patched_exists(path):
+    if isinstance(path, str) and path.startswith('/Games/ThumbCommander/'):
+        path = path.replace('/Games/ThumbCommander/', '')
+    return _original_exists(path)
+os.path.exists = patched_exists
 
 # Import and setup MicroPython compatibility BEFORE any game imports
 # Note: micropython_compat automatically installs itself in sys.modules
