@@ -1288,7 +1288,7 @@ def menu():
             if IS_THUMBY_COLOR:
                 display.draw_fullwidth_sprite(menu_sprite,4,0)
                 if i==0:
-                    display.drawText("Asteroid Dodge", 09, 56, PC.SELECT)
+                    display.drawText("Asteroid Dodge", 9, 56, PC.SELECT)
                     display.drawText("Dog Fight", 32, 82, PC.UNSELECT)
                     display.drawText("Campaigns", 31, 109, PC.UNSELECT)
                     display.drawRectangle(1,49,125,25,PC.ORANGE)
