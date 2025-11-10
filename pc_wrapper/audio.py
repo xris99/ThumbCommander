@@ -29,7 +29,7 @@ def _ensure_pygame():
             mixer_init = pygame.mixer.get_init()
             if not mixer_init:
                 # Initialize pygame.mixer at 15625 Hz (hardware sample rate)
-                pygame.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=1024)
+                pygame.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=512)
                 try:
                     pygame.mixer.init()
                     print(f"[Audio PC] Initialized pygame.mixer at 15625 Hz")

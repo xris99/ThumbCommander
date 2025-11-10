@@ -21,7 +21,7 @@ def _ensure_pygame():
             # IMPORTANT: Initialize mixer at 15625 Hz BEFORE pygame.init()
             # This must match the frequency in pc_wrapper/audio.py
             # pygame.mixer can only be initialized ONCE, so we do it here first
-            pg.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=1024)
+            pg.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=512)
             try:
                 pg.init()
                 print("[Display] Pygame initialized (mixer at 15625 Hz for cutscene sync)", flush=True)
