@@ -154,6 +154,18 @@ def main():
     # Set PC mode flag so platform_constants can adjust paths
     os.environ['RUNNING_ON_PC'] = '1'
 
+    # Check if FPS calibration is needed (first run)
+    # This must be done BEFORE importing ThumbCommander
+    try:
+        from pc_wrapper import fps_calibration
+        if not os.path.exists(fps_calibration.SETTINGS_FILE):
+            print("\n[Launcher] First run detected - running FPS calibration...")
+            correction_factor = fps_calibration.get_fps_correction()
+            print(f"[Launcher] Calibration complete. Starting game...\n")
+    except Exception as e:
+        print(f"[Launcher] Warning: FPS calibration failed: {e}")
+        print(f"[Launcher] Game will run with default settings")
+
     # Now import and run the game
     # We need to be careful here because the game modifies sys.path
     try:

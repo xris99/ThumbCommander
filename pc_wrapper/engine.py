@@ -4,6 +4,8 @@ Provides compatibility with ThumbyColor engine module timing and input
 """
 
 import time
+import os
+import json
 
 # FPS control
 _fps_limit_value = 60
@@ -11,6 +13,30 @@ _fps_limit_period_ms = 1000.0 / 60.0  # milliseconds per frame
 # Use perf_counter for high-precision timing (not time.time() which returns int on MicroPython)
 _last_tick_time = time.perf_counter()
 _fps_limit_enabled = True
+
+# FPS calibration correction factor
+_fps_correction_factor = None
+_fps_correction_loaded = False
+_SETTINGS_FILE = ".pc_wrapper_settings.json"
+
+def _load_fps_correction():
+    """Load FPS correction factor from settings file"""
+    global _fps_correction_factor, _fps_correction_loaded
+
+    if _fps_correction_loaded:
+        return
+
+    _fps_correction_loaded = True
+
+    if os.path.exists(_SETTINGS_FILE):
+        try:
+            with open(_SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+                if 'fps_correction' in settings:
+                    _fps_correction_factor = settings['fps_correction']
+                    print(f"[Engine] Loaded FPS correction factor: {_fps_correction_factor:.4f}")
+        except Exception as e:
+            print(f"[Engine] Failed to load FPS correction: {e}")
 
 # Import button update function for input polling
 try:
@@ -40,9 +66,20 @@ def fps_limit(fps=None):
     global _fps_limit_value, _fps_limit_period_ms, _fps_limit_enabled
 
     if fps is not None:
+        # Load correction factor if not already loaded
+        _load_fps_correction()
+
+        # Store the requested FPS (what game asked for)
         _fps_limit_value = fps
+
         if fps > 0:
-            _fps_limit_period_ms = 1000.0 / fps
+            # Apply correction factor to compensate for rendering overhead
+            if _fps_correction_factor is not None:
+                corrected_fps = fps * _fps_correction_factor
+                _fps_limit_period_ms = 1000.0 / corrected_fps
+                print(f"[Engine] FPS limit: {fps} → {corrected_fps:.2f} (corrected)")
+            else:
+                _fps_limit_period_ms = 1000.0 / fps
             _fps_limit_enabled = True
         else:
             _fps_limit_enabled = False
