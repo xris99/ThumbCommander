@@ -18,23 +18,15 @@ def _ensure_pygame():
         try:
             import pygame as pg
             import os
-            # IMPORTANT: Initialize mixer BEFORE pygame.init() to set audio parameters
-            # Using 8000 Hz to match sound effects speed (FXEngine at 8000 Hz is correct)
-            # Cutscene audio (15625 Hz) will be resampled down to play slower
-            # Reinitializing pygame.mixer breaks Channel playback on macOS!
-            # Try real audio hardware first, fall back to dummy if that fails
-            pg.mixer.pre_init(frequency=8000, size=-16, channels=1, buffer=512)
+            # IMPORTANT: Initialize mixer at 15625 Hz BEFORE pygame.init()
+            # This must match the frequency in pc_wrapper/audio.py
+            # pygame.mixer can only be initialized ONCE, so we do it here first
+            pg.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=1024)
             try:
                 pg.init()
-                print("[Audio] Pygame initialized at 8000 Hz with real audio hardware", flush=True)
+                print("[Display] Pygame initialized (mixer at 15625 Hz for cutscene sync)", flush=True)
             except Exception as e:
-                # Real audio failed, try dummy mode
-                print(f"[Audio] Real audio hardware failed ({e}), falling back to dummy mode", flush=True)
-                os.environ['SDL_AUDIODRIVER'] = 'dummy'
-                pg.mixer.quit()  # Clean up failed attempt
-                pg.mixer.pre_init(frequency=8000, size=-16, channels=1, buffer=512)
-                pg.init()
-                print("[Audio] Pygame initialized at 8000 Hz with dummy audio driver", flush=True)
+                print(f"[Display] Pygame initialization failed: {e}", flush=True)
             pygame = pg
             _pygame_initialized = True
         except ImportError as e:
