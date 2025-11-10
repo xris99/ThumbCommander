@@ -5,8 +5,9 @@ Automatically measures rendering overhead and calculates FPS correction factor
 
 import os
 import json
-import time
+import time as _stdlib_time  # Use stdlib time explicitly to avoid utime conflict
 import struct
+from datetime import datetime
 
 SETTINGS_FILE = ".pc_wrapper_settings.json"
 
@@ -98,9 +99,9 @@ def calibrate_fps():
         cutscene_utils.audio_load = None
         
         # Measure actual playback time
-        start = time.perf_counter()
+        start = _stdlib_time.perf_counter()
         cutscene_utils.play_cutscene_animation(video_file, fps=target_fps, frame_callback=None)
-        actual_duration = time.perf_counter() - start
+        actual_duration = _stdlib_time.perf_counter() - start
         
         # Restore audio
         cutscene_utils.audio_load = original_audio_load
@@ -144,7 +145,7 @@ def get_fps_correction():
     # Save settings
     settings = {
         'fps_correction': correction,
-        'calibration_date': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'calibration_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'version': '1.0'
     }
     save_settings(settings)
