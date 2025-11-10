@@ -51,6 +51,16 @@ PC_WRAPPER_DIR = os.path.join(SCRIPT_DIR, 'pc_wrapper')
 sys.path.insert(0, PC_WRAPPER_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
+# CRITICAL: Monkey-patch builtins.open BEFORE importing any modules
+# This redirects /Games/ThumbCommander/ paths to current directory
+import builtins
+_original_open = builtins.open
+def patched_open(file, mode='r', *args, **kwargs):
+    if isinstance(file, str) and file.startswith('/Games/ThumbCommander/'):
+        file = file.replace('/Games/ThumbCommander/', '')
+    return _original_open(file, mode, *args, **kwargs)
+builtins.open = patched_open
+
 # Import and setup MicroPython compatibility BEFORE any game imports
 # Note: micropython_compat automatically installs itself in sys.modules
 import pc_wrapper.micropython_compat
@@ -123,15 +133,6 @@ def main():
     os.environ['FORCE_THUMBY_COLOR'] = '1'
     # Set PC mode flag so platform_constants can adjust paths
     os.environ['RUNNING_ON_PC'] = '1'
-
-    # HACK: Monkey-patch builtins.open to redirect /Games/ThumbCommander/ paths to current directory
-    import builtins
-    _original_open = builtins.open
-    def patched_open(file, mode='r', *args, **kwargs):
-        if isinstance(file, str) and file.startswith('/Games/ThumbCommander/'):
-            file = file.replace('/Games/ThumbCommander/', '')
-        return _original_open(file, mode, *args, **kwargs)
-    builtins.open = patched_open
 
     # Now import and run the game
     # We need to be careful here because the game modifies sys.path
