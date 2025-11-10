@@ -41,16 +41,16 @@ def create_cancel_callback():
 
 def play_cutscene_animation(filename, fps=20, frame_callback=None):
     """Play 8-bit delta compressed cutscene with synchronized audio support."""
-
+    
     if display is None:
         print("Error: cutscene_utils not initialized")
         return
-
+    
     display.setFPS(fps)
-
+    
     # Check for corresponding audio file
     audio_playing = False
-
+    
     if audio_load:
         # Convert filename to .ima audio
         base_name = filename.rsplit('.', 2)[0]  # Remove .COL.bin
@@ -59,37 +59,6 @@ def play_cutscene_animation(filename, fps=20, frame_callback=None):
             # Check if audio file exists
             stat(audio_filename)
             print(f"Found audio file: {audio_filename}")
-
-            # PC WRAPPER: Calculate required audio playback rate based on video duration
-            # Read video header to get frame count
-            try:
-                with open(filename, 'rb') as vf:
-                    magic = vf.read(4)
-                    if magic == b'TDL8':
-                        width, height, frame_count = struct.unpack('<HHH', vf.read(6))
-                        expected_video_duration = frame_count / fps
-
-                        # Read audio header to get sample count
-                        with open(audio_filename, 'rb') as af:
-                            audio_magic = af.read(4)
-                            if audio_magic == b'IMAA':
-                                audio_sample_rate = struct.unpack('<I', af.read(4))[0]
-                                audio_sample_count = struct.unpack('<I', af.read(4))[0]
-
-                                # Calculate required audio rate for perfect sync
-                                required_audio_rate = audio_sample_count / expected_video_duration
-
-                                print(f"[Cutscene Sync] Video: {frame_count} frames @ {fps} FPS = {expected_video_duration:.3f}s")
-                                print(f"[Cutscene Sync] Audio: {audio_sample_count} samples, original rate {audio_sample_rate} Hz")
-                                print(f"[Cutscene Sync] Required audio rate for sync: {required_audio_rate:.0f} Hz")
-
-                                # Set target duration in audio module for dynamic resampling
-                                import sys
-                                if 'audio' in sys.modules:
-                                    sys.modules['audio'].set_target_duration(expected_video_duration)
-            except Exception as sync_err:
-                print(f"[Cutscene Sync] Could not calculate sync (will use default): {sync_err}")
-
             audio_load(audio_filename)
             audio_play()
             audio_playing = True
