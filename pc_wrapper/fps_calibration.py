@@ -7,7 +7,6 @@ import os
 import json
 import time as _stdlib_time  # Use stdlib time explicitly to avoid utime conflict
 import struct
-from datetime import datetime
 
 SETTINGS_FILE = ".pc_wrapper_settings.json"
 
@@ -145,7 +144,7 @@ def get_fps_correction():
     # Save settings
     settings = {
         'fps_correction': correction,
-        'calibration_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'calibration_date': _stdlib_time.strftime('%Y-%m-%d %H:%M:%S', _stdlib_time.localtime()),
         'version': '1.0'
     }
     save_settings(settings)
