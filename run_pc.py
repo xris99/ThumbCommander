@@ -51,6 +51,12 @@ PC_WRAPPER_DIR = os.path.join(SCRIPT_DIR, 'pc_wrapper')
 sys.path.insert(0, PC_WRAPPER_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
+# CRITICAL: Backup stdlib time module BEFORE any patches
+# This is needed by fps_calibration.py which needs real time.strftime()
+import time as _stdlib_time_backup
+sys.modules['_stdlib_time_backup'] = _stdlib_time_backup
+print("[Launcher] Backed up stdlib time module as '_stdlib_time_backup'", flush=True)
+
 # CRITICAL: Monkey-patch file operations BEFORE importing any modules
 # This redirects /Games/ThumbCommander/ paths to current directory
 import builtins

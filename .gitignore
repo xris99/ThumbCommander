@@ -10,3 +10,4 @@ __pycache__/
 dist/
 build/
 .claude/settings.local.json
+.pc_wrapper_settings.json

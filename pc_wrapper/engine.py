@@ -26,14 +26,13 @@ def _load_fps_correction():
     if _fps_correction_loaded:
         return
 
-    _fps_correction_loaded = True
-
     if os.path.exists(_SETTINGS_FILE):
         try:
             with open(_SETTINGS_FILE, 'r') as f:
                 settings = json.load(f)
                 if 'fps_correction' in settings:
                     _fps_correction_factor = settings['fps_correction']
+                    _fps_correction_loaded = True  # Only set after successful load
                     print(f"[Engine] Loaded FPS correction factor: {_fps_correction_factor:.4f}")
         except Exception as e:
             print(f"[Engine] Failed to load FPS correction: {e}")

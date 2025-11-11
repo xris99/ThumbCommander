@@ -5,8 +5,15 @@ Automatically measures rendering overhead and calculates FPS correction factor
 
 import os
 import json
-import time as _stdlib_time  # Use stdlib time explicitly to avoid utime conflict
+import sys
 import struct
+
+# Import the backed-up stdlib time module that was saved in run_pc.py
+# This avoids the utime patching issue
+_stdlib_time = sys.modules.get('_stdlib_time_backup')
+if _stdlib_time is None:
+    # Fallback if not run through launcher (e.g., direct testing)
+    import time as _stdlib_time
 
 SETTINGS_FILE = ".pc_wrapper_settings.json"
 
