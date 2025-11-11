@@ -11,3 +11,5 @@ dist/
 build/
 .claude/settings.local.json
 .pc_wrapper_settings.json
+keymap.json
+campaign_saves.json

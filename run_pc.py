@@ -87,6 +87,16 @@ def patched_exists(path):
     return _original_exists(path)
 os.path.exists = patched_exists
 
+# Patch os.listdir() (used by campaign_engine to find campaign files)
+_original_listdir = os.listdir
+def patched_listdir(path='.'):
+    if isinstance(path, str) and path.startswith('/Games/ThumbCommander/'):
+        path = path.replace('/Games/ThumbCommander/', '')
+        if not path:  # If path becomes empty, use current directory
+            path = '.'
+    return _original_listdir(path)
+os.listdir = patched_listdir
+
 # Import and setup MicroPython compatibility BEFORE any game imports
 # Note: micropython_compat automatically installs itself in sys.modules
 import pc_wrapper.micropython_compat
