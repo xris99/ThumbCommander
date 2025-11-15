@@ -569,8 +569,8 @@ class Enemies:
             elif (e[0] < -(PC.SPACE_WIDTH*3<<16)): e[0] = PC.SPACE_WIDTH<<16
             if (e[0] > (PC.SPACE_WIDTH<<16)) or (e[0] < -(PC.SPACE_WIDTH<<16)): e[14] = False #visible = False
             
-            if (e[1] > (PC.SPACE_HEIGHT*3<<16)): e[1] = -(PC.SPACE_HEIGHT>>1<<16)
-            elif (e[1] < -(PC.SPACE_HEIGHT*3<<16)): e[1] = PC.SPACE_HEIGHT>>1<<16
+            if (e[1] > (PC.SPACE_HEIGHT*3<<16)): e[1] = -(PC.SPACE_HEIGHT<<16)
+            elif (e[1] < -(PC.SPACE_HEIGHT*3<<16)): e[1] = PC.SPACE_HEIGHT<<16
             if (e[1] > (PC.SPACE_HEIGHT<<16)) or (e[1] < -(PC.SPACE_HEIGHT<<16)): e[14] = False #visible = False
                 
             # adjust x-y-z-axis if enemy moves behind and in front of me
@@ -578,7 +578,7 @@ class Enemies:
                 e[2] += e[13]
                 e[14] = True #visible = True
                 e[0] = e[0] % (PC.SPACE_WIDTH<<16)
-                e[1] = e[1] % (PC.SPACE_HEIGHT>>1<<16)
+                e[1] = e[1] % (PC.SPACE_HEIGHT<<16)
             elif (e[14]): e[2] = abs(e[2]) # if visible
             else: e[2] = -abs(e[2])
             
@@ -798,14 +798,27 @@ class Pilot:
                 if self.state in [Pilot.INTERCEPT, Pilot.ENGAGE] and self.state_timer > 30:
                     self.state = Pilot.GET_BEHIND  # Priority: get behind
                     
-        else:  # Behind player (z < 0)
-            dist_behind = abs(z_pos)
-            if dist_behind > (30<<16):  # Too far behind
-                self.state = Pilot.INTERCEPT
-            elif dist_behind < (10<<16):  # Too close behind
-                self.state = Pilot.GET_BEHIND  # Back off
-            else:  # Good chase position (10-30 units behind)
-                self.state = Pilot.CHASE
+        else:  # Behind player (z <= 8)
+            # FIX: Use signed comparisons with hysteresis
+            # Target position: -20 to -25 units behind player
+
+            if self.state == Pilot.CHASE:
+                # Already in CHASE - use wider thresholds (hysteresis)
+                if z_pos > -(15<<16):  # Closer than -15 (very close)
+                    self.state = Pilot.GET_BEHIND
+                elif z_pos < -(30<<16):  # Farther than -30 (too far)
+                    self.state = Pilot.INTERCEPT
+                # else: stay in CHASE (between -30 and -15)
+            else:
+                # Not in CHASE - use narrower thresholds to enter
+                if z_pos > 0:  # In front
+                    self.state = Pilot.GET_BEHIND
+                elif z_pos > -(18<<16):  # Closer than -18 but behind
+                    self.state = Pilot.GET_BEHIND
+                elif z_pos < -(28<<16):  # Farther than -28
+                    self.state = Pilot.INTERCEPT
+                else:  # Between -28 and -18 - enter CHASE
+                    self.state = Pilot.CHASE
         
         # State timeouts
         if self.state == Pilot.PATROL and self.state_timer > 60:
@@ -905,26 +918,86 @@ class Pilot:
     
     @micropython.native
     def do_chase(self):
-        """Maintain optimal rear attack position"""
-        dist_behind = abs(self.enemy[2])
-        x_offset = abs(self.enemy[0]) >> 16
-        
-        # Distance management
-        if dist_behind < (15<<16):  # Too close
-            self.target_orientation_x = 3
+        """Maintain optimal rear attack position with hysteresis"""
+        z_pos = self.enemy[2]
+        x_pos = self.enemy[0]
+        x_offset = abs(x_pos) >> 16
+
+        # Hysteresis in distance management
+        # Target distance: -20 to -25 units behind player
+        # Less negative = closer to player
+
+        if z_pos > -(20<<16):  # Too close (less negative than -20)
+            # Back away (go more negative)
+            self.target_orientation_x = 3  # Backward
             self.enemy[5] = 6<<16
-        elif dist_behind > (25<<16):  # Too far
-            self.target_orientation_x = 9
+        elif z_pos < -(25<<16):  # Too far (more negative than -25)
+            # Speed up to catch player (less negative)
+            self.target_orientation_x = 9  # Forward
             self.enemy[5] = 14<<16
-        else:  # Good distance
-            # Center behind player
-            if x_offset > (PC.SPACE_WIDTH//4):
-                self.target_orientation_x = 8 if self.enemy[0] > 0 else 10
-            else:
+        else:  # Good distance (between 20 and 25)
+            # Maintain position with lateral adjustments (X and Y)
+            # HYSTERESIS: 5-unit "good" range prevents constant corrections
+
+            # Get Y position and offsets for tracking
+            y_pos = self.enemy[1]
+            y_offset = abs(y_pos) >> 16
+
+            # Prioritize correction based on which axis is more off-center
+            x_priority = x_offset > y_offset
+
+            if x_priority and x_offset > 5:  # X-axis needs primary correction
+                # Actively center behind player (X-axis)
+                if x_offset > (PC.SPACE_WIDTH//3):
+                    # Far from center - strong lateral correction
+                    self.target_orientation_x = 10 if x_pos > 0 else 8  # 10=left, 8=right
+                    # Also apply Y correction if needed
+                    if y_offset > (PC.SPACE_HEIGHT//4):
+                        self.target_orientation_y = 5 if y_pos > 0 else 7
+                    else:
+                        self.target_orientation_y = 6
+                    self.enemy[5] = 12<<16
+                elif x_offset > (PC.SPACE_WIDTH//6):
+                    # Moderate offset - gentle correction
+                    self.target_orientation_x = 10 if x_pos > 0 else 8
+                    if y_offset > (PC.SPACE_HEIGHT//4):
+                        self.target_orientation_y = 5 if y_pos > 0 else 7
+                    else:
+                        self.target_orientation_y = 6
+                    self.enemy[5] = 10<<16
+                else:
+                    # Small X offset - use forward thrust with corrections
+                    self.target_orientation_x = 9
+                    if y_offset > (PC.SPACE_HEIGHT//4):
+                        self.target_orientation_y = 5 if y_pos > 0 else 7
+                    else:
+                        self.target_orientation_y = 6
+                    self.enemy[5] = 10<<16
+
+            elif not x_priority and y_offset > 5:  # Y-axis needs primary correction
+                # Actively center behind player (Y-axis)
+                # Use forward thrust with vertical tilt for Y movement
+                if y_offset > (PC.SPACE_HEIGHT//3):
+                    # Far from vertical center - strong correction
+                    self.target_orientation_x = 9  # Forward thrust needed for Y movement
+                    self.target_orientation_y = 5 if y_pos > 0 else 7
+                    self.enemy[5] = 12<<16
+                elif y_offset > (PC.SPACE_HEIGHT//6):
+                    # Moderate vertical offset
+                    self.target_orientation_x = 9
+                    self.target_orientation_y = 5 if y_pos > 0 else 7
+                    self.enemy[5] = 10<<16
+                else:
+                    # Small vertical offset
+                    self.target_orientation_x = 9
+                    self.target_orientation_y = 5 if y_pos > 0 else 7
+                    self.enemy[5] = 10<<16
+
+            else:  # Well centered in both axes
+                # Maintain position with slight forward bias
                 self.target_orientation_x = 9
-            self.enemy[5] = 10<<16
-        
-        self.target_orientation_y = 6
+                self.target_orientation_y = 6
+                self.enemy[5] = 10<<16
     
     @micropython.native
     def apply_turning(self):
