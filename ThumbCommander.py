@@ -148,7 +148,7 @@ def fpmul_a(a:int, b:int) -> int:
     
 @micropython.viper
 def fpdiv(a:int, b:int) -> int:
-    return ((a << 6) // (b >> 6)) << 4
+    return a if (b >> 6) == 0 else ((a << 6) // (b >> 6)) << 4
 
 @micropython.viper
 def fpdiv_a(a:int, b:int) -> int:
@@ -156,7 +156,7 @@ def fpdiv_a(a:int, b:int) -> int:
 
 @micropython.viper
 def fpdiv_b(a:int, b:int) -> int:
-    return ((a << 3) // (b >> 3)) << 10 # TODO: 4 and 8 for Thumby!
+    return a if (b >> 3) == 0 else ((a << 3) // (b >> 3)) << 10 # TODO: 4 and 8 for Thumby!
   
 # calc x,y on screen
 @micropython.viper
@@ -542,7 +542,8 @@ class Enemies:
             e = self.enemies[i]
             # set visible
             e[14] = True
-            
+            z_old = e[2]
+
             # move in x,y,z-axis forward
             for c in range(2):
                 # xy displacement based on player_angle * player_speed
@@ -564,23 +565,26 @@ class Enemies:
                 e[0] = rotate_z_x1(e[0], e[1], player_angle[2])
                 e[1] = rotate_z_y1(e[0], e[1], player_angle[2])
             
-            # move through known space    
+            # wrap X,Y at boundaries
             if (e[0] > (PC.SPACE_WIDTH*3<<16)): e[0] = -(PC.SPACE_WIDTH<<16)
             elif (e[0] < -(PC.SPACE_WIDTH*3<<16)): e[0] = PC.SPACE_WIDTH<<16
-            if (e[0] > (PC.SPACE_WIDTH<<16)) or (e[0] < -(PC.SPACE_WIDTH<<16)): e[14] = False #visible = False
-            
             if (e[1] > (PC.SPACE_HEIGHT*3<<16)): e[1] = -(PC.SPACE_HEIGHT<<16)
             elif (e[1] < -(PC.SPACE_HEIGHT*3<<16)): e[1] = PC.SPACE_HEIGHT<<16
-            if (e[1] > (PC.SPACE_HEIGHT<<16)) or (e[1] < -(PC.SPACE_HEIGHT<<16)): e[14] = False #visible = False
-                
-            # adjust x-y-z-axis if enemy moves behind and in front of me
-            if (e[2] < 0) and ((e[2] + e[13]) > 0):
-                e[2] += e[13]
-                e[14] = True #visible = True
-                e[0] = e[0] % (PC.SPACE_WIDTH<<16)
-                e[1] = e[1] % (PC.SPACE_HEIGHT<<16)
-            elif (e[14]): e[2] = abs(e[2]) # if visible
-            else: e[2] = -abs(e[2])
+
+            # z crossed → adjust coordinates
+            if (z_old > 0) != (e[2] > 0):
+                if e[2] <= 0:  # to back: only X shifts
+                    if abs(e[0]) <= (PC.SPACE_WIDTH<<16):
+                        e[0] -= (PC.SPACE_WIDTH*2<<16) if e[0] >= 0 else -(PC.SPACE_WIDTH*2<<16)
+                else:  # to front: X and Y shift if in back
+                    if abs(e[0]) > (PC.SPACE_WIDTH<<16):
+                        e[0] -= (PC.SPACE_WIDTH*2<<16) if e[0] >= 0 else -(PC.SPACE_WIDTH*2<<16)
+                    if abs(e[1]) > (PC.SPACE_HEIGHT<<16):
+                        e[1] -= (PC.SPACE_HEIGHT*2<<16) if e[1] >= 0 else -(PC.SPACE_HEIGHT*2<<16)
+
+            # visibility + z sign based on region
+            e[14] = abs(e[0]) <= (PC.SPACE_WIDTH<<16) and abs(e[1]) <= (PC.SPACE_HEIGHT<<16)
+            e[2] = abs(e[2]) if e[14] else -abs(e[2])
             
             # if space in z axis is ending change ship's x-orientation by 180°
             if (e[2] > (70<<16)) or (e[2] < (-70<<16)):
@@ -644,9 +648,12 @@ class Enemies:
                                 e[5] = e[6] = 0
                                 if (fx): fx.play(FXEngine.EXPLODE_SH)
                             break
-            # calc and draw radar
-            x = (((abs(e[2])>>3) * fpcos((e[0]>>19)-256))>>32) + 7
-            y = (((abs(e[2])>>3) * fpsin((e[0]>>19)-256))>>32) + 7
+            # calc and draw radar - sqrt scaling for better small distance visibility
+            zd = abs(e[2]) + 1; rd = (zd >> 10) + 1
+            rd = (rd + zd//rd) >> 1; rd = (rd + zd//rd) >> 1; rd = (rd + zd//rd) >> 1
+            ra = ((e[0] * 6554) >> 32) - 256  # correct scaling: 256 angle units per SPACE_WIDTH
+            x = (((rd << 8) * fpcos(ra))>>32) + 7
+            y = (((rd << 8) * fpsin(ra))>>32) + 7
             height = (e[1]>>16) // 700
             color = PC.HUD_SELECT if e[8] == 1 else PC.HUD_UNSELECT
             if IS_THUMBY_COLOR:
@@ -674,7 +681,7 @@ class Enemies:
             for myLaser in e[9]:
                 if myLaser.run(): e[9].remove(myLaser)
                 else:
-                    if myLaser.z < (8<<16) and (-512<<16 < myLaser.x < 512<<16) and (-300<<16 < myLaser.y < 300<<16):
+                    if 0 < myLaser.z < (8<<16) and (-512<<16 < myLaser.x < 512<<16) and (-300<<16 < myLaser.y < 300<<16):
                         lifes -= 1
                         display.drawFilledRectangle(0,0,WIDTH, HEIGHT, PC.HIT_COLOR)
                         if (rumble): rumble(200)
@@ -798,27 +805,14 @@ class Pilot:
                 if self.state in [Pilot.INTERCEPT, Pilot.ENGAGE] and self.state_timer > 30:
                     self.state = Pilot.GET_BEHIND  # Priority: get behind
                     
-        else:  # Behind player (z <= 8)
-            # FIX: Use signed comparisons with hysteresis
-            # Target position: -20 to -25 units behind player
-
-            if self.state == Pilot.CHASE:
-                # Already in CHASE - use wider thresholds (hysteresis)
-                if z_pos > -(15<<16):  # Closer than -15 (very close)
-                    self.state = Pilot.GET_BEHIND
-                elif z_pos < -(30<<16):  # Farther than -30 (too far)
-                    self.state = Pilot.INTERCEPT
-                # else: stay in CHASE (between -30 and -15)
-            else:
-                # Not in CHASE - use narrower thresholds to enter
-                if z_pos > 0:  # In front
-                    self.state = Pilot.GET_BEHIND
-                elif z_pos > -(18<<16):  # Closer than -18 but behind
-                    self.state = Pilot.GET_BEHIND
-                elif z_pos < -(28<<16):  # Farther than -28
-                    self.state = Pilot.INTERCEPT
-                else:  # Between -28 and -18 - enter CHASE
-                    self.state = Pilot.CHASE
+        else:  # Behind player (z < 0)
+            dist_behind = abs(z_pos)
+            if dist_behind > (30<<16):  # Too far behind
+                self.state = Pilot.INTERCEPT
+            elif dist_behind < (10<<16):  # Too close behind
+                self.state = Pilot.GET_BEHIND  # Back off
+            else:  # Good chase position (10-30 units behind)
+                self.state = Pilot.CHASE
         
         # State timeouts
         if self.state == Pilot.PATROL and self.state_timer > 60:
@@ -918,86 +912,31 @@ class Pilot:
     
     @micropython.native
     def do_chase(self):
-        """Maintain optimal rear attack position with hysteresis"""
-        z_pos = self.enemy[2]
-        x_pos = self.enemy[0]
-        x_offset = abs(x_pos) >> 16
+        """Maintain optimal rear attack position"""
+        dist_behind = abs(self.enemy[2])
+        x_offset = abs(self.enemy[0]) >> 16
+        y_offset = abs(self.enemy[1]) >> 16
 
-        # Hysteresis in distance management
-        # Target distance: -20 to -25 units behind player
-        # Less negative = closer to player
-
-        if z_pos > -(20<<16):  # Too close (less negative than -20)
-            # Back away (go more negative)
-            self.target_orientation_x = 3  # Backward
+        # Distance management
+        if dist_behind < (15<<16):  # Too close
+            self.target_orientation_x = 3
             self.enemy[5] = 6<<16
-        elif z_pos < -(25<<16):  # Too far (more negative than -25)
-            # Speed up to catch player (less negative)
-            self.target_orientation_x = 9  # Forward
+        elif dist_behind > (25<<16):  # Too far
+            self.target_orientation_x = 9
             self.enemy[5] = 14<<16
-        else:  # Good distance (between 20 and 25)
-            # Maintain position with lateral adjustments (X and Y)
-            # HYSTERESIS: 5-unit "good" range prevents constant corrections
-
-            # Get Y position and offsets for tracking
-            y_pos = self.enemy[1]
-            y_offset = abs(y_pos) >> 16
-
-            # Prioritize correction based on which axis is more off-center
-            x_priority = x_offset > y_offset
-
-            if x_priority and x_offset > 5:  # X-axis needs primary correction
-                # Actively center behind player (X-axis)
-                if x_offset > (PC.SPACE_WIDTH//3):
-                    # Far from center - strong lateral correction
-                    self.target_orientation_x = 10 if x_pos > 0 else 8  # 10=left, 8=right
-                    # Also apply Y correction if needed
-                    if y_offset > (PC.SPACE_HEIGHT//4):
-                        self.target_orientation_y = 5 if y_pos > 0 else 7
-                    else:
-                        self.target_orientation_y = 6
-                    self.enemy[5] = 12<<16
-                elif x_offset > (PC.SPACE_WIDTH//6):
-                    # Moderate offset - gentle correction
-                    self.target_orientation_x = 10 if x_pos > 0 else 8
-                    if y_offset > (PC.SPACE_HEIGHT//4):
-                        self.target_orientation_y = 5 if y_pos > 0 else 7
-                    else:
-                        self.target_orientation_y = 6
-                    self.enemy[5] = 10<<16
-                else:
-                    # Small X offset - use forward thrust with corrections
-                    self.target_orientation_x = 9
-                    if y_offset > (PC.SPACE_HEIGHT//4):
-                        self.target_orientation_y = 5 if y_pos > 0 else 7
-                    else:
-                        self.target_orientation_y = 6
-                    self.enemy[5] = 10<<16
-
-            elif not x_priority and y_offset > 5:  # Y-axis needs primary correction
-                # Actively center behind player (Y-axis)
-                # Use forward thrust with vertical tilt for Y movement
-                if y_offset > (PC.SPACE_HEIGHT//3):
-                    # Far from vertical center - strong correction
-                    self.target_orientation_x = 9  # Forward thrust needed for Y movement
-                    self.target_orientation_y = 5 if y_pos > 0 else 7
-                    self.enemy[5] = 12<<16
-                elif y_offset > (PC.SPACE_HEIGHT//6):
-                    # Moderate vertical offset
-                    self.target_orientation_x = 9
-                    self.target_orientation_y = 5 if y_pos > 0 else 7
-                    self.enemy[5] = 10<<16
-                else:
-                    # Small vertical offset
-                    self.target_orientation_x = 9
-                    self.target_orientation_y = 5 if y_pos > 0 else 7
-                    self.enemy[5] = 10<<16
-
-            else:  # Well centered in both axes
-                # Maintain position with slight forward bias
+        else:  # Good distance
+            # Center behind player in X
+            if x_offset > (PC.SPACE_WIDTH//4):
+                self.target_orientation_x = 8 if self.enemy[0] > 0 else 10
+            else:
                 self.target_orientation_x = 9
-                self.target_orientation_y = 6
-                self.enemy[5] = 10<<16
+            self.enemy[5] = 10<<16
+
+        # Center behind player in Y
+        if y_offset > (PC.SPACE_HEIGHT//4):
+            self.target_orientation_y = 8 if self.enemy[1] > 0 else 4
+        else:
+            self.target_orientation_y = 6
     
     @micropython.native
     def apply_turning(self):
@@ -1042,12 +981,10 @@ class Pilot:
         
         vel_x = (self.enemy[11] * 2) + error_x
         vel_y = (self.enemy[12] * 2) + error_y
-        vel_z = (self.enemy[13] * 3)
-        if self.enemy[2] < (7<<16):
-            vel_z = abs(vel_z)
+        vel_z = (self.enemy[13] * 4)
         self.enemy[9].append(Laser(self.enemy[0], self.enemy[1], self.enemy[2], 
                                   vel_x, vel_y, vel_z))
- 
+
 class Ship:
     def __init__(self):
         # Platform-specific cockpit sprite
@@ -1254,29 +1191,41 @@ class Laser:
     
     @micropython.native    
     def run(self):
+        z_old = self.z
         # move in x,y,z-axis forward
         self.x += self.vel_x
         self.y += self.vel_y
         self.z += self.vel_z
         
+        self.x += (player_angle[0] * player_speed) >> 16
+        self.y += (player_angle[1] * player_speed) >> 16
+
+        # wrap X,Y at boundaries
         if (self.x > (PC.SPACE_WIDTH*3<<16)): self.x = -(PC.SPACE_WIDTH<<16)
         elif (self.x < -(PC.SPACE_WIDTH*3<<16)): self.x = PC.SPACE_WIDTH<<16
-
         if (self.y > (PC.SPACE_HEIGHT*4<<16)): self.y = -(PC.SPACE_HEIGHT>>1<<16)
         elif (self.y < -(PC.SPACE_HEIGHT*4<<16)): self.y = PC.SPACE_HEIGHT>>1<<16
 
+        # z crossed → adjust coordinates
+        if (z_old > 0) != (self.z > 0):
+            if self.z <= 0:  # to back: only X shifts
+                if abs(self.x) <= (PC.SPACE_WIDTH<<16):
+                    self.x -= (PC.SPACE_WIDTH*2<<16) if self.x >= 0 else -(PC.SPACE_WIDTH*2<<16)
+            else:  # to front: X and Y shift if in back
+                if abs(self.x) > (PC.SPACE_WIDTH<<16):
+                    self.x -= (PC.SPACE_WIDTH*2<<16) if self.x >= 0 else -(PC.SPACE_WIDTH*2<<16)
+                if abs(self.y) > (PC.SPACE_HEIGHT<<16):
+                    self.y -= (PC.SPACE_HEIGHT*2<<16) if self.y >= 0 else -(PC.SPACE_HEIGHT*2<<16)
+
         if (self.x > (PC.SPACE_WIDTH<<16)) or (self.x < -(PC.SPACE_WIDTH<<16)) or (self.y > (PC.SPACE_HEIGHT>>1<<16)) or (self.y < -(PC.SPACE_HEIGHT>>1<<16)):
             pass
-        else:
-            self.x += (player_angle[0] * player_speed) >> 16
-            self.y += (player_angle[1] * player_speed) >> 16
-                    
+        else:     
             self.screen_pos_x = project_a(self.x, self.z, CENTER_X, 0)
             self.screen_pos_y = project_a(self.y, self.z, CENTER_Y, 0)
             self.space = fp2int(fpdiv(Z_DISTANCE<<16, fpmul(13107, self.z)))
             self.size = fp2int(fpdiv(Z_DISTANCE<<16, fpmul(52429, self.z)))
             self.draw()
-        return (self.z > (60<<16)) or (self.z < 0)
+        return (self.z > (60<<16)) or (self.z < -(60<<16))
         
     @micropython.native    
     def draw(self):

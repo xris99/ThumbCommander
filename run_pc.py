@@ -15,34 +15,6 @@ import os
 print(f"[Launcher] Python version: {sys.version}", flush=True)
 print(f"[Launcher] Platform: {sys.platform}", flush=True)
 
-# CRITICAL: Set multiprocessing start method BEFORE any other imports
-# This must be done before pygame or any module that might use multiprocessing
-# NOTE: Do NOT call get_start_method() before set_start_method() - it locks the method!
-import multiprocessing as mp
-
-if sys.platform == 'darwin':
-    # macOS: Force 'fork' method (needed for audio_loop function to be accessible in child process)
-    # Note: macOS may show warnings about Core Foundation, but 'fork' is required for
-    # the audio decoder process to access the audio_loop function
-    try:
-        mp.set_start_method('fork', force=True)
-        print("[Launcher] Forced multiprocessing to use 'fork' method on macOS", flush=True)
-    except Exception as e:
-        print(f"[Launcher] ERROR: Could not force fork method: {e}", flush=True)
-        print(f"[Launcher] WARNING: Audio may not work properly with spawn method", flush=True)
-elif sys.platform != 'win32':
-    # Linux/Unix: Use fork (default)
-    try:
-        mp.set_start_method('fork', force=False)
-        print("[Launcher] Set multiprocessing to use 'fork' method", flush=True)
-    except RuntimeError:
-        pass  # Already set
-else:
-    print(f"[Launcher] Windows: Using default spawn method", flush=True)
-
-# Now safe to check the method
-print(f"[Launcher] Multiprocessing start method: {mp.get_start_method()}", flush=True)
-
 # Get the directory containing this script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -187,6 +159,7 @@ def main():
     try:
         # The game expects to be run from its directory
         # Import the main game module
+        #import ThumbCommander_unified_camera
         import ThumbCommander
 
         # IMPORTANT: Override the hardcoded path with current directory for PC
