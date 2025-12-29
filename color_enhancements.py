@@ -10,79 +10,26 @@ PC = get_constants(True)  # Force ThumbyColor constants
 
 print("Loading ThumbyColor enhancements...")
 
-# Enhanced visual effects using full resolution
-def draw_engine_trail(display, x, y, intensity):
-    """Draw engine exhaust trail"""
-    # Multiple layers for better effect
-    trail_length = int(10 * intensity)
-    
-    for i in range(trail_length):
-        # Fade color from white to blue to nothing
-        fade = 1.0 - (i / trail_length)
-        
-        if fade > 0.7:
-            color = display.WHITE
-        elif fade > 0.4:
-            color = display.LASER_BLUE
-        else:
-            color = 0x000F  # Very dim blue
-        
-        # Random spread for flame effect
-        offset_x = randint(-2, 2)
-        display.setPixel(x + offset_x, y + i, color)
-
-
-# Store original methods
-original_enemies_run = Enemies.run
-
-# Enhanced enemy rendering
-def enhanced_enemies_run(self, laser=[], mission_phase_complete=False):
-    """Enhanced enemy rendering with color coding"""
-    # Call original
-    original_enemies_run(self, laser, mission_phase_complete)
-    
-    # Add additional effects
-    for enemy in self.enemies:
-        if enemy[6] != 0 and enemy[2] > 0:  # Not exploding and visible
-            # Add engine glow for enemies
-            mySprite = getSprite(enemy[2], enemy[6])
-            x = project_a(enemy[0], enemy[2], CENTER_X, mySprite.scaledWidth)
-            y = project_a(enemy[1], enemy[2], CENTER_Y, mySprite.scaledHeight)
-            
-            if 0 <= x < PC.WIDTH and 0 <= y < PC.HEIGHT:
-                # Enemy engine glow (purple)
-                glow_x = x + mySprite.scaledWidth // 2
-                glow_y = y + mySprite.scaledHeight - 5
-                display.drawFilledRectangle(glow_x - 2, glow_y, 4, 3, display.ENEMY_PURPLE)
-
 def draw_half_circle_energy(display, x_center, y_center, radius, energy, max_energy=5):
-    from math import pi, sin, cos
-    full_angle_rad = pi  # 180 degrees
-
-    min_angle = 0.5  # Minimal visible arc in radians for 0 energy
-    angle_span = min_angle + (full_angle_rad - min_angle) * (energy / max_energy)
-
-    start_angle = pi - angle_span / 2
-    end_angle = pi + angle_span / 2
-
-    t = energy / max_energy  # Interpolation factor for color
-    if t < 0.5:
+    energy_fp = (energy << 16) // max_energy
+    angle_span = 81 + ((431 * energy_fp) >> 16)
+    start_angle = 512 - (angle_span >> 1)
+    end_angle = 512 + (angle_span >> 1)
+    if energy_fp < 32768:
         red = 31
-        green = int(2 * t * 63)
+        green = (energy_fp * 126) >> 16
     else:
-        red = int((1 - 2 * (t - 0.5)) * 31)
+        red = ((65536 - energy_fp) * 62) >> 16
         green = 63
     color = (red << 11) | (green << 5)
-  
     for i in range(51):
-        angle = start_angle + (end_angle - start_angle) * i / 50
-        x = int(x_center + radius * sin(angle))
-        y = int(y_center + radius * cos(angle)) 
-        display.drawFilledRectangle(x, y,2,2, color)  # Draw a pixel; adjust color if needed
+        angle = start_angle + ((end_angle - start_angle) * i) // 50
+        display.drawFilledRectangle(x_center + ((radius * fpsin(angle)) >> 16),
+                                    y_center + ((radius * fpcos(angle)) >> 16), 2, 2, color)
 
 def draw_hull_status(display, lifes_left):
     # Lives indicator with icons
-    display.drawText("HULL:", 5, 10, display.LIGHTGRAY)
+    display.drawText("HULL:", 5, 10, PC.LIGHTGRAY)
     for i in range(5):
         # Filled life icon
         display.drawFilledRectangle(35 + i*8, 10, 6, 6, PC.GREEN if i < lifes_left else PC.DARKGRAY)
