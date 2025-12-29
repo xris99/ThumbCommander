@@ -5,7 +5,6 @@ from platform_constants import get_constants
 from engine_draw import back_fb
 from  engine import time_to_next_tick, tick, fps_limit
 import framebuf
-import _thread
 from machine import Timer, Pin
 
 timer = Timer()
@@ -32,42 +31,24 @@ def _norumble(thisTimer):
 
 class ColorDisplay:
     """Native resolution ThumbyColor display using internal buffer"""
-    
-    # Color definitions
-    BLACK = 0x0000
-    WHITE = 0xFFFF
-    DARKGRAY = 0x4208
-    LIGHTGRAY = 0xBDF7
-    
-    # Game-specific colors
-    SPACE_BLACK = 0x0000
-    STAR_WHITE = 0xFFFF
-    LASER_RED = 0xF800
-    LASER_GREEN = 0x07E0
-    LASER_BLUE = 0x001F
-    SHIELD_CYAN = 0x07FF
-    EXPLOSION_ORANGE = 0xFD20
-    ENEMY_PURPLE = 0x8010
-    ASTEROID_BROWN = 0x8410
-    HUD_BLUE = 0x001F
-    
+
     def __init__(self):
-        self.width = PC.WIDTH
-        self.height = PC.HEIGHT
-        
         # Get the engine's framebuffer
         self.engine_fb = back_fb()
-        
+
         # Create our own internal buffer for viper operations
-        self.buffer_size = self.width * self.height * 2  # 2 bytes per pixel for RGB565
-        self.buffer = bytearray(self.buffer_size)
-        
+        self.buffer = bytearray(PC.WIDTH * PC.HEIGHT * 2)  #2 bytes per pixel for RGB565
+
         # Create a framebuffer object from our buffer for blitting
-        self.internal_fb = framebuf.FrameBuffer(self.buffer, self.width, self.height, framebuf.RGB565)
-        
+        self.internal_fb = framebuf.FrameBuffer(self.buffer, PC.WIDTH, PC.HEIGHT, framebuf.RGB565)
+
+        # Pre-allocate lookup tables for scaled sprites (max 128 pixels)
+        self._x_table = array('H', [0] * 128)
+        self._y_table = array('H', [0] * 128)
+
         # Font setup
         self.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
-        
+
         fps_limit(PC.FPS)
     
     def fill(self, color):
@@ -76,8 +57,7 @@ class ColorDisplay:
     
     def setPixel(self, x, y, color):
         """Set a single pixel"""
-        if 0 <= x < self.width and 0 <= y < self.height:
-            self.internal_fb.pixel(x, y, color)
+        self.internal_fb.pixel(x, y, color)
     
     def drawFilledRectangle(self, x, y, width, height, color):
         """Draw filled rectangle"""
@@ -95,227 +75,132 @@ class ColorDisplay:
         """Draw text"""
         self.internal_fb.text(text, x, y, color)      
     
-    
     def drawSprite(self, sprite):
         if sprite.key == -1:  # No transparency
             self.internal_fb.blit(sprite.sprite_fb, sprite.x, sprite.y)
         else:
             self.internal_fb.blit(sprite.sprite_fb, sprite.x, sprite.y, sprite.key)
-      
+    
+    @micropython.native  
     def drawSpriteWithScale(self, sprite):
-        """Draw scaled sprite"""
-        # Scaled or mirrored - use our viper blit
-        self.blitScaled(sprite.frame_view, sprite.x, sprite.y, 
-                         sprite.scaledWidth, sprite.scaledHeight, sprite.key,
-                         1 if sprite.mirrorX else 0, 1 if sprite.mirrorY else 0, 
-                         fpdiv(256<<16, sprite.scale)>>16, sprite.width, sprite.height)
+        """Draw scaled sprite with viper-optimized lookup tables"""
+        width = sprite.scaledWidth
+        height = sprite.scaledHeight
+        realWidth = sprite.width
+        scale = fpdiv(256<<16, sprite.scale)>>16
 
+        # Fill pre-allocated tables in viper (no Python allocation)
+        self._fillLookupTables(self._x_table, self._y_table, width, height, scale,
+                               1 if sprite.mirrorX else 0, 1 if sprite.mirrorY else 0)
+
+        self._blitWithTables(sprite.frame_view, sprite.x, sprite.y, width, height,
+                             sprite.key, self._x_table, self._y_table, realWidth)
 
     @micropython.viper
-    def blitScaled(self, src_data, x:int, y:int, width:int, height:int, key:int, 
-                   mirrorX:int, mirrorY:int, scale:int, realWidth:int, realHeight:int):
-        """Efficient scaled blit using viper for sprites"""
-        if x + width < 0 or x >= 128:
+    def _fillLookupTables(self, x_table, y_table, width:int, height:int, scale:int, mirrorX:int, mirrorY:int):
+        """Fill lookup tables in viper - no Python allocation"""
+        xt = ptr16(x_table)
+        yt = ptr16(y_table)
+
+        if mirrorX:
+            w1 = width - 1
+            x = 0
+            while x < width:
+                xt[x] = ((w1 - x) * scale) >> 8
+                x += 1
+        else:
+            x = 0
+            while x < width:
+                xt[x] = (x * scale) >> 8
+                x += 1
+
+        if mirrorY:
+            h1 = height - 1
+            y = 0
+            while y < height:
+                yt[y] = ((h1 - y) * scale) >> 8
+                y += 1
+        else:
+            y = 0
+            while y < height:
+                yt[y] = (y * scale) >> 8
+                y += 1
+
+    @micropython.viper
+    def _blitWithTables(self, src_data, x:int, y:int, width:int, height:int, key:int,
+                        x_table, y_table, realWidth:int):
+        """Optimized blit using pre-computed lookup tables"""
+        if x + width < 0 or x >= 128 or y + height < 0 or y >= 128:
             return
-        if y + height < 0 or y >= 128:
-            return
-        
+
         fb = ptr16(self.buffer)
         src = ptr16(src_data)
-        
+        xt = ptr16(x_table)
+        yt = ptr16(y_table)
+
         xStart = int(x)
         yStart = int(y)
-        
+
         # Clipping
-        yFirst = 0 - yStart
+        yFirst = 0
+        if yStart < 0:
+            yFirst = -yStart
         blitHeight = height
-        if yFirst < 0:
-            yFirst = 0
         if yStart + height > 128:
             blitHeight = 128 - yStart
-        
-        xFirst = 0 - xStart
+
+        xFirst = 0
+        if xStart < 0:
+            xFirst = -xStart
         blitWidth = width
-        if xFirst < 0:
-            xFirst = 0
         if xStart + width > 128:
             blitWidth = 128 - xStart
-        
-        y = yFirst
-        while y < blitHeight:
-            x = xFirst
-            src_y = (((height - 1 - y if mirrorY == 1 else y) * scale) >> 8)
-            
-            # Bounds check for source y
-            #if src_y >= realHeight:
-            #    y += 1
-            #    continue
-            
-            # Calculate source row offset once per row
-            src_row_offset = src_y * realWidth
-            
-            # Calculate destination row offset once per row
-            dst_row_offset = (yStart + y) * 128 + xStart
-            
-            while x < blitWidth:
-                # Calculate source x coordinate
-                src_x = (((width - 1 - x if mirrorX == 1 else x) * scale) >> 8)
-                
-                # Bounds check for source x
-                if src_x < realWidth:
-                    # Get pixel from source
-                    pixel = src[src_row_offset + src_x]
-                    
-                    # Check transparency (key color)
-                    if pixel != key:
-                        # Write to framebuffer
-                        fb[dst_row_offset + x] = pixel
-                
-                x += 1
-            y += 1
 
+        # Main blit loop with table lookups (no per-pixel arithmetic)
+        dy = yFirst
+        while dy < blitHeight:
+            src_row = yt[dy] * realWidth
+            dst_row = (yStart + dy) * 128 + xStart
+            dx = xFirst
+            while dx < blitWidth:
+                pixel = src[src_row + xt[dx]]
+                if pixel != key:
+                    fb[dst_row + dx] = pixel
+                dx += 1
+            dy += 1
+
+    @micropython.native  
     def draw_sprite_from_file(self, filename, x=0, y=0, key=-1):
         try:
             with open(filename, 'rb') as f:
-                # Read header
-                header = f.read(8)
-                width, height, frame_count, flags = struct.unpack('<HHHH', header)
+                # Read header (4 bytes: width + height as uint16)
+                header = f.read(4)
+                width, height = struct.unpack('<HH', header)
+                f.read(4)  # Skip frame count and flags
                 self._stream_sprite_to_fb(f, x, y, width, height, key)
                 return True
         except Exception as e:
             print(f"Error drawing sprite from file {filename}: {e}")
             return False
-        finally:
-            if (f): f.close()
-    
-    @micropython.viper
-    def _stream_sprite_to_fb(self, file_handle, x:int, y:int, width:int, height:int, key:int):
-        fb = ptr16(self.buffer)
-        screen_width = int(self.width)
-        screen_height = int(self.height)
-        
-        # Calculate clipping bounds
-        start_x = int(x)
-        start_y = int(y)
-        end_x = start_x + int(width)
-        end_y = start_y + int(height)
-        
-        # Clip to screen bounds
-        skip_left = 0
-        skip_top = 0
-        
-        if start_x < 0:
-            skip_left = -start_x
-            start_x = 0
-        if start_y < 0:
-            skip_top = -start_y
-            start_y = 0
-        if end_x > screen_width:
-            end_x = screen_width
-        if end_y > screen_height:
-            end_y = screen_height
-        
-        draw_width = end_x - start_x
-        draw_height = end_y - start_y
-        
-        if draw_width <= 0 or draw_height <= 0:
-            return
-        
-        # Create a row buffer (in Python, before viper section)
-        bytes_per_row = int(width) * 2
-        row_buffer = bytearray(bytes_per_row)
-        
-        # Skip rows that are above the screen
-        if skip_top > 0:
-            file_handle.seek(8 + skip_top * bytes_per_row)
-        
-        # Read and draw each visible row
-        for row in range(int(draw_height)):
-            # Read one row of pixels
-            file_handle.readinto(row_buffer)
-            
-            # Process this row
-            row_ptr = ptr16(row_buffer)
-            dest_y = start_y + row
-            dest_offset = dest_y * screen_width + start_x
-            
-            for col in range(int(draw_width)):
-                src_col = skip_left + col
-                pixel = row_ptr[src_col]
-                
-                # Check transparency
-                if int(key) == -1 or pixel != int(key):
-                    fb[dest_offset + col] = pixel
 
-    def draw_fullwidth_sprite(self, filename, y=0, key=-1):
-        """ Draw a full-width sprite with optional transparency support."""
-        try:
-            with open(filename, 'rb') as f:
-                # Read header
-                header = f.read(8)
-                width, height, frame_count, flags = struct.unpack('<HHHH', header)
-                # Verify sprite is full width
-                if width != 128:
-                    print(f"Error: Sprite width {width} != 128")
-                    return False
-                # Calculate how many rows to draw
-                rows_to_draw = min(height, 128 - y)
-                if rows_to_draw <= 0:
-                    return False  
-                if key == -1:
-                    # No transparency - use direct streaming (fastest)
-                    fb_offset = y * 256
-                    fb_view = memoryview(self.buffer)[fb_offset:fb_offset + (rows_to_draw * 256)]
-                    f.readinto(fb_view)
-                else:
-                    # With transparency - process in chunks
-                    self._draw_fullwidth_sprite_with_key(f, y, width, rows_to_draw, key)  
-                return True            
-        except Exception as e:
-            print(f"Error drawing fullwidth sprite: {e}")
-            return False
-        finally:
-            if (f):
-                f.close()
-            else:
-                print("Error closeing file handle")
-              
-    def _draw_fullwidth_sprite_with_key(self, file_handle, y, width, height, key):
-        """ Draw sprite with transparency using row-by-row processing."""
-        # Process multiple rows at once for efficiency
-        ROWS_PER_CHUNK = const(4)  # Process 4 rows at a time (1KB chunks for 128px width)
-        
-        row_bytes = width * 2  # 2 bytes per pixel for RGB565
-        chunk_bytes = row_bytes * ROWS_PER_CHUNK
-        chunk_buffer = bytearray(chunk_bytes)
-        
-        rows_processed = 0
-        
-        while rows_processed < height:
-            # Calculate rows to read in this chunk
-            rows_to_read = min(ROWS_PER_CHUNK, height - rows_processed)
-            actual_bytes = rows_to_read * row_bytes
-            
-            # Read chunk into buffer
-            chunk_view = memoryview(chunk_buffer)[:actual_bytes]
-            file_handle.readinto(chunk_view)
-            
-            # Create temporary framebuffer for this chunk
-            chunk_fb = framebuf.FrameBuffer(chunk_view, width, rows_to_read, framebuf.RGB565)
-            
-            # Blit with transparency to main buffer
-            self.internal_fb.blit(chunk_fb, 0, y + rows_processed, key)
-            rows_processed += rows_to_read
-        del chunk_buffer
-      
+    @micropython.native  
+    def _stream_sprite_to_fb(self, file_handle, x, y, width, height, key):
+        row_bytes = width * 2
+        row_buffer = bytearray(row_bytes)
+        row_fb = framebuf.FrameBuffer(row_buffer, width, 1, framebuf.RGB565)
+        for row in range(height):
+            file_handle.readinto(row_buffer)
+            self.internal_fb.blit(row_fb, x, y + row, key)
+
+    @micropython.native    
     def update(self):
         """Update display by blitting internal buffer to engine framebuffer"""
         while (time_to_next_tick() > 0):
-          pass
+            pass
+        tick()
         # Blit our internal buffer to the engine's framebuffer
         self.engine_fb.blit(self.internal_fb, 0, 0) 
-        tick()
-    
+        
     def show(self):
         """Alias for update()"""
         self.update()
@@ -409,7 +294,8 @@ class ColorSprite:
         
         # Create framebuffer for this sprite (for non-scaled blitting)
         self.sprite_fb = framebuf.FrameBuffer(self.frame_data, self.width, self.height, framebuf.RGB565)
-  
+    
+    @micropython.native  
     def setFrame(self, frame):
         """Set animation frame efficiently using seek"""
         if frame == self.currentFrame:
@@ -425,6 +311,7 @@ class ColorSprite:
             # Read frame data directly into buffer
             self.file_handle.readinto(self.frame_data)
     
+    @micropython.native  
     def setScale(self, scale):
         """Set sprite scale in fixed point"""
         self.scale = fpmul(scale, PC.SPRITE_SCALE)
