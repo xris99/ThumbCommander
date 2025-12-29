@@ -689,301 +689,113 @@ class Enemies:
                         e[9].remove(myLaser)
 
 class Pilot:
-    # States
-    PATROL = const(0)
-    INTERCEPT = const(1) 
-    ENGAGE = const(2)
-    EVADE = const(3)
-    GET_BEHIND = const(4)
-    CHASE = const(5)
-    
+    PATROL, INTERCEPT, ENGAGE, EVADE, GET_BEHIND, CHASE = 0, 1, 2, 3, 4, 5
+    _EVADE_PATTERN = ((2,3), (6,9), (10,3), (6,9))
+
     def __init__(self, enemy):
         self.enemy = enemy
         self.timer = 0
-        self.freq = 10  
-        self.triggerhappy = randint(3, 6)
-        self.lucky = randint(4, 8)
-        
-        # State machine
-        self.state = Pilot.PATROL
         self.state_timer = 0
-        self.prev_state = Pilot.PATROL
-        
-        # Targeting - start facing player
+        self.state = 0
         self.target_orientation_x = 3 if enemy[2] > 0 else 9
         self.target_orientation_y = 6
-        
-        # Threat assessment
-        self.threat_level = 0
         self.last_health = enemy[7]
         self.damage_timer = 0
-        
-        # Personality traits (0.3-0.8 range for aggression, 0.6-1.0 for skill)
-        self.aggression = 19660 + randint(0, 32768)  # 0.3 to 0.8
-        self.skill = 39322 + randint(0, 26214)  # 0.6 to 1.0
-        
-        # Maneuver direction
-        self.flank_side = choice([0, 1])  # 0=left, 1=right
-        
+        self.skill = 39322 + randint(0, 26214)
+        self.flank_side = randint(0, 1)
+
     @micropython.native
     def run(self):
         self.timer += 1
-        
-        # Update at pilot frequency
-        if (self.timer >= (FPS // self.freq)):
-            self.timer = 0
-            self.state_timer += 1
-            
-            # Update assessments
-            self.update_threat_level()
-            self.update_state()
-            
-            # Execute state behavior
-            if self.state == Pilot.PATROL:
-                self.do_patrol()
-            elif self.state == Pilot.INTERCEPT:
-                self.do_intercept()
-            elif self.state == Pilot.ENGAGE:
-                self.do_engage()
-            elif self.state == Pilot.EVADE:
-                self.do_evade()
-            elif self.state == Pilot.GET_BEHIND:
-                self.do_get_behind()
-            elif self.state == Pilot.CHASE:
-                self.do_chase()
-            
-            # Apply turning
-            self.apply_turning()
-            
-            # Fire if appropriate
-            if self.should_fire():
-                self.fire_away()
-    
-    @micropython.native
-    def update_threat_level(self):
-        """Calculate threat level"""
+        if self.timer < (FPS // 10): return
+        self.timer = 0
+        self.state_timer += 1
+        z_pos = self.enemy[2]
+
+        # Threat check
+        threat = 0
         if self.enemy[7] < self.last_health:
-            self.threat_level = 58982  # 0.9
-            self.damage_timer = 30
-            self.last_health = self.enemy[7]
+            threat = 3; self.damage_timer = 30; self.last_health = self.enemy[7]
         elif self.damage_timer > 0:
-            self.damage_timer -= 1
-            self.threat_level = 39322  # 0.6
-        else:
-            z_pos = self.enemy[2]
-            if z_pos < 0:  # Behind player
-                self.threat_level = 6553  # 0.1
-            elif z_pos < (20<<16):  # Very close front
-                self.threat_level = 45875  # 0.7
-            elif z_pos < (40<<16):  # Medium range front
-                self.threat_level = 26214  # 0.4
-            else:
-                self.threat_level = 6553  # 0.1
-    
-    @micropython.native
-    def update_state(self):
-        """Simplified state machine"""
-        health = self.enemy[7]
-        z_pos = self.enemy[2]
-        
+            self.damage_timer -= 1; threat = 2
+        elif 0 < z_pos < (20<<16):
+            threat = 2
+
+        # State transitions
         old_state = self.state
-        
-        # Emergency evasion override
-        if health < 3 and self.threat_level > 39322 and self.state != Pilot.EVADE:
-            if self.state_timer > 10:  # Don't switch too fast
-                self.state = Pilot.EVADE
-                
-        # Position-based state logic
-        elif z_pos > (8<<16):  # In front of player
-            if z_pos > (50<<16):  # Far front
-                if self.state != Pilot.INTERCEPT:
-                    self.state = Pilot.INTERCEPT
-            elif z_pos > (25<<16):  # Medium front
-                if self.state == Pilot.PATROL or self.state_timer > 50:
-                    self.state = Pilot.ENGAGE
-            else:  # Close front (8-25 units)
-                if self.state in [Pilot.INTERCEPT, Pilot.ENGAGE] and self.state_timer > 30:
-                    self.state = Pilot.GET_BEHIND  # Priority: get behind
-                    
-        else:  # Behind player (z < 0)
-            dist_behind = abs(z_pos)
-            if dist_behind > (30<<16):  # Too far behind
-                self.state = Pilot.INTERCEPT
-            elif dist_behind < (10<<16):  # Too close behind
-                self.state = Pilot.GET_BEHIND  # Back off
-            else:  # Good chase position (10-30 units behind)
-                self.state = Pilot.CHASE
-        
-        # State timeouts
-        if self.state == Pilot.PATROL and self.state_timer > 60:
-            self.state = Pilot.INTERCEPT
-        elif self.state == Pilot.EVADE and self.state_timer > 50:
-            self.state = Pilot.GET_BEHIND if z_pos > 0 else Pilot.CHASE
-        elif self.state == Pilot.GET_BEHIND and self.state_timer > 100:
-            self.state = Pilot.ENGAGE  # Timeout fallback
-        
-        # Reset on state change
-        if old_state != self.state:
-            self.state_timer = 0
-            if self.enemy[8] == 1:  # Debug selected enemy
-                print(f"State: {self.state}, Z: {fp2float(z_pos):.1f}")
-    
-    @micropython.native
-    def do_patrol(self):
-        """Random search pattern"""
-        if self.state_timer % 20 == 0:
-            self.target_orientation_x = randint(3, 9)
-            self.target_orientation_y = randint(4, 8)
-        self.enemy[5] = 8<<16
-    
-    @micropython.native
-    def do_intercept(self):
-        """Direct approach to player"""
-        if self.enemy[2] > 0:  # In front
-            self.target_orientation_x = 3  # Face backward toward player
-            self.target_orientation_y = 6
-        else:  # Behind
-            self.target_orientation_x = 9  # Face forward
-            self.target_orientation_y = 6
-        self.enemy[5] = 15<<16
-    
-    @micropython.native
-    def do_engage(self):
-        """Frontal attack with break preparation"""
-        z_pos = self.enemy[2]
-        
-        if z_pos < (18<<16):  # Getting close
-            # Start breaking to side
-            self.target_orientation_x = 5 if self.flank_side else 7
-            self.target_orientation_y = 6
-        else:
-            # Standard attack approach
-            self.target_orientation_x = 3
-            self.target_orientation_y = 6
-        
-        self.enemy[5] = 14<<16
-    
-    @micropython.native
-    def do_evade(self):
-        """Emergency evasion"""
-        # Simple barrel roll pattern
-        phase = (self.state_timer // 15) % 4
-        
-        if phase == 0:
-            self.target_orientation_x = 2
-            self.target_orientation_y = 3
-        elif phase == 1:
-            self.target_orientation_x = 6
-            self.target_orientation_y = 9
-        elif phase == 2:
-            self.target_orientation_x = 10
-            self.target_orientation_y = 3
-        else:
-            self.target_orientation_x = 6
-            self.target_orientation_y = 9
-            
-        self.enemy[5] = 18<<16
-    
-    @micropython.native
-    def do_get_behind(self):
-        """Flanking maneuver or spacing adjustment"""
-        z_pos = self.enemy[2]
-        x_pos = self.enemy[0]
-        
-        if z_pos > (20<<16):  # In front - need to flank
-            # Build lateral distance
-            if abs(x_pos) < (PC.SPACE_WIDTH//2<<16):
-                self.target_orientation_x = 6  # Lateral thrust
-                self.target_orientation_y = 5 if self.flank_side else 7
-            else:  # At side, turn backward
-                self.target_orientation_x = 3  # Backward thrust
-                self.target_orientation_y = 6
-            self.enemy[5] = 18<<16
-            
-        elif z_pos > 0:  # Close front - dive behind
-            self.target_orientation_x = 3  # Full backward
-            self.target_orientation_y = 6
-            self.enemy[5] = 18<<16
-            
-        else:  # Behind but too close
-            self.target_orientation_x = 3  # Back away
-            self.target_orientation_y = 6
+        if self.enemy[7] < 3 and threat > 1 and self.state != 3 and self.state_timer > 10:
+            self.state = 3
+        elif z_pos > (8<<16):
+            if z_pos > (50<<16): self.state = 1
+            elif z_pos > (25<<16) and (old_state == 0 or self.state_timer > 50): self.state = 2
+            elif old_state in (1,2) and self.state_timer > 30: self.state = 4
+        elif z_pos <= 0:
+            dist = abs(z_pos)
+            if dist > (30<<16): self.state = 1
+            elif dist < (10<<16): self.state = 4
+            else: self.state = 5
+        if old_state == 0 and self.state_timer > 60: self.state = 1
+        elif old_state == 3 and self.state_timer > 50: self.state = 4 if z_pos > 0 else 5
+        elif old_state == 4 and self.state_timer > 100: self.state = 2
+        if old_state != self.state: self.state_timer = 0
+
+        # State behaviors
+        if self.state == 0:  # Patrol
+            if self.state_timer % 20 == 0:
+                self.target_orientation_x, self.target_orientation_y = randint(3,9), randint(4,8)
             self.enemy[5] = 8<<16
-    
-    @micropython.native
-    def do_chase(self):
-        """Maintain optimal rear attack position"""
-        dist_behind = abs(self.enemy[2])
-        x_offset = abs(self.enemy[0]) >> 16
-        y_offset = abs(self.enemy[1]) >> 16
-
-        # Distance management
-        if dist_behind < (15<<16):  # Too close
-            self.target_orientation_x = 3
-            self.enemy[5] = 6<<16
-        elif dist_behind > (25<<16):  # Too far
-            self.target_orientation_x = 9
-            self.enemy[5] = 14<<16
-        else:  # Good distance
-            # Center behind player in X
-            if x_offset > (PC.SPACE_WIDTH//4):
-                self.target_orientation_x = 8 if self.enemy[0] > 0 else 10
-            else:
-                self.target_orientation_x = 9
-            self.enemy[5] = 10<<16
-
-        # Center behind player in Y
-        if y_offset > (PC.SPACE_HEIGHT//4):
-            self.target_orientation_y = 8 if self.enemy[1] > 0 else 4
-        else:
+        elif self.state == 1:  # Intercept
+            self.target_orientation_x = 3 if z_pos > 0 else 9
             self.target_orientation_y = 6
-    
-    @micropython.native
-    def apply_turning(self):
-        """Turn by 1 step toward target"""
-        for axis in [3, 4]:
-            target = self.target_orientation_x if axis == 3 else self.target_orientation_y
+            self.enemy[5] = 15<<16
+        elif self.state == 2:  # Engage
+            self.target_orientation_x = (5 if self.flank_side else 7) if z_pos < (18<<16) else 3
+            self.target_orientation_y = 6
+            self.enemy[5] = 14<<16
+        elif self.state == 3:  # Evade
+            self.target_orientation_x, self.target_orientation_y = Pilot._EVADE_PATTERN[(self.state_timer // 15) % 4]
+            self.enemy[5] = 18<<16
+        elif self.state == 4:  # Get behind
+            if z_pos > (20<<16):
+                if abs(self.enemy[0]) < (PC.SPACE_WIDTH//2<<16):
+                    self.target_orientation_x, self.target_orientation_y = 6, (5 if self.flank_side else 7)
+                else:
+                    self.target_orientation_x, self.target_orientation_y = 3, 6
+                self.enemy[5] = 18<<16
+            elif z_pos > 0:
+                self.target_orientation_x, self.target_orientation_y = 3, 6
+                self.enemy[5] = 18<<16
+            else:
+                self.target_orientation_x, self.target_orientation_y = 3, 6
+                self.enemy[5] = 8<<16
+        else:  # Chase
+            dist, x_offset, y_offset = abs(z_pos), abs(self.enemy[0])>>16, abs(self.enemy[1])>>16
+            if dist < (15<<16):
+                self.target_orientation_x = 3; self.enemy[5] = 6<<16
+            elif dist > (25<<16):
+                self.target_orientation_x = 9; self.enemy[5] = 14<<16
+            else:
+                self.target_orientation_x = (8 if self.enemy[0] > 0 else 10) if x_offset > (PC.SPACE_WIDTH//4) else 9
+                self.enemy[5] = 10<<16
+            self.target_orientation_y = (8 if self.enemy[1] > 0 else 4) if y_offset > (PC.SPACE_HEIGHT//4) else 6
+
+        # Turn toward target
+        for axis, target in ((3, self.target_orientation_x), (4, self.target_orientation_y)):
             if self.enemy[axis] != target:
                 diff = (target - self.enemy[axis] + 6) % 12 - 6
                 self.enemy[axis] = (self.enemy[axis] + (1 if diff > 0 else -1)) % 12
-    
-    @micropython.native
-    def should_fire(self):
-        """Determine firing opportunity"""
-        if (self.state_timer % 10) != 0:
-            return False
-        z_pos = self.enemy[2]
-        state = self.state
-        
-        # Chase position - best firing spot
-        if state == Pilot.CHASE:
-            return randint(0, 2) <= 1  # 50% chance
-        
-        # Intercept/Engage - fire when in range
-        if state in [Pilot.INTERCEPT, Pilot.ENGAGE]:
-            if 10<<16 < abs(z_pos) < 35<<16:
-                # Better pilots fire more often
-                threshold = 3 if self.skill > 52428 else 2  # 0.8 skill cutoff
-                return randint(0, self.triggerhappy) <= threshold
-        
-        # Opportunistic shots
-        if abs(z_pos) < 30<<16:
-            return randint(0, self.lucky * 3) == 1
-            
-        return False
-    
-    @micropython.native
-    def fire_away(self):
-        """Fire laser with skill-based accuracy"""
-        error_factor = (1<<16) - self.skill
-        error_x = fpmul(error_factor, randint(-32768, 32768))
-        error_y = fpmul(error_factor, randint(-32768, 32768))
-        
-        vel_x = (self.enemy[11] * 2) + error_x
-        vel_y = (self.enemy[12] * 2) + error_y
-        vel_z = (self.enemy[13] * 4)
-        self.enemy[9].append(Laser(self.enemy[0], self.enemy[1], self.enemy[2], 
-                                  vel_x, vel_y, vel_z))
+
+        # Fire
+        if self.state_timer % 10 == 0:
+            abs_z = abs(z_pos)
+            should_fire = (self.state == 5 and randint(0,2) < 2) or \
+                          (self.state in (1,2) and (10<<16) < abs_z < (35<<16) and randint(0,5) < 3) or \
+                          (abs_z < (30<<16) and randint(0,20) == 0)
+            if should_fire:
+                error_factor = (1<<16) - self.skill
+                vel_x = self.enemy[11]*2 + fpmul(error_factor, randint(-32768,32768))
+                vel_y = self.enemy[12]*2 + fpmul(error_factor, randint(-32768,32768))
+                self.enemy[9].append(Laser(self.enemy[0], self.enemy[1], self.enemy[2], vel_x, vel_y, self.enemy[13]*4))
 
 class Ship:
     def __init__(self):
@@ -1028,6 +840,7 @@ class Ship:
                 self.laser.remove(laser)
         if IS_THUMBY_COLOR:
             display.draw_sprite_from_file(self.cockpit_sprite, self.cockpit_sprite_x, self.cockpit_sprite_y, 0)
+            pass
         else:
             display.drawSprite(self.cockpit_sprite)
         
@@ -1126,7 +939,7 @@ class Ship:
         elif (eval("button" + KEYMAPS[KEY_BREAK]).justPressed() and 
               SHIFT_REQUIRED[KEY_BREAK] == shift_pressed):
             player_speed = 1<<16
-        elif (eval("button" + KEYMAPS[KEY_EJECT]).justPressed() and 
+        elif (eval("button" + KEYMAPS[KEY_EJECT]).pressed() and 
               SHIFT_REQUIRED[KEY_EJECT] == shift_pressed):
             return False
         # Regular actions unchanged
@@ -1308,7 +1121,7 @@ def menu():
             display.fill(PC.BLACK)
             background.run() 
             if IS_THUMBY_COLOR:
-                display.draw_fullwidth_sprite(menu_sprite,4,0)
+                display.draw_sprite_from_file(menu_sprite,y=4,key=0)
                 if i==0:
                     display.drawText("Asteroid Dodge", 9, 56, PC.SELECT)
                     display.drawText("Dog Fight", 32, 82, PC.UNSELECT)
@@ -1648,7 +1461,6 @@ if IS_THUMBY_COLOR:
     collect()
     print(f"After cleanup: {mem_free()}")
     play_cutscene_animation(loc+"title_128_80.COL.bin", 21, create_cancel_callback())
-   
 else:
     # Intro finished
     Intro.finish()
