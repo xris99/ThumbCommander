@@ -2,6 +2,7 @@
 import struct
 from os import stat
 from gc import collect
+from array import array
 from framebuf import FrameBuffer, GS8, RGB565
 
 # These will be injected by platform_loader
@@ -10,34 +11,32 @@ PC = None
 audio_load = None
 audio_play = None
 audio_stop = None
-buttonMENU = None
+buttonCANCEL = None
 
-def init_cutscene_utils(display_ref, pc_ref, audio_load_ref, audio_play_ref, audio_stop_ref, button_menu_ref):
+def init_cutscene_utils(display_ref, pc_ref, audio_load_ref, audio_play_ref, audio_stop_ref, button_cancel_ref):
     """Initialize references - called by platform_loader"""
-    global display, PC, audio_load, audio_play, audio_stop, buttonMENU
+    global display, PC, audio_load, audio_play, audio_stop, buttonCANCEL
     display = display_ref
     PC = pc_ref
     audio_load = audio_load_ref
     audio_play = audio_play_ref
     audio_stop = audio_stop_ref
-    buttonMENU = button_menu_ref
+    buttonCANCEL = button_cancel_ref
+
+class CancelCallback:
+    __slots__ = ('counter',)
+    def __init__(self):
+        self.counter = 0
+    def __call__(self, _):
+        self.counter += 1
+        if self.counter >= 6:
+            self.counter = 0
+            if buttonCANCEL and buttonCANCEL.justPressed():
+                return False
+        return True
 
 def create_cancel_callback():
-    """Create a callback that checks for MENU button to cancel cutscene"""
-    frame_counter = [0]
-    last_check = [False]
-    
-    def cancel_cutscene_callback(frame_idx):
-        frame_counter[0] += 1
-        if frame_counter[0] % 6 == 0:
-            if buttonMENU and buttonMENU.pressed():
-                last_check[0] = True
-                return False
-        elif last_check[0]:
-            return False
-        return True
-    
-    return cancel_cutscene_callback
+    return CancelCallback()
 
 def play_cutscene_animation(filename, fps=20, frame_callback=None):
     """Play 8-bit delta compressed cutscene with synchronized audio support."""
@@ -58,11 +57,9 @@ def play_cutscene_animation(filename, fps=20, frame_callback=None):
         try:
             # Check if audio file exists
             stat(audio_filename)
-            print(f"Found audio file: {audio_filename}")
             audio_load(audio_filename)
             audio_play()
             audio_playing = True
-            print(f"Started audio playback")
         except Exception as e:
             print(f"No audio or failed to play: {e}")
     
@@ -74,7 +71,6 @@ def play_cutscene_animation(filename, fps=20, frame_callback=None):
         if audio_playing:
             try:
                 audio_stop()
-                print("Stopped audio playback")
             except:
                 pass
 
@@ -90,28 +86,27 @@ def _play_8bit_delta_cutscene(filename, frame_callback, fps):
         
         # Read header
         width, height, frame_count = struct.unpack('<HHH', f.read(6))
-        print(f"Playing 8-bit delta cutscene: {width}x{height}, {frame_count} frames")
         
         x = (PC.WIDTH - width) // 2
         y = (PC.HEIGHT - height) // 2
         
+        # Create temporary buffer for streaming (used throughout)
+        temp_buffer = bytearray(4096)
+
         # Read palette (256 RGB565 colors)
         palette_data = bytearray(256 * 2)
         f.readinto(palette_data)
         palette = FrameBuffer(palette_data, 256, 1, RGB565)
-        
-        # Read frame offset table
-        frame_offsets = []
-        for _ in range(frame_count):
-            offset = struct.unpack('<I', f.read(4))[0]
-            frame_offsets.append(offset)
-        
+
+        # Read frame offset table (pre-allocated array, no dynamic list)
+        frame_offsets = array('I', [0] * frame_count)
+        for i in range(frame_count):
+            f.readinto(memoryview(temp_buffer)[0:4])
+            frame_offsets[i] = struct.unpack('<I', temp_buffer[0:4])[0]
+
         # Create persistent 8-bit index buffer
         index_buffer = bytearray(width * height)
         persistent_fb = FrameBuffer(index_buffer, width, height, GS8)
-        
-        # Create temporary buffer for streaming
-        temp_buffer = bytearray(4096)  # 4KB chunk buffer
         
         # Play each frame
         for frame_idx in range(frame_count):
@@ -130,10 +125,8 @@ def _play_8bit_delta_cutscene(filename, frame_callback, fps):
                 # Uncompressed full frame
                 _stream_into_buffer(f, data_size, index_buffer, temp_buffer)
             elif frame_type == b'DLTA':
-                # Delta frame
-                frame_data = f.read(data_size)
-                _apply_8bit_delta(index_buffer, frame_data, width, height)
-                del frame_data
+                # Delta frame - stream using temp_buffer (no allocation)
+                _apply_8bit_delta_stream(f, data_size, index_buffer, temp_buffer)
             elif frame_type == b'SAME':
                 # No changes
                 pass
@@ -144,12 +137,13 @@ def _play_8bit_delta_cutscene(filename, frame_callback, fps):
             display.fill(0)
             display.internal_fb.blit(persistent_fb, x, y, 0, palette)
             
+            display.update()
+            
             # Handle frame callback
             if frame_callback:
                 if not frame_callback(frame_idx):
                     break
             
-            display.update()
             collect()
         
         # Clean up
@@ -175,32 +169,26 @@ def _stream_into_buffer(file_handle, data_size, target_buffer, temp_buffer):
         bytes_read += actual_read
 
 def _rle_decompress_8bit_stream(file_handle, data_size, index_buffer, temp_buffer):
-    """Stream RLE decompression for 8-bit data"""
+    """Stream RLE decompression for 8-bit data - no dynamic allocation"""
     for i in range(len(index_buffer)):
         index_buffer[i] = 0
-    
+
     buf_pos = 0
-    bytes_read = 0
-    chunk_size = len(temp_buffer)
-    remainder = bytearray()
-    
-    while bytes_read < data_size and buf_pos < len(index_buffer):
-        to_read = min(chunk_size, data_size - bytes_read)
-        actual_read = file_handle.readinto(memoryview(temp_buffer)[0:to_read])
-        bytes_read += actual_read
-        
-        if remainder:
-            process_data = remainder + temp_buffer[0:actual_read]
-        else:
-            process_data = memoryview(temp_buffer)[0:actual_read]
-        
-        remainder = bytearray()
-        
+    bytes_remaining = data_size
+    chunk_size = (len(temp_buffer) // 2) * 2  # Multiple of 2 bytes per record
+    remainder_bytes = 0
+
+    while bytes_remaining > 0 and buf_pos < len(index_buffer):
+        to_read = min(chunk_size - remainder_bytes, bytes_remaining)
+        actual_read = file_handle.readinto(memoryview(temp_buffer)[remainder_bytes:remainder_bytes + to_read])
+        bytes_remaining -= actual_read
+        total_bytes = remainder_bytes + actual_read
+
+        # Process complete 2-byte records (index + count)
         i = 0
-        while i + 1 < len(process_data) and buf_pos < len(index_buffer):
-            index = process_data[i]
-            count = process_data[i + 1] + 1
-            
+        while i + 1 < total_bytes and buf_pos < len(index_buffer):
+            index = temp_buffer[i]
+            count = temp_buffer[i + 1] + 1
             for _ in range(count):
                 if buf_pos < len(index_buffer):
                     index_buffer[buf_pos] = index
@@ -208,26 +196,40 @@ def _rle_decompress_8bit_stream(file_handle, data_size, index_buffer, temp_buffe
                 else:
                     break
             i += 2
-        
-        if i < len(process_data):
-            remainder = bytearray(process_data[i:])
 
-def _apply_8bit_delta(index_buffer, delta_data, width, height):
-    """Apply delta changes to 8-bit index buffer"""
-    offset = 0
-    if len(delta_data) < 4:
-        return
-    
-    change_count = struct.unpack('<I', delta_data[offset:offset+4])[0]
-    offset += 4
-    
-    for i in range(change_count):
-        if offset + 5 <= len(delta_data):
-            pixel_idx = struct.unpack('<I', delta_data[offset:offset+4])[0]
-            new_index = delta_data[offset+4]
-            offset += 5
-            
+        # Move remainder to start of buffer
+        remainder_bytes = total_bytes - i
+        if remainder_bytes > 0:
+            temp_buffer[0] = temp_buffer[i]
+
+def _apply_8bit_delta_stream(file_handle, data_size, index_buffer, temp_buffer):
+    """Apply delta changes by streaming - no large allocation"""
+    # Read change count (4 bytes)
+    file_handle.readinto(memoryview(temp_buffer)[0:4])
+    change_count = struct.unpack('<I', temp_buffer[0:4])[0]
+
+    bytes_remaining = data_size - 4
+    chunk_size = (len(temp_buffer) // 5) * 5  # Multiple of 5 bytes per record
+    remainder_bytes = 0
+    changes_processed = 0
+
+    while bytes_remaining > 0 and changes_processed < change_count:
+        to_read = min(chunk_size - remainder_bytes, bytes_remaining)
+        actual_read = file_handle.readinto(memoryview(temp_buffer)[remainder_bytes:remainder_bytes + to_read])
+        bytes_remaining -= actual_read
+        total_bytes = remainder_bytes + actual_read
+
+        # Process complete 5-byte records (4 byte pixel_idx + 1 byte new_index)
+        i = 0
+        while i + 5 <= total_bytes and changes_processed < change_count:
+            pixel_idx = struct.unpack('<I', temp_buffer[i:i+4])[0]
             if pixel_idx < len(index_buffer):
-                index_buffer[pixel_idx] = new_index
-        else:
-            break
+                index_buffer[pixel_idx] = temp_buffer[i+4]
+            i += 5
+            changes_processed += 1
+
+        # Move remainder to start of buffer
+        remainder_bytes = total_bytes - i
+        if remainder_bytes > 0:
+            for j in range(remainder_bytes):
+                temp_buffer[j] = temp_buffer[i + j]
