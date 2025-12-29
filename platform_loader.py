@@ -21,8 +21,6 @@ PC = get_constants(IS_THUMBY_COLOR)
 display = None
 Sprite = None
 rumble = None
-play_cutscene_animation = None
-create_cancel_callback = None
 audio_load = None
 audio_play = None
 audio_stop = None
@@ -34,6 +32,10 @@ audio_clear_end_callback = None
 audio_open_id = None
 audio_play_id = None
 audio_close_ids = None
+
+from cutscene_utils import init_cutscene_utils, play_cutscene_animation as _play_cutscene, create_cancel_callback as _create_cancel
+play_cutscene_animation = _play_cutscene
+create_cancel_callback = _create_cancel
 
 # Platform-specific imports using try/except
 if IS_THUMBY_COLOR:
@@ -69,21 +71,15 @@ if IS_THUMBY_COLOR:
         audio_open_id = open_id
         audio_play_id = play_id
         audio_close_ids = close_ids
-        from cutscene_utils import init_cutscene_utils, play_cutscene_animation as _play_cutscene, create_cancel_callback as _create_cancel
-        init_cutscene_utils(display, PC, audio_load, audio_play, audio_stop, buttonMENU)
-        play_cutscene_animation = _play_cutscene
-        create_cancel_callback = _create_cancel
         print(f"Audio and Color Cutscene initialized. Free memory: {gc.mem_free()}")
     except ImportError as e:
         print(f"Warning: Could not import audio module or color_cutscene: {e}")
   
 # original Thumby
 else:
-    from grayscale import display as _display, Sprite as _Sprite, play_cutscene_animation as _play_cutscene, create_cancel_callback as _create_cancel
+    from grayscale import display as _display, Sprite as _Sprite
     display = _display
     Sprite = _Sprite
-    play_cutscene_animation = _play_cutscene
-    create_cancel_callback = _create_cancel
     buttonA = ButtonClass(swA) # Left (A) button
     buttonB = ButtonClass(swB) # Right (B) button
     buttonU = ButtonClass(swU) # D-pad up
@@ -94,6 +90,7 @@ else:
     buttonRB = buttonR
     buttonMENU = buttonB
 
+init_cutscene_utils(display, PC, audio_load, audio_play, audio_stop, buttonMENU)
 # Platform-specific sprite creation
 def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, scale=1.00):   
     return Sprite(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
