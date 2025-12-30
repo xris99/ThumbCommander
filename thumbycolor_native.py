@@ -1,5 +1,6 @@
 # thumbycolor_native.py 
 from array import array
+import gc
 import struct
 from platform_constants import get_constants
 from engine_draw import back_fb
@@ -335,3 +336,25 @@ class ColorSprite:
 # Set global Sprite class
 Sprite = ColorSprite
 
+def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, scale=1.00):
+    """ThumbyColor version that prioritizes color sprites with memory management"""
+    # Force GC before creating new sprites
+    gc.collect()
+    color_file = ""
+    if isinstance(bitmap_data, tuple) and isinstance(bitmap_data[0], str):
+        base_file = bitmap_data[0]
+        # Calculate output dimensions
+        output_width = int(width * scale)
+        output_height = int(height * scale)
+        color_file = base_file.split("_")[0] + f'_{output_width}_{output_height}.COL.bin'
+    elif isinstance(bitmap_data, str):
+        # Try color version first
+        color_file = bitmap_data
+    else:
+        # Fall back to standard sprite
+        return Sprite(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
+        
+    print(f"Loading sprite: {color_file}")
+    sprite = Sprite(0, 0, color_file, x, y, key, mirrorX, mirrorY)
+    print(f"Free memory after loading Sprite: {gc.mem_free()}")
+    return sprite
