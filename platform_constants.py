@@ -11,7 +11,6 @@ class PlatformConstants:
     def __init__(self, is_thumby_color):
         if is_thumby_color:
             # ThumbyColor constants (128x128)
-            self.GAME_PATH = "/Games/ThumbCommander/"
             self.WIDTH = const(128)
             self.HEIGHT = const(128)
             self.CENTER_X = const(64)
@@ -50,7 +49,6 @@ class PlatformConstants:
             
             # Sprite scaling
             self.SPRITE_SCALE = const(113377)
-            self.COCKPIT_WIDTH = const(118)
             self.COCKPIT_HEIGHT = const(53)
             
             # Performance
@@ -65,14 +63,10 @@ class PlatformConstants:
             self.RED = const(0xF800)
             self.GREEN = const(0x07E0)
             self.BLUELIGHTLIGHT = const(0x633f)
-            self.BLUELIGHT = const(0x297f)
             self.BLUE = const(0x001F)
             self.BLUEDARK = const(0x0016)
             self.BLUEDARKDARK = const(0x0010)
-            self.CYAN = const(0x07FF)
             self.ORANGE = const(0xFD20)
-            self.PURPLE = const(0x8010)
-            self.BROWN = const(0x8410)
             self.YELLOW = const(0xffee)
             self.STARCOLORS = [self.WHITE, self.LIGHTGRAY, self.WHITE, self.LIGHTGRAY, self.YELLOW, self.BLUE, self.BLUELIGHTLIGHT, self.BLUEDARK, self.BLUEDARKDARK]
             self.SELECT = const(61002)
@@ -85,7 +79,6 @@ class PlatformConstants:
             
         else:
             # Original Thumby constants (72x40)
-            self.GAME_PATH = "/Games/ThumbCommander/"
             self.WIDTH = const(72)
             self.HEIGHT = const(40)
             self.CENTER_X = const(36)
@@ -124,7 +117,6 @@ class PlatformConstants:
             
             # Sprite scaling
             self.SPRITE_SCALE = const(1)
-            self.COCKPIT_WIDTH = const(66)
             self.COCKPIT_HEIGHT = const(18)
             
             # Performance
