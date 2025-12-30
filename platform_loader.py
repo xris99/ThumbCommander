@@ -32,10 +32,9 @@ audio_clear_end_callback = None
 audio_open_id = None
 audio_play_id = None
 audio_close_ids = None
-
-from cutscene_utils import init_cutscene_utils, play_cutscene_animation as _play_cutscene, create_cancel_callback as _create_cancel
-play_cutscene_animation = _play_cutscene
-create_cancel_callback = _create_cancel
+play_cutscene_animation = None
+create_cancel_callback = None
+create_sprite = None
 
 # Platform-specific imports using try/except
 if IS_THUMBY_COLOR:
@@ -50,10 +49,11 @@ if IS_THUMBY_COLOR:
     buttonMENU = ButtonClass(engine_io.MENU)
     # Try to import ThumbyColor display and sprite classes
     try:
-        from thumbycolor_native import ColorDisplay, ColorSprite, _rumble
+        from thumbycolor_native import ColorDisplay, ColorSprite, _rumble, create_sprite as _create_sprite
         display = ColorDisplay()
         Sprite = ColorSprite
         rumble = _rumble
+        create_sprite = _create_sprite
         print(f"ThumbyColor display initialized. Free memory: {gc.mem_free()}")
     except ImportError as e:
         print(f"Warning: Could not import thumbycolor_native: {e}")
@@ -71,13 +71,17 @@ if IS_THUMBY_COLOR:
         audio_open_id = open_id
         audio_play_id = play_id
         audio_close_ids = close_ids
+        from cutscene_utils import init_cutscene_utils, play_cutscene_animation as _play_cutscene, create_cancel_callback as _create_cancel
+        play_cutscene_animation = _play_cutscene
+        create_cancel_callback = _create_cancel
+        init_cutscene_utils(display, PC, audio_load, audio_play, audio_stop, buttonMENU)
         print(f"Audio and Color Cutscene initialized. Free memory: {gc.mem_free()}")
     except ImportError as e:
         print(f"Warning: Could not import audio module or color_cutscene: {e}")
   
 # original Thumby
 else:
-    from grayscale import display as _display, Sprite as _Sprite
+    from grayscale import display as _display, Sprite as _Sprite, play_cutscene_animation as _play_cutscene, create_cancel_callback as _create_cancel, create_sprite as _create_sprite  
     display = _display
     Sprite = _Sprite
     buttonA = ButtonClass(swA) # Left (A) button
@@ -89,36 +93,10 @@ else:
     buttonLB = buttonL
     buttonRB = buttonR
     buttonMENU = buttonB
-
-init_cutscene_utils(display, PC, audio_load, audio_play, audio_stop, buttonMENU)
-# Platform-specific sprite creation
-def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, scale=1.00):   
-    return Sprite(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
-
-# ThumbyColor-specific sprite creation with memory management
-if IS_THUMBY_COLOR:
-    def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, scale=1.00):
-        """ThumbyColor version that prioritizes color sprites with memory management"""
-        # Force GC before creating new sprites
-        gc.collect()
-        color_file = ""
-        if isinstance(bitmap_data, tuple) and isinstance(bitmap_data[0], str):
-            base_file = bitmap_data[0]
-            # Calculate output dimensions
-            output_width = int(width * scale)
-            output_height = int(height * scale)
-            color_file = base_file.split("_")[0] + f'_{output_width}_{output_height}.COL.bin'
-        elif isinstance(bitmap_data, str):
-            # Try color version first
-            color_file = bitmap_data
-        else:
-            # Fall back to standard sprite
-            return Sprite(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
-          
-        print(f"Loading sprite: {color_file}")
-        sprite = Sprite(0, 0, color_file, x, y, key, mirrorX, mirrorY)
-        print(f"Free memory after loading Sprite: {gc.mem_free()}")
-        return sprite
+    play_cutscene_animation = _play_cutscene
+    create_cancel_callback = _create_cancel
+    create_sprite = _create_sprite
+    print(f"Thumby display initialized. Free memory: {gc.mem_free()}")
 
 # Helper functions
 @micropython.native
