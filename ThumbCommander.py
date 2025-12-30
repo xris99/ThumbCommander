@@ -233,36 +233,45 @@ def sign(x):
     return (x > 0) - (x < 0)
 
 @micropython.native
-def qsort(inlist):
-    if inlist == []: 
-        return []
-    else:
-        pivot = inlist[0]
-        lesser = qsort([x for x in inlist[1:] if x[2] < pivot[2]])
-        greater = qsort([x for x in inlist[1:] if x[2] >= pivot[2]])
-        return greater + [pivot] + lesser
+def sort_by_z(arr):
+    """In-place insertion sort by Z (descending) - O(n) for nearly-sorted"""
+    n = len(arr)
+    i = 1
+    while i < n:
+        key = arr[i]
+        key_z = key[2]
+        j = i - 1
+        while j >= 0 and arr[j][2] < key_z:
+            arr[j + 1] = arr[j]
+            j -= 1
+        arr[j + 1] = key
+        i += 1
 
-# Physics table (unchanged)
-TABLE_SIZE = const(1024)
+# Physics table 
+TABLE_SIZE = const(128)
 MIN_DAMPING = const(7)
 MAX_T_DAMPING = const(10<<16)
-EXP_TABLE = [float2fp(exp(-i * (MAX_T_DAMPING>>16) / TABLE_SIZE)) for i in range(TABLE_SIZE)]
+EXP_TABLE = array('l', [0] * TABLE_SIZE)
+for _i in range(TABLE_SIZE):
+    EXP_TABLE[_i] = int(exp(-_i * (MAX_T_DAMPING>>16) / TABLE_SIZE) * 65536)
+del _i
 
 @micropython.native
 def apply_physics(damping: int, desired_vel: int, initial_vel: int, t: int) -> int:
     if damping < MIN_DAMPING:
-        return desired_vel, (desired_vel * t) >> 16
+        return desired_vel
     else:
         dv = initial_vel - desired_vel
         t_damping = fpdiv_a(t, damping)
         if t_damping >= MAX_T_DAMPING:
             e = 0
         else:
-            idx = (t_damping * TABLE_SIZE * fpdiv_a(1<<16, MAX_T_DAMPING))>>16
-            idx = min(TABLE_SIZE - 2, max(0, idx>>16))
-            frac = ((t_damping * TABLE_SIZE * fpdiv_a(65536, MAX_T_DAMPING))>>16) & (65536 - 1)
-            e = ((EXP_TABLE[idx] * (65536 - frac)) + (EXP_TABLE[idx + 1] * frac))>>16
-        new_vel = ((dv * e)>>16) + desired_vel
+            # Scale for smaller table
+            scaled = (t_damping * TABLE_SIZE) // (MAX_T_DAMPING >> 16)
+            idx = min(TABLE_SIZE - 2, max(0, scaled >> 16))
+            frac = scaled & 0xFFFF
+            e = EXP_TABLE[idx] + (((EXP_TABLE[idx + 1] - EXP_TABLE[idx]) * frac) >> 16)
+        new_vel = ((dv * e) >> 16) + desired_vel
         return new_vel
 
 @micropython.native
@@ -416,80 +425,85 @@ class Astroids:
                           0])                                #8: step
         return a
         
+    @micropython.native
+    def _update_astroid(self, a):
+        """Update asteroid position and return screen coordinates"""
+        for c in range(2):
+            if (a[c] > (PC.SPACE_ASTROIDS<<16)) or (a[c] < -(PC.SPACE_ASTROIDS<<16)):
+                a[c+3] = -a[c+3]
+            a[c] += a[c+3]
+            a[c] += player_angle[c] + (player_speed-65536)
+        a[2] -= fpmul(a[5], player_speed)
+        if player_angle[2] != 0:
+            a[0] = rotate_z_x(a[0], a[1], player_angle[2])
+            a[1] = rotate_z_y(a[0], a[1], player_angle[2])
+
+    @micropython.native
+    def _check_laser_hit(self, a, x, y, sw, sh, laser, fx):
+        """Check laser collision with asteroid, return True if hit"""
+        global score, player_speed
+        for l in range(len(laser)):
+            if (abs(laser[l].z-a[2]) < (2<<16)) and (0 < (laser[l].screen_pos_x-x) < (sw - (sw >> 2))) and (0 < (laser[l].screen_pos_y-y) < (sh - (sh >> 2))):
+                del laser[l]
+                score += 1
+                player_speed += 1311
+                a[3] = a[4] = a[5] = a[6] = a[8] = 0
+                a[7] = 3
+                if fx: fx.play(FXEngine.EXPLODE_AS)
+                return True
+        return False
+
+    @micropython.native
     def run(self, laser=[], fx=None, mission_phase_complete=False):
-        global player_speed, lifes, score
-        
-        self.astroids = qsort(self.astroids)
-        
-        for i in range(len(self.astroids)):
-            if i >= len(self.astroids): return
+        global lifes
+        sort_by_z(self.astroids)
+
+        i = 0
+        while i < len(self.astroids):
             a = self.astroids[i]
-            
-            # move in x,y,z-axis forward
-            for c in range(2):
-                if (a[c] > (PC.SPACE_ASTROIDS<<16)) or (a[c] < -(PC.SPACE_ASTROIDS<<16)):
-                    a[c+3] = -a[c+3]
-                a[c] += a[c+3]
-                a[c] += player_angle[c] + (player_speed-65536)
-            a[2] -= fpmul(a[5], player_speed)
-            
-            # get sprite in correct size
-            mySprite = getSprite(a[2],a[6])
-            
-            # calc x,y on screen
+            self._update_astroid(a)
+            mySprite = getSprite(a[2], a[6])
             x = project_a(a[0], a[2], CENTER_X, mySprite.scaledWidth)
             y = project_a(a[1], a[2], CENTER_Y, mySprite.scaledHeight)
-            
-            # collision detection        
+
+            # Collision with player
             if a[2] < (8<<16):
                 if (-28 < x < WIDTH) and (-20 < y < HEIGHT):
                     lifes -= 1
-                    display.drawFilledRectangle(0,0,WIDTH, HEIGHT, PC.HIT_COLOR)
-                    if (rumble): rumble(200)
-                    if (fx): fx.play(FXEngine.SHIELD)
+                    display.drawFilledRectangle(0, 0, WIDTH, HEIGHT, PC.HIT_COLOR)
+                    if rumble: rumble(200)
+                    if fx: fx.play(FXEngine.SHIELD)
                 if not mission_phase_complete:
                     self.astroids[i] = self.new_astroid()
                 else:
                     self.astroids.pop(i)
                     continue
-                
-            # Rotate around z-axis
-            if player_angle[2] != 0:
-                a[0] = rotate_z_x(a[0], a[1], player_angle[2])
-                a[1] = rotate_z_y(a[0], a[1], player_angle[2])
-                
-            # Rotate sprite
+                i += 1
+                continue
+
+            # Rotate sprite animation
             n = a[8] // a[7]
-            if (n > 12):
+            if n > 12:
                 n = 0
                 a[8] = 0
             else:
                 a[8] += 1
             mySprite.setFrame(n)
-            
-            # draw sprite
             mySprite.x = x
             mySprite.y = y
             display.drawSpriteWithScale(mySprite)
-            
-            if (a[6] == 0):
-                if (n == 6):
+
+            # Explosion done - respawn
+            if a[6] == 0:
+                if n == 6:
                     if not mission_phase_complete:
                         self.astroids[i] = self.new_astroid()
                     else:
                         self.astroids.pop(i)
                         continue
             else:
-                for l in range(len(laser)):
-                    if (abs(laser[l].z-a[2]) < (2<<16)) and (0 < (laser[l].screen_pos_x-x) < (mySprite.scaledWidth - (mySprite.scaledWidth >> 2))) and ( 0 < (laser[l].screen_pos_y-y) < (mySprite.scaledHeight - (mySprite.scaledHeight >> 2))):
-                        del laser[l]
-                        score += 1
-                        player_speed += 1311
-                        #set sprite to exposion, stop movement and reset to first bitmap
-                        a[3] = a[4] = a[5] = a[6] = a[8] = 0
-                        a[7] = 3
-                        if (fx): fx.play(FXEngine.EXPLODE_AS)
-                        break
+                self._check_laser_hit(a, x, y, mySprite.scaledWidth, mySprite.scaledHeight, laser, fx)
+            i += 1
 
 class Enemies:
     def __init__(self, num=1):
@@ -526,183 +540,217 @@ class Enemies:
         e[13] = (e[5] * (fpsin(ORIENTATION[e[3]]) * fpcos(ORIENTATION[e[4]]))) >> 38
         return e
         
+    @micropython.native
+    def _update_enemy_position(self, e, t, z_old):
+        """Update enemy position, physics, and boundaries"""
+        for c in range(2):
+            e[c] += player_angle[c] + (player_speed-65536)
+        e[2] -= fpmul(2048, player_speed)
+
+        if e[6] != 0:
+            e[11] = apply_physics(4<<16,((e[5] + (60<<16) - abs(e[2])) * fpcos(ORIENTATION[e[3]]))>>16, e[11],t)
+            e[12] = apply_physics(4<<16,((e[5] + (60<<16) - abs(e[2])) * (fpsin(ORIENTATION[e[3]]) * fpsin(ORIENTATION[e[4]]))) >> 32, e[12], t)
+            e[13] = apply_physics(4<<16,(e[5] * (fpsin(ORIENTATION[e[3]]) * fpcos(ORIENTATION[e[4]]))) >> 38, e[13], t)
+            e[0] += e[11]
+            e[1] += e[12]
+            e[2] += e[13]
+
+        if player_angle[2] != 0:
+            e[0] = rotate_z_x1(e[0], e[1], player_angle[2])
+            e[1] = rotate_z_y1(e[0], e[1], player_angle[2])
+
+        if (e[0] > (PC.SPACE_WIDTH*3<<16)): e[0] = -(PC.SPACE_WIDTH<<16)
+        elif (e[0] < -(PC.SPACE_WIDTH*3<<16)): e[0] = PC.SPACE_WIDTH<<16
+        if (e[1] > (PC.SPACE_HEIGHT*3<<16)): e[1] = -(PC.SPACE_HEIGHT<<16)
+        elif (e[1] < -(PC.SPACE_HEIGHT*3<<16)): e[1] = PC.SPACE_HEIGHT<<16
+
+        if (z_old > 0) != (e[2] > 0):
+            if e[2] <= 0:
+                if abs(e[0]) <= (PC.SPACE_WIDTH<<16):
+                    e[0] -= (PC.SPACE_WIDTH*2<<16) if e[0] >= 0 else -(PC.SPACE_WIDTH*2<<16)
+            else:
+                if abs(e[0]) > (PC.SPACE_WIDTH<<16):
+                    e[0] -= (PC.SPACE_WIDTH*2<<16) if e[0] >= 0 else -(PC.SPACE_WIDTH*2<<16)
+                if abs(e[1]) > (PC.SPACE_HEIGHT<<16):
+                    e[1] -= (PC.SPACE_HEIGHT*2<<16) if e[1] >= 0 else -(PC.SPACE_HEIGHT*2<<16)
+
+        e[14] = abs(e[0]) <= (PC.SPACE_WIDTH<<16) and abs(e[1]) <= (PC.SPACE_HEIGHT<<16)
+        e[2] = abs(e[2]) if e[14] else -abs(e[2])
+
+        if (e[2] > (70<<16)) or (e[2] < (-70<<16)):
+            e[3] = (e[3]+6) % 12
+            e[2] += sign(e[2])*(-5<<16)
+
+    @micropython.native
+    def _check_enemy_laser_hit(self, e, mySprite, x, y, laser, fx):
+        """Check laser collision with enemy, return True if hit"""
+        global score
+        for l in range(len(laser)):
+            if (abs(laser[l].z-e[2]) < (2<<16)) and (laser[l].screen_pos_x > mySprite.x) and (laser[l].screen_pos_x < (mySprite.x+mySprite.scaledWidth)) and (laser[l].screen_pos_y > mySprite.y) and (laser[l].screen_pos_y < (mySprite.y+mySprite.scaledHeight)):
+                del laser[l]
+                e[7] -= 1
+                self.shieldSprite.setScale(fpdiv((71<<16)-abs(e[2]), 60<<16))
+                self.shieldSprite.x = x-1
+                self.shieldSprite.y = y-1
+                display.drawSpriteWithScale(self.shieldSprite)
+                if e[7] == -1:
+                    score += 1
+                    e[5] = e[6] = 0
+                    if fx: fx.play(FXEngine.EXPLODE_SH)
+                return True
+        return False
+
+    @micropython.native
+    def _draw_enemy_radar(self, e):
+        """Draw enemy on radar"""
+        zd = abs(e[2]) + 1
+        rd = (zd >> 10) + 1
+        rd = (rd + zd//rd) >> 1
+        rd = (rd + zd//rd) >> 1
+        rd = (rd + zd//rd) >> 1
+        ra = ((e[0] * 6554) >> 32) - 256
+        x = (((rd << 8) * fpcos(ra))>>32) + 7
+        y = (((rd << 8) * fpsin(ra))>>32) + 7
+        height = (e[1]>>16) // 700
+        color = PC.HUD_SELECT if e[8] == 1 else PC.HUD_UNSELECT
+        if IS_THUMBY_COLOR:
+            x += 2
+            y += 2
+            size = 5 if e[8] == 1 else 3
+            hud_fb.rect(x,y,size,size,color,True)
+            if height < 0:
+                hud_fb.rect(x+1,y+height,2,abs(height),color,True)
+            else:
+                hud_fb.rect(x+1,y,1,abs(height),color,True)
+        else:
+            x += PC.RADAR_X
+            y += PC.RADAR_Y
+            display.drawFilledRectangle(x,y,3,3,color)
+            if height < 0:
+                display.drawFilledRectangle(x+1,y+height,1,abs(height),color)
+            else:
+                display.drawFilledRectangle(x+1,y,1,abs(height),color)
+
+    @micropython.native
+    def _process_enemy_lasers(self, e, fx):
+        """Process enemy lasers"""
+        global lifes
+        for myLaser in e[9]:
+            if myLaser.run():
+                e[9].remove(myLaser)
+            else:
+                if 0 < myLaser.z < (8<<16) and (-512<<16 < myLaser.x < 512<<16) and (-300<<16 < myLaser.y < 300<<16):
+                    lifes -= 1
+                    display.drawFilledRectangle(0,0,WIDTH, HEIGHT, PC.HIT_COLOR)
+                    if rumble: rumble(200)
+                    if fx: fx.play(FXEngine.SHIELD)
+                    e[9].remove(myLaser)
+
+    @micropython.native
     def run(self, laser=[], fx=None, mission_phase_complete=False):
-        global player_speed, lifes, score, hudShip, hud_fb
-        # ticks in ms passed since last call for body inertia calculation
+        global hudShip, hud_fb
         new_time = ticks_us()
         t = (ticks_diff(new_time, self.last_time,)<<16)//1000000
         self.last_time = new_time
 
         if IS_THUMBY_COLOR:
             hud_fb.fill(0)
-        self.enemies = qsort(self.enemies)
-        
-        for i in range(len(self.enemies)):
-            if i >= len(self.enemies): return
+        sort_by_z(self.enemies)
+
+        i = 0
+        while i < len(self.enemies):
             e = self.enemies[i]
-            # set visible
             e[14] = True
             z_old = e[2]
 
-            # move in x,y,z-axis forward
-            for c in range(2):
-                # xy displacement based on player_angle * player_speed
-                e[c] += player_angle[c] + (player_speed-65536)
-            e[2] -= fpmul(2048, player_speed)
-                
-            # calc displacement of ship from orientation & thrust if not exploding
-            if e[6] != 0:
-                # calc xyz velocity with thrust * COS/SIN X,Y,Z orientation incl. body inertia
-                e[11] = apply_physics(4<<16,((e[5] + (60<<16) - abs(e[2])) * fpcos(ORIENTATION[e[3]]))>>16, e[11],t)
-                e[12] = apply_physics(4<<16,((e[5] + (60<<16) - abs(e[2])) * (fpsin(ORIENTATION[e[3]]) * fpsin(ORIENTATION[e[4]]))) >> 32, e[12], t)
-                e[13] = apply_physics(4<<16,(e[5] * (fpsin(ORIENTATION[e[3]]) * fpcos(ORIENTATION[e[4]]))) >> 38, e[13], t)
-                e[0] += e[11]
-                e[1] += e[12]
-                e[2] += e[13]
-            
-            # rotate around z-axis
-            if player_angle[2] != 0:
-                e[0] = rotate_z_x1(e[0], e[1], player_angle[2])
-                e[1] = rotate_z_y1(e[0], e[1], player_angle[2])
-            
-            # wrap X,Y at boundaries
-            if (e[0] > (PC.SPACE_WIDTH*3<<16)): e[0] = -(PC.SPACE_WIDTH<<16)
-            elif (e[0] < -(PC.SPACE_WIDTH*3<<16)): e[0] = PC.SPACE_WIDTH<<16
-            if (e[1] > (PC.SPACE_HEIGHT*3<<16)): e[1] = -(PC.SPACE_HEIGHT<<16)
-            elif (e[1] < -(PC.SPACE_HEIGHT*3<<16)): e[1] = PC.SPACE_HEIGHT<<16
+            self._update_enemy_position(e, t, z_old)
 
-            # z crossed → adjust coordinates
-            if (z_old > 0) != (e[2] > 0):
-                if e[2] <= 0:  # to back: only X shifts
-                    if abs(e[0]) <= (PC.SPACE_WIDTH<<16):
-                        e[0] -= (PC.SPACE_WIDTH*2<<16) if e[0] >= 0 else -(PC.SPACE_WIDTH*2<<16)
-                else:  # to front: X and Y shift if in back
-                    if abs(e[0]) > (PC.SPACE_WIDTH<<16):
-                        e[0] -= (PC.SPACE_WIDTH*2<<16) if e[0] >= 0 else -(PC.SPACE_WIDTH*2<<16)
-                    if abs(e[1]) > (PC.SPACE_HEIGHT<<16):
-                        e[1] -= (PC.SPACE_HEIGHT*2<<16) if e[1] >= 0 else -(PC.SPACE_HEIGHT*2<<16)
+            if e[14] or e[8] == 1:
+                mySprite = getSprite(e[2], e[6])
 
-            # visibility + z sign based on region
-            e[14] = abs(e[0]) <= (PC.SPACE_WIDTH<<16) and abs(e[1]) <= (PC.SPACE_HEIGHT<<16)
-            e[2] = abs(e[2]) if e[14] else -abs(e[2])
-            
-            # if space in z axis is ending change ship's x-orientation by 180°
-            if (e[2] > (70<<16)) or (e[2] < (-70<<16)):
-                e[3] = (e[3]+6) % 12
-                e[2] += sign(e[2])*(-5<<16)
-            
-            if (e[14]) or (e[8] == 1): #if visible
-                # get sprite in correct size
-                mySprite = getSprite(e[2],e[6])
-                
-                # Sprite is a ship
                 if e[6] != 0:
-                    #get Frame and mirror based on X,Y Orientation
                     mySprite.setFrame(X_INDEX[e[3]] + Y_SHIFT[e[4]])
-                    # set X mirror
                     mySprite.mirrorX = X_MIRROR[e[3]]
-                    # set Y mirror
                     mySprite.mirrorY = Y_MIRROR[e[4]]
-                # sprite is the explosion
                 else:
                     mySprite.setFrame(e[5])
                     e[5] += 1
-                if (e[14]): # if visible
-                    # calc x,y on screen
+
+                x, y = 0, 0
+                if e[14]:
                     x = project_b(e[0], e[2], CENTER_X, mySprite.scaledWidth)
                     y = project_b(e[1], e[2], CENTER_Y, mySprite.scaledHeight)
-                   
-                    # draw sprite
                     mySprite.x = x
                     mySprite.y = y
                     display.drawSpriteWithScale(mySprite)
-                    
+
                 if e[8] == 1:
                     hudShip = copySprite(mySprite)
                     hudShip.setLifes(e[7])
-                    # Draw selection rectangle
-                    if (e[14]): # if visible
+                    if e[14]:
                         display.drawRectangle(x-2, y-2, mySprite.scaledWidth+4, mySprite.scaledHeight+4, PC.HUD_COLOR)
-                    
-                # explosion done - get new ship
-                if (e[6] == 0):
-                    if (e[5] == 6):
+
+                if e[6] == 0:
+                    if e[5] == 6:
                         if not mission_phase_complete:
                             self.enemies[i] = self.new_enemy()
                         else:
                             self.enemies.pop(i)
                             continue
                 else:
-                    for l in range(len(laser)):
-                        if (abs(laser[l].z-e[2]) < (2<<16)) and (laser[l].screen_pos_x > mySprite.x) and (laser[l].screen_pos_x < (mySprite.x+mySprite.scaledWidth)) and (laser[l].screen_pos_y > mySprite.y) and (laser[l].screen_pos_y < (mySprite.y+mySprite.scaledHeight)):
-                            del laser[l]
-                            e[7] -= 1
-                            # Draw shield
-                            self.shieldSprite.setScale(fpdiv((71<<16)-abs(e[2]), 60<<16))
-                            self.shieldSprite.x = x-1
-                            self.shieldSprite.y = y-1
-                            display.drawSpriteWithScale(self.shieldSprite)
-                            if e[7] == -1:
-                                score += 1
-                                #set sprite to explosion, stop movement and reset to first bitmap
-                                e[5] = e[6] = 0
-                                if (fx): fx.play(FXEngine.EXPLODE_SH)
-                            break
-            # calc and draw radar - sqrt scaling for better small distance visibility
-            zd = abs(e[2]) + 1; rd = (zd >> 10) + 1
-            rd = (rd + zd//rd) >> 1; rd = (rd + zd//rd) >> 1; rd = (rd + zd//rd) >> 1
-            ra = ((e[0] * 6554) >> 32) - 256  # correct scaling: 256 angle units per SPACE_WIDTH
-            x = (((rd << 8) * fpcos(ra))>>32) + 7
-            y = (((rd << 8) * fpsin(ra))>>32) + 7
-            height = (e[1]>>16) // 700
-            color = PC.HUD_SELECT if e[8] == 1 else PC.HUD_UNSELECT
-            if IS_THUMBY_COLOR:
-                x += 2
-                y += 2
-                size = 5 if e[8] == 1 else 3
-                hud_fb.rect(x,y,size,size,color,True)
-                if (height < 0):
-                   hud_fb.rect(x+1,y+height,2,abs(height),color,True)
-                else:  
-                    hud_fb.rect(x+1,y,1,abs(height),color,True)
-            else:
-                x += PC.RADAR_X
-                y += PC.RADAR_Y
-                display.drawFilledRectangle(x,y,3,3,color)
-                if (height < 0):
-                   display.drawFilledRectangle(x+1,y+height,1,abs(height),color)
-                else:  
-                    display.drawFilledRectangle(x+1,y,1,abs(height),color)
-              
-            # if not exploded, let the pilot do its thing
+                    self._check_enemy_laser_hit(e, mySprite, x, y, laser, fx)
+
+            self._draw_enemy_radar(e)
             if e[6] != 0: e[10].run()
-            
-            #let the lasers fly! 
-            for myLaser in e[9]:
-                if myLaser.run(): e[9].remove(myLaser)
-                else:
-                    if 0 < myLaser.z < (8<<16) and (-512<<16 < myLaser.x < 512<<16) and (-300<<16 < myLaser.y < 300<<16):
-                        lifes -= 1
-                        display.drawFilledRectangle(0,0,WIDTH, HEIGHT, PC.HIT_COLOR)
-                        if (rumble): rumble(200)
-                        if (fx): fx.play(FXEngine.SHIELD)
-                        e[9].remove(myLaser)
+            self._process_enemy_lasers(e, fx)
+            i += 1
 
 class Pilot:
-    PATROL, INTERCEPT, ENGAGE, EVADE, GET_BEHIND, CHASE = 0, 1, 2, 3, 4, 5
-    _EVADE_PATTERN = ((2,3), (6,9), (10,3), (6,9))
+    _EVADE = ((2,3), (6,9), (10,3), (6,9))
 
     def __init__(self, enemy):
         self.enemy = enemy
-        self.timer = 0
-        self.state_timer = 0
-        self.state = 0
-        self.target_orientation_x = 3 if enemy[2] > 0 else 9
-        self.target_orientation_y = 6
-        self.last_health = enemy[7]
-        self.damage_timer = 0
+        self.timer = self.state_timer = self.state = self.damage_timer = 0
+        self.tx = 3 if enemy[2] > 0 else 9
+        self.ty = 6
+        self.last_hp = enemy[7]
         self.skill = 39322 + randint(0, 26214)
-        self.flank_side = randint(0, 1)
+        self.flank = randint(0, 1)
+
+    @micropython.native
+    def _do_state(self, z):
+        """Execute state behavior - set target orientation and thrust"""
+        e, s, st = self.enemy, self.state, self.state_timer
+        if s == 0:  # Patrol
+            if st % 20 == 0: self.tx, self.ty = randint(3,9), randint(4,8)
+            e[5] = 8<<16
+        elif s == 1:  # Intercept
+            self.tx, self.ty, e[5] = (3 if z > 0 else 9), 6, 15<<16
+        elif s == 2:  # Engage
+            self.tx = (5 if self.flank else 7) if z < (18<<16) else 3
+            self.ty, e[5] = 6, 14<<16
+        elif s == 3:  # Evade
+            self.tx, self.ty = Pilot._EVADE[(st // 15) % 4]
+            e[5] = 18<<16
+        elif s == 4:  # Get behind
+            self.tx, self.ty = (6, 5 if self.flank else 7) if z > (20<<16) and abs(e[0]) < (PC.SPACE_WIDTH//2<<16) else (3, 6)
+            e[5] = 8<<16 if z <= 0 else 18<<16
+        else:  # Chase
+            d, xo, yo = abs(z), abs(e[0])>>16, abs(e[1])>>16
+            if d < (15<<16): self.tx, e[5] = 3, 6<<16
+            elif d > (25<<16): self.tx, e[5] = 9, 14<<16
+            else: self.tx, e[5] = ((8 if e[0] > 0 else 10) if xo > (PC.SPACE_WIDTH//4) else 9), 10<<16
+            self.ty = (8 if e[1] > 0 else 4) if yo > (PC.SPACE_HEIGHT//4) else 6
+
+    @micropython.native
+    def _do_fire(self, z):
+        """Check and execute firing"""
+        if self.state_timer % 10 != 0: return
+        az, s = abs(z), self.state
+        if (s == 5 and randint(0,2) < 2) or (s in (1,2) and (10<<16) < az < (35<<16) and randint(0,5) < 3) or (az < (30<<16) and randint(0,20) == 0):
+            ef = (1<<16) - self.skill
+            e = self.enemy
+            e[9].append(Laser(e[0], e[1], e[2], e[11]*2 + fpmul(ef, randint(-32768,32768)), e[12]*2 + fpmul(ef, randint(-32768,32768)), e[13]*4))
 
     @micropython.native
     def run(self):
@@ -710,92 +758,36 @@ class Pilot:
         if self.timer < (FPS // 10): return
         self.timer = 0
         self.state_timer += 1
-        z_pos = self.enemy[2]
+        e, z, st = self.enemy, self.enemy[2], self.state_timer
 
         # Threat check
         threat = 0
-        if self.enemy[7] < self.last_health:
-            threat = 3; self.damage_timer = 30; self.last_health = self.enemy[7]
-        elif self.damage_timer > 0:
-            self.damage_timer -= 1; threat = 2
-        elif 0 < z_pos < (20<<16):
-            threat = 2
+        if e[7] < self.last_hp: threat, self.damage_timer, self.last_hp = 3, 30, e[7]
+        elif self.damage_timer > 0: self.damage_timer -= 1; threat = 2
+        elif 0 < z < (20<<16): threat = 2
 
         # State transitions
-        old_state = self.state
-        if self.enemy[7] < 3 and threat > 1 and self.state != 3 and self.state_timer > 10:
-            self.state = 3
-        elif z_pos > (8<<16):
-            if z_pos > (50<<16): self.state = 1
-            elif z_pos > (25<<16) and (old_state == 0 or self.state_timer > 50): self.state = 2
-            elif old_state in (1,2) and self.state_timer > 30: self.state = 4
-        elif z_pos <= 0:
-            dist = abs(z_pos)
-            if dist > (30<<16): self.state = 1
-            elif dist < (10<<16): self.state = 4
-            else: self.state = 5
-        if old_state == 0 and self.state_timer > 60: self.state = 1
-        elif old_state == 3 and self.state_timer > 50: self.state = 4 if z_pos > 0 else 5
-        elif old_state == 4 and self.state_timer > 100: self.state = 2
-        if old_state != self.state: self.state_timer = 0
+        old, hp = self.state, e[7]
+        if hp < 3 and threat > 1 and old != 3 and st > 10: self.state = 3
+        elif z > (8<<16):
+            if z > (50<<16): self.state = 1
+            elif z > (25<<16) and (old == 0 or st > 50): self.state = 2
+            elif old in (1,2) and st > 30: self.state = 4
+        elif z <= 0:
+            d = abs(z)
+            self.state = 1 if d > (30<<16) else (4 if d < (10<<16) else 5)
+        if old == 0 and st > 60: self.state = 1
+        elif old == 3 and st > 50: self.state = 4 if z > 0 else 5
+        elif old == 4 and st > 100: self.state = 2
+        if old != self.state: self.state_timer = 0
 
-        # State behaviors
-        if self.state == 0:  # Patrol
-            if self.state_timer % 20 == 0:
-                self.target_orientation_x, self.target_orientation_y = randint(3,9), randint(4,8)
-            self.enemy[5] = 8<<16
-        elif self.state == 1:  # Intercept
-            self.target_orientation_x = 3 if z_pos > 0 else 9
-            self.target_orientation_y = 6
-            self.enemy[5] = 15<<16
-        elif self.state == 2:  # Engage
-            self.target_orientation_x = (5 if self.flank_side else 7) if z_pos < (18<<16) else 3
-            self.target_orientation_y = 6
-            self.enemy[5] = 14<<16
-        elif self.state == 3:  # Evade
-            self.target_orientation_x, self.target_orientation_y = Pilot._EVADE_PATTERN[(self.state_timer // 15) % 4]
-            self.enemy[5] = 18<<16
-        elif self.state == 4:  # Get behind
-            if z_pos > (20<<16):
-                if abs(self.enemy[0]) < (PC.SPACE_WIDTH//2<<16):
-                    self.target_orientation_x, self.target_orientation_y = 6, (5 if self.flank_side else 7)
-                else:
-                    self.target_orientation_x, self.target_orientation_y = 3, 6
-                self.enemy[5] = 18<<16
-            elif z_pos > 0:
-                self.target_orientation_x, self.target_orientation_y = 3, 6
-                self.enemy[5] = 18<<16
-            else:
-                self.target_orientation_x, self.target_orientation_y = 3, 6
-                self.enemy[5] = 8<<16
-        else:  # Chase
-            dist, x_offset, y_offset = abs(z_pos), abs(self.enemy[0])>>16, abs(self.enemy[1])>>16
-            if dist < (15<<16):
-                self.target_orientation_x = 3; self.enemy[5] = 6<<16
-            elif dist > (25<<16):
-                self.target_orientation_x = 9; self.enemy[5] = 14<<16
-            else:
-                self.target_orientation_x = (8 if self.enemy[0] > 0 else 10) if x_offset > (PC.SPACE_WIDTH//4) else 9
-                self.enemy[5] = 10<<16
-            self.target_orientation_y = (8 if self.enemy[1] > 0 else 4) if y_offset > (PC.SPACE_HEIGHT//4) else 6
+        self._do_state(z)
 
         # Turn toward target
-        for axis, target in ((3, self.target_orientation_x), (4, self.target_orientation_y)):
-            if self.enemy[axis] != target:
-                diff = (target - self.enemy[axis] + 6) % 12 - 6
-                self.enemy[axis] = (self.enemy[axis] + (1 if diff > 0 else -1)) % 12
+        for ax, tgt in ((3, self.tx), (4, self.ty)):
+            if e[ax] != tgt: e[ax] = (e[ax] + (1 if (tgt - e[ax] + 6) % 12 > 6 else -1)) % 12
 
-        # Fire
-        if self.state_timer % 10 == 0:
-            abs_z = abs(z_pos)
-            should_fire = (self.state == 5 and randint(0,2) < 2) or \
-                          (self.state in (1,2) and (10<<16) < abs_z < (35<<16) and randint(0,5) < 3) or \
-                          (abs_z < (30<<16) and randint(0,20) == 0)
-            if should_fire:
-                error_factor = (1<<16) - self.skill
-                vel_x = self.enemy[11]*2 + fpmul(error_factor, randint(-32768,32768))
-                vel_y = self.enemy[12]*2 + fpmul(error_factor, randint(-32768,32768))
-                self.enemy[9].append(Laser(self.enemy[0], self.enemy[1], self.enemy[2], vel_x, vel_y, self.enemy[13]*4))
+        self._do_fire(z)
 
 class Ship:
     def __init__(self):
@@ -830,30 +822,40 @@ class Ship:
         self.laser_energy = 5
         self.last_time = 0
         self.afterburner_time = 0
+        # Cache button references (avoid repeated eval() calls)
+        self._btn = [eval("button" + KEYMAPS[i]) for i in range(len(KEYMAPS))]
         display.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
-    
+
+    @micropython.native
+    def _run_hud(self):
+        """Draw HUD ship and score"""
+        global hudShip
+        if hudShip:
+            hudShip.setScale(PC.HUD_SCALE)
+            hudShip.key = -1
+            hudShip.x = self.cockpit_sprite_x + PC.HUD_X
+            hudShip.y = self.cockpit_sprite_y + PC.HUD_Y
+            display.drawSpriteWithScale(hudShip)
+            hl = hudShip.getLifes()
+            if IS_THUMBY_COLOR:
+                for i in range(hl): display.drawFilledRectangle(hudShip.x + 4 + i*4, hudShip.y + 20, 3, 3, PC.RED)
+            else:
+                cy = self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3
+                for i in range(hl): display.drawFilledRectangle(self.cockpit_sprite.x + 40, cy - i*3, 2, 2, PC.WHITE)
+        if not hudShip or IS_THUMBY_COLOR:
+            display.drawText(f"{score:02d}", self.cockpit_sprite_x + PC.COUNTER_X, self.cockpit_sprite_y + PC.COUNTER_Y, PC.WHITE)
+
     @micropython.native
     def run(self):
-        global hudShip
         for laser in self.laser:
-            if laser.run():
-                self.laser.remove(laser)
+            if laser.run(): self.laser.remove(laser)
         if IS_THUMBY_COLOR:
             display.draw_sprite_from_file(self.cockpit_sprite, self.cockpit_sprite_x, self.cockpit_sprite_y, 0)
-            pass
         else:
             display.drawSprite(self.cockpit_sprite)
-        
-        # Use appropriate target sprite
-        if self.laser_energy == 0:
-            display.drawSprite(self.target_active_sprite)
-        else:
-            display.drawSprite(self.target_sprite)
-        
-        # Status indicators
+        display.drawSprite(self.target_active_sprite if self.laser_energy == 0 else self.target_sprite)
         if IS_THUMBY_COLOR:
-            #display.drawSprite(self.cockpit_top_sprite)
-            display.draw_sprite_from_file(self.cockpit_top_sprite, self.cockpit_top_sprite_x, 0,0)
+            display.draw_sprite_from_file(self.cockpit_top_sprite, self.cockpit_top_sprite_x, 0, 0)
             draw_hull_status(display, lifes)
             draw_half_circle_energy(display, self.cockpit_sprite_x + 59, self.cockpit_sprite_y + 26, 13, self.laser_energy, 5)
             self.radar_sprite.x = self.cockpit_sprite_x + PC.RADAR_X
@@ -861,132 +863,78 @@ class Ship:
             self.radar_sprite.setFrame(self.radar_frame)
             self.radar_frame = (self.radar_frame + 1) % self.radar_framecount
             display.drawSprite(self.radar_sprite)
-            
-            if (self.cockpit_sprite_x == (SHIP_X+1)): display.drawSprite(self.stick_left_sprite)
-            elif (self.cockpit_sprite_x == (SHIP_X-1)): display.drawSprite(self.stick_right_sprite)
-            elif (self.cockpit_sprite_y == (SHIP_Y+1)): display.drawSprite(self.stick_back_sprite)
-            elif (self.cockpit_sprite_y == (SHIP_Y-1)): display.drawSprite(self.stick_forward_sprite)
-
+            dx, dy = self.cockpit_sprite_x - SHIP_X, self.cockpit_sprite_y - SHIP_Y
+            if dx == 1: display.drawSprite(self.stick_left_sprite)
+            elif dx == -1: display.drawSprite(self.stick_right_sprite)
+            elif dy == 1: display.drawSprite(self.stick_back_sprite)
+            elif dy == -1: display.drawSprite(self.stick_forward_sprite)
             display.internal_fb.blit(hud_fb, self.radar_sprite.x, self.radar_sprite.y, 0)
         else:
-            for i in range(lifes):
-                display.drawFilledRectangle(self.cockpit_sprite.x + 19, self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3 - i*3, 2, 2, PC.WHITE)
-            for i in range(self.laser_energy):
-                display.drawFilledRectangle(self.cockpit_sprite.x + 45, self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3 - i*3, 2, 2, PC.WHITE)
-            display.drawSprite(self.radar_sprite)  
+            cy = self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3
+            for i in range(lifes): display.drawFilledRectangle(self.cockpit_sprite.x + 19, cy - i*3, 2, 2, PC.WHITE)
+            for i in range(self.laser_energy): display.drawFilledRectangle(self.cockpit_sprite.x + 45, cy - i*3, 2, 2, PC.WHITE)
+            display.drawSprite(self.radar_sprite)
+        px = PC.CENTER_X + (fpmul(player_angle[0], PC.SPRITE_SCALE)>>16)
+        py = PC.CENTER_Y + (fpmul(player_angle[1], PC.SPRITE_SCALE)>>17)
+        display.setPixel(px, 1, PC.WHITE); display.setPixel(px, 2, PC.LIGHTGRAY)
+        display.setPixel(PC.WIDTH-1, py, PC.WHITE); display.setPixel(PC.WIDTH-2, py, PC.LIGHTGRAY)
+        self._run_hud()
 
-        # Movement indicators with platform scaling
-        display.setPixel(PC.CENTER_X+(fpmul(player_angle[0], PC.SPRITE_SCALE)>>16), 1, PC.WHITE)
-        display.setPixel(PC.CENTER_X+(fpmul(player_angle[0], PC.SPRITE_SCALE)>>16), 2, PC.LIGHTGRAY)
-        display.setPixel(PC.WIDTH - 1, PC.CENTER_Y+(fpmul(player_angle[1], PC.SPRITE_SCALE)>>16)//2, PC.WHITE)
-        display.setPixel(PC.WIDTH - 2, PC.CENTER_Y+(fpmul(player_angle[1], PC.SPRITE_SCALE)>>16)//2, PC.LIGHTGRAY)
-      
-        if hudShip != None:
-            hudShip.setScale(PC.HUD_SCALE)
-            hudShip.key = -1
-            hudShip.x = self.cockpit_sprite_x + PC.HUD_X #TODO
-            hudShip.y = self.cockpit_sprite_y + PC.HUD_Y #TODO
-            display.drawSpriteWithScale(hudShip)
-            if IS_THUMBY_COLOR:
-                for i in range(hudShip.getLifes()):
-                    display.drawFilledRectangle(hudShip.x + 4 + i*4, hudShip.y + 20, 3, 3, PC.RED)
-            else:
-                for i in range(hudShip.getLifes()):
-                    display.drawFilledRectangle(self.cockpit_sprite.x + 40, self.cockpit_sprite.y + PC.COCKPIT_HEIGHT - 3 - i*3, 2, 2, PC.WHITE) #TODO
-        if (hudShip == None) or IS_THUMBY_COLOR:
-            display.drawText(f"{score:02d}", self.cockpit_sprite_x + (PC.COUNTER_X),self.cockpit_sprite_y + (PC.COUNTER_Y), PC.WHITE) #TODO
-    
+    @micropython.native
+    def _cycle_target(self, enemies, direction):
+        """Cycle through enemy targets. direction: 1=next, -1=prev"""
+        global hudShip
+        if not enemies: return
+        n = len(enemies)
+        rng = range(n) if direction == 1 else range(n-1, -1, -1)
+        for i in rng:
+            if enemies[i][8] == 1:
+                enemies[i][8] = 0
+                ni = i + direction
+                if 0 <= ni < n: enemies[ni][8] = 1
+                else: hudShip = None
+                return
+        if enemies[0]: enemies[n-1 if direction == -1 else 0][8] = 1
+
     @micropython.native
     def move_me(self, enemies):
-        global player_angle, player_speed, player_target_speed, hudShip
+        global player_angle, player_speed, player_target_speed
         new_time = ticks_us()
-        t = (int(ticks_diff(new_time, self.last_time,))<<16)//1000000
+        t = (int(ticks_diff(new_time, self.last_time))<<16)//1000000
         self.last_time = new_time
-        
-        shift_pressed = eval("button" + KEYMAPS[KEY_SHIFT]).pressed()
-        
-        # Check special actions with shift requirement check
-        if (eval("button" + KEYMAPS[KEY_TARGET_NEXT]).justPressed() and 
-            SHIFT_REQUIRED[KEY_TARGET_NEXT] == shift_pressed):
-            if enemies:
-                for i in range(len(enemies)):
-                    e = enemies[i]
-                    if e[8] == 1:
-                        e[8] = 0
-                        if (i+1) < len(enemies): enemies[i+1][8] = 1
-                        else: hudShip = None
-                        break
-                else:
-                    if enemies[0] != None: enemies[0][8] = 1
-        elif (eval("button" + KEYMAPS[KEY_TARGET_PREV]).justPressed() and 
-              SHIFT_REQUIRED[KEY_TARGET_PREV] == shift_pressed):
-            if enemies:
-                for i in range(len(enemies) -1, -1, -1):
-                    e = enemies[i]
-                    if e[8] == 1:
-                        e[8] = 0
-                        if ((i-1) > -1): enemies[i-1][8] = 1
-                        else: hudShip = None
-                        break
-                else:
-                    if enemies[0] != None: enemies[len(enemies) -1][8] = 1
-        elif (eval("button" + KEYMAPS[KEY_AFTERBURNER]).justPressed() and 
-              SHIFT_REQUIRED[KEY_AFTERBURNER] == shift_pressed and 
-              self.afterburner_time == 0):
-            player_target_speed = 7<<16
-            self.afterburner_time = new_time
-            if (self.fx): self.fx.play(FXEngine.AFTERBURNER)
-        elif (eval("button" + KEYMAPS[KEY_BREAK]).justPressed() and 
-              SHIFT_REQUIRED[KEY_BREAK] == shift_pressed):
-            player_speed = 1<<16
-        elif (eval("button" + KEYMAPS[KEY_EJECT]).pressed() and 
-              SHIFT_REQUIRED[KEY_EJECT] == shift_pressed):
-            return False
-        # Regular actions unchanged
-        elif eval("button" + KEYMAPS[KEY_MOVE_RIGHT]).pressed():
-            player_angle[0] -= 1<<16
-            player_angle[2] = -3
-            self.cockpit_sprite_x = SHIP_X-1 #TODO
-        elif eval("button" + KEYMAPS[KEY_MOVE_LEFT]).pressed():
-            player_angle[0] += 1<<16
-            player_angle[2] = 3
-            self.cockpit_sprite_x = SHIP_X+1 #TODO
-        elif eval("button" + KEYMAPS[KEY_MOVE_DOWN]).pressed():
-            player_angle[1] -= 1<<16
-            self.cockpit_sprite_y = SHIP_Y-1 #TODO
-        elif eval("button" + KEYMAPS[KEY_MOVE_UP]).pressed():
-            player_angle[1] += 1<<16
-            self.cockpit_sprite_y = SHIP_Y+1 #TODO
-        elif eval("button" + KEYMAPS[KEY_FIRE]).justPressed():
-            if (self.laser_energy > 0):
-                self.laser.append(Laser(player_angle[0], player_angle[1]))
-                self.fire_time = new_time
-                self.laser_energy -= 1
-                if (self.fx): self.fx.play(FXEngine.LASER)
-        else:
-            player_angle[2] = 0
-            self.cockpit_sprite_x = SHIP_X #TODO
-            self.cockpit_sprite_y = SHIP_Y #TODO
+        b, sr = self._btn, SHIFT_REQUIRED
+        shift = b[KEY_SHIFT].pressed()
+        cx, cy = SHIP_X, SHIP_Y
 
-        if (((int(ticks_diff(new_time, self.fire_time,))<<16)//1000000) > (1000*PC.FPS)):
-            if (self.laser_energy < 5):
-                self.laser_energy += 1
+        if b[KEY_TARGET_NEXT].justPressed() and sr[KEY_TARGET_NEXT] == shift: self._cycle_target(enemies, 1)
+        elif b[KEY_TARGET_PREV].justPressed() and sr[KEY_TARGET_PREV] == shift: self._cycle_target(enemies, -1)
+        elif b[KEY_AFTERBURNER].justPressed() and sr[KEY_AFTERBURNER] == shift and self.afterburner_time == 0:
+            player_target_speed = 7<<16; self.afterburner_time = new_time
+            if self.fx: self.fx.play(FXEngine.AFTERBURNER)
+        elif b[KEY_BREAK].justPressed() and sr[KEY_BREAK] == shift: player_speed = 1<<16
+        elif b[KEY_EJECT].pressed() and sr[KEY_EJECT] == shift: return False
+        elif b[KEY_MOVE_RIGHT].pressed(): player_angle[0] -= 1<<16; player_angle[2] = -3; cx = SHIP_X-1
+        elif b[KEY_MOVE_LEFT].pressed(): player_angle[0] += 1<<16; player_angle[2] = 3; cx = SHIP_X+1
+        elif b[KEY_MOVE_DOWN].pressed(): player_angle[1] -= 1<<16; cy = SHIP_Y-1
+        elif b[KEY_MOVE_UP].pressed(): player_angle[1] += 1<<16; cy = SHIP_Y+1
+        elif b[KEY_FIRE].justPressed() and self.laser_energy > 0:
+            self.laser.append(Laser(player_angle[0], player_angle[1]))
+            self.fire_time = new_time; self.laser_energy -= 1
+            if self.fx: self.fx.play(FXEngine.LASER)
+        else: player_angle[2] = 0
+
+        self.cockpit_sprite_x, self.cockpit_sprite_y = cx, cy
+        if ((int(ticks_diff(new_time, self.fire_time))<<16)//1000000) > (1000*PC.FPS):
+            if self.laser_energy < 5: self.laser_energy += 1
             self.fire_time = new_time
-            
-        if player_angle[0] < -2293760: player_angle[0] = -2293760
-        if player_angle[0] > 2293760: player_angle[0] = 2293760
-        if player_angle[1] < -2162688: player_angle[1] = -2162688
-        if player_angle[1] > 2162688: player_angle[1] = 2162688
-        
+        player_angle[0] = max(-2293760, min(2293760, player_angle[0]))
+        player_angle[1] = max(-2162688, min(2162688, player_angle[1]))
         if self.afterburner_time != 0:
-            ta = (int(ticks_diff(new_time, self.afterburner_time,))<<16)//1000000
-            self.cockpit_sprite_x = SHIP_X + choice([1,0,-1]) #TODO
-            self.cockpit_sprite_y = SHIP_Y + choice([1,0,-1]) #TODO
-            if (rumble): rumble(20)
-            if (ta > 250000):
-                self.afterburner_time = 0
-                player_target_speed = 1<<16
-              
+            self.cockpit_sprite_x = SHIP_X + choice([1,0,-1])
+            self.cockpit_sprite_y = SHIP_Y + choice([1,0,-1])
+            if rumble: rumble(20)
+            if ((int(ticks_diff(new_time, self.afterburner_time))<<16)//1000000) > 250000:
+                self.afterburner_time = 0; player_target_speed = 1<<16
         player_speed = apply_physics(1<<16, player_target_speed, player_speed, t)
         if IS_THUMBY_COLOR: self.cockpit_top_sprite_x = self.cockpit_sprite_x
         inputJustPressed()
