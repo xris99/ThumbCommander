@@ -1101,25 +1101,23 @@ class Grayscale:
     def drawSpriteWithScale(self, s):
         self.blitScaled(s.bitmap, s.x, s.y, s.scaledWidth, s.scaledHeight, s.key, s.mirrorX, s.mirrorY, fpdiv(256<<16, s.scale)>>16, s.width)
 
-# Add at the end of grayscale.py, outside the Grayscale class
+def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, scale=1.00):   
+    return Sprite(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
+
+class CancelCallback:
+    __slots__ = ('counter',)
+    def __init__(self):
+        self.counter = 0
+    def __call__(self, _):
+        self.counter += 1
+        if self.counter >= 6:
+            self.counter = 0
+            if buttonB and buttonB.justPressed():
+                return False
+        return True
 
 def create_cancel_callback():
-    """Create a callback that checks for buttonB to cancel cutscene"""
-    frame_counter = [0]
-    last_check = [False]
-    
-    def cancel_cutscene_callback(frame_idx):
-        frame_counter[0] += 1
-        if frame_counter[0] % 6 == 0:
-            buttonB.update()
-            if buttonB.pressed():
-                last_check[0] = True
-                return False
-        elif last_check[0]:
-            return False
-        return True
-    
-    return cancel_cutscene_callback
+    return CancelCallback()
 
 def play_cutscene_animation(filename, fps=20, frame_callback=None):
     """Play grayscale sprite animation for Thumby (no audio support)"""
@@ -1175,14 +1173,11 @@ def play_cutscene_animation(filename, fps=20, frame_callback=None):
                 
                 # Use display's native blit for grayscale
                 display.blit((bit_buffer, shd_buffer), x, y, width, height, -1, 0, 0)
-                
+                display.update()
                 # Handle frame callback for cancellation
                 if frame_callback:
                     if not frame_callback(frame_idx):
                         break
-                
-                display.update()
-            
             # Clean up
             del bit_buffer, shd_buffer
             collect()
