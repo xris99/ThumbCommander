@@ -44,16 +44,6 @@ from gc import collect, mem_free
 import json
 from campaign_engine import CampaignEngine
 
-# Platform constants
-WIDTH = PC.WIDTH
-HEIGHT = PC.HEIGHT
-CENTER_X = PC.CENTER_X
-CENTER_Y = PC.CENTER_Y
-SHIP_X = PC.SHIP_X
-SHIP_Y = PC.SHIP_Y
-Z_DISTANCE = PC.Z_DISTANCE
-FPS = PC.FPS
-
 # Game constants
 ORIENTATION = [-512,-427,-341,-256,-171,-85,0,85,171,256,341,427,512]
 X_INDEX = [24,25,26,27,26,25,24,23,22,21,22,23,24]
@@ -112,7 +102,7 @@ KEY_TARGET_NEXT = const(8)
 KEY_TARGET_PREV = const(9)
 KEY_EJECT = const(10)
 
-# Helper functions (unchanged)
+# Helper functions
 def copySprite(obj:Sprite):
     if (IS_THUMBY_COLOR):
         newSprite = Sprite(obj.width, obj.height,obj.frame_data,0,0,obj.key,obj.mirrorX,obj.mirrorY)
@@ -205,10 +195,10 @@ class Stars:
             speed = 0 if (randint(0,100) <= stable) else randint(42598, 62258)
             if speed != 0:
                 angle = randint(0, 4096)
-                radius = int2fp(randint(WIDTH // scale_pos, WIDTH*2) * scale_pos)
+                radius = int2fp(randint(PC.WIDTH // scale_pos, PC.WIDTH*2) * scale_pos)
                 stars[i] = array('l', [fpmul(radius, fpcos(angle)),
                           fpmul(radius, fpsin(angle)),
-                          randint(5, Z_DISTANCE)<<16,
+                          randint(5, PC.Z_DISTANCE)<<16,
                           choice(PC.STARCOLORS),
                           speed])
             else:
@@ -225,11 +215,11 @@ class Stars:
         global player_speed
 
         for s in self.stars:
-            x = project(s[0], s[2], CENTER_X)
-            y = project(s[1], s[2], CENTER_Y)
-            size = 1 if s[4] == 0 else fp2int(fpdiv(Z_DISTANCE<<16, fpmul(72090, s[2])))
+            x = project(s[0], s[2], PC.CENTER_X)
+            y = project(s[1], s[2], PC.CENTER_Y)
+            size = 1 if s[4] == 0 else fp2int(fpdiv(PC.Z_DISTANCE<<16, fpmul(72090, s[2])))
   
-            if (-size < x < WIDTH + size) and (-size < y < HEIGHT + size):
+            if (-size < x < PC.WIDTH + size) and (-size < y < PC.HEIGHT + size):
                 display.drawFilledRectangle(x, y, size, size, s[3])
             
             # move forward
@@ -247,10 +237,10 @@ class Stars:
          
             if s[2] < (1<<16):
                 a = randint(0, 4096)
-                radius = int2fp(randint(WIDTH // self.scale, WIDTH*2) * self.scale)
+                radius = int2fp(randint(PC.WIDTH // self.scale, PC.WIDTH*2) * self.scale)
                 s[0] = fpmul(radius, fpcos(a))
                 s[1] = fpmul(radius, fpsin(a))
-                s[2] = Z_DISTANCE<<16
+                s[2] = PC.Z_DISTANCE<<16
 
 class Astroids:
     def __init__(self, num=5):
@@ -310,14 +300,14 @@ class Astroids:
             a = self.astroids[i]
             self._update_astroid(a)
             mySprite = getSprite(a[2], a[6])
-            x = project(a[0], a[2], CENTER_X, mySprite.scaledWidth)
-            y = project(a[1], a[2], CENTER_Y, mySprite.scaledHeight)
+            x = project(a[0], a[2], PC.CENTER_X, mySprite.scaledWidth)
+            y = project(a[1], a[2], PC.CENTER_Y, mySprite.scaledHeight)
 
             # Collision with player
             if a[2] < (8<<16):
-                if (-28 < x < WIDTH) and (-20 < y < HEIGHT):
+                if (-28 < x < PC.WIDTH) and (-20 < y < PC.HEIGHT):
                     lifes -= 1
-                    display.drawFilledRectangle(0, 0, WIDTH, HEIGHT, PC.HIT_COLOR)
+                    display.drawFilledRectangle(0, 0, PC.WIDTH, PC.HEIGHT, PC.HIT_COLOR)
                     if rumble: rumble(200)
                     if fx: fx.play(FXEngine.SHIELD)
                 if not mission_phase_complete:
@@ -488,7 +478,7 @@ class Enemies:
             else:
                 if 0 < myLaser.z < (8<<16) and (-512<<16 < myLaser.x < 512<<16) and (-300<<16 < myLaser.y < 300<<16):
                     lifes -= 1
-                    display.drawFilledRectangle(0,0,WIDTH, HEIGHT, PC.HIT_COLOR)
+                    display.drawFilledRectangle(0,0,PC.WIDTH, PC.HEIGHT, PC.HIT_COLOR)
                     if rumble: rumble(200)
                     if fx: fx.play(FXEngine.SHIELD)
                     e[9].remove(myLaser)
@@ -525,8 +515,8 @@ class Enemies:
 
                 x, y = 0, 0
                 if e[14]:
-                    x = project(e[0], e[2], CENTER_X, mySprite.scaledWidth)
-                    y = project(e[1], e[2], CENTER_Y, mySprite.scaledHeight)
+                    x = project(e[0], e[2], PC.CENTER_X, mySprite.scaledWidth)
+                    y = project(e[1], e[2], PC.CENTER_Y, mySprite.scaledHeight)
                     mySprite.x = x
                     mySprite.y = y
                     display.drawSpriteWithScale(mySprite)
@@ -602,7 +592,7 @@ class Pilot:
     @micropython.native
     def run(self):
         self.timer += 1
-        if self.timer < (FPS // 10): return
+        if self.timer < (PC.FPS // 10): return
         self.timer = 0
         self.state_timer += 1
         e, z, st = self.enemy, self.enemy[2], self.state_timer
@@ -642,25 +632,25 @@ class Ship:
         if IS_THUMBY_COLOR:
             # Load color versions
             self.cockpit_sprite = loc+"cockpit_118_53.COL.bin"
-            self.cockpit_sprite_x = SHIP_X
-            self.cockpit_sprite_y = SHIP_Y
+            self.cockpit_sprite_x = PC.SHIP_X
+            self.cockpit_sprite_y = PC.SHIP_Y
             self.cockpit_top_sprite = loc+"cockpit_top_118_8.COL.bin"
-            self.cockpit_top_sprite_x = SHIP_X
-            self.stick_left_sprite = create_sprite(28, 16,loc+"stick_left_28_16.COL.bin", SHIP_X+44, SHIP_Y+37, 0)
-            self.stick_right_sprite = create_sprite(28, 16,loc+"stick_right_28_16.COL.bin", SHIP_X+46, SHIP_Y+37, 0)
-            self.stick_back_sprite = create_sprite(28, 16,loc+"stick_back_28_16.COL.bin", SHIP_X+45, SHIP_Y+38, 0)
-            self.stick_forward_sprite = create_sprite(28, 16,loc+"stick_forward_28_16.COL.bin", SHIP_X+45, SHIP_Y+36, 0)
-            self.target_sprite = create_sprite(24, 24, loc+"target_24_24.COL.bin",CENTER_X-12, CENTER_Y-12, 0)
-            self.target_active_sprite = create_sprite(24, 24, loc+"targetactive_24_24.COL.bin",CENTER_X-12, CENTER_Y-12, 0)
-            self.radar_sprite = create_sprite(24, 24,loc+"radar_24_24.COL.bin", SHIP_X + PC.RADAR_X, SHIP_Y + PC.RADAR_Y, 0)
+            self.cockpit_top_sprite_x = PC.SHIP_X
+            self.stick_left_sprite = create_sprite(28, 16,loc+"stick_left_28_16.COL.bin", PC.SHIP_X+44, PC.SHIP_Y+37, 0)
+            self.stick_right_sprite = create_sprite(28, 16,loc+"stick_right_28_16.COL.bin", PC.SHIP_X+46, PC.SHIP_Y+37, 0)
+            self.stick_back_sprite = create_sprite(28, 16,loc+"stick_back_28_16.COL.bin", PC.SHIP_X+45, PC.SHIP_Y+38, 0)
+            self.stick_forward_sprite = create_sprite(28, 16,loc+"stick_forward_28_16.COL.bin", PC.SHIP_X+45, PC.SHIP_Y+36, 0)
+            self.target_sprite = create_sprite(24, 24, loc+"target_24_24.COL.bin",PC.CENTER_X-12, PC.CENTER_Y-12, 0)
+            self.target_active_sprite = create_sprite(24, 24, loc+"targetactive_24_24.COL.bin",PC.CENTER_X-12, PC.CENTER_Y-12, 0)
+            self.radar_sprite = create_sprite(24, 24,loc+"radar_24_24.COL.bin", PC.SHIP_X + PC.RADAR_X, PC.SHIP_Y + PC.RADAR_Y, 0)
             self.radar_frame = 0
             self.radar_framecount = self.radar_sprite.frameCount - 1
             self.fx = FXEngine()
         else:
             # Load Grayscale sprites
-            self.cockpit_sprite = create_sprite(66, 18, (loc+"cockpit_66_18.BIT.bin", loc+"cockpit_66_18.SHD.bin"), SHIP_X, SHIP_Y, 1)
-            self.target_sprite = create_sprite(7, 7, (loc+"target_7_7.BIT.bin", loc+"target_7_7.SHD.bin"), CENTER_X-3, CENTER_Y-3, 0)
-            self.target_active_sprite = create_sprite(7, 7, (loc+"targetactive_7_7.BIT.bin", loc+"targetactive_7_7.SHD.bin"), CENTER_X-3, CENTER_Y-3, 0)
+            self.cockpit_sprite = create_sprite(66, 18, (loc+"cockpit_66_18.BIT.bin", loc+"cockpit_66_18.SHD.bin"), PC.SHIP_X, PC.SHIP_Y, 1)
+            self.target_sprite = create_sprite(7, 7, (loc+"target_7_7.BIT.bin", loc+"target_7_7.SHD.bin"), PC.CENTER_X-3, PC.CENTER_Y-3, 0)
+            self.target_active_sprite = create_sprite(7, 7, (loc+"targetactive_7_7.BIT.bin", loc+"targetactive_7_7.SHD.bin"), PC.CENTER_X-3, PC.CENTER_Y-3, 0)
             self.radar_sprite = create_sprite(15, 15, (loc+"radar_15_15.BIT.bin", loc+"radar_15_15.SHD.bin"), PC.RADAR_X, PC.RADAR_Y, 0)
             self.fx = None
         
@@ -670,7 +660,7 @@ class Ship:
         self.last_time = 0
         self.afterburner_time = 0
         # Cache button references (avoid repeated eval() calls)
-        self._btn = [eval("button" + KEYMAPS[i]) for i in range(len(KEYMAPS))]
+        self._button_states = [eval("button" + KEYMAPS[i]) for i in range(len(KEYMAPS))]
         display.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
 
     @micropython.native
@@ -710,7 +700,7 @@ class Ship:
             self.radar_sprite.setFrame(self.radar_frame)
             self.radar_frame = (self.radar_frame + 1) % self.radar_framecount
             display.drawSprite(self.radar_sprite)
-            dx, dy = self.cockpit_sprite_x - SHIP_X, self.cockpit_sprite_y - SHIP_Y
+            dx, dy = self.cockpit_sprite_x - PC.SHIP_X, self.cockpit_sprite_y - PC.SHIP_Y
             if dx == 1: display.drawSprite(self.stick_left_sprite)
             elif dx == -1: display.drawSprite(self.stick_right_sprite)
             elif dy == 1: display.drawSprite(self.stick_back_sprite)
@@ -749,9 +739,11 @@ class Ship:
         new_time = ticks_us()
         t = (int(ticks_diff(new_time, self.last_time))<<16)//1000000
         self.last_time = new_time
-        b, sr = self._btn, SHIFT_REQUIRED
+        b = self._button_states
+        sr = SHIFT_REQUIRED
         shift = b[KEY_SHIFT].pressed()
-        cx, cy = SHIP_X, SHIP_Y
+        cx = PC.SHIP_X 
+        cy = PC.SHIP_Y
 
         if b[KEY_TARGET_NEXT].justPressed() and sr[KEY_TARGET_NEXT] == shift: self._cycle_target(enemies, 1)
         elif b[KEY_TARGET_PREV].justPressed() and sr[KEY_TARGET_PREV] == shift: self._cycle_target(enemies, -1)
@@ -760,25 +752,28 @@ class Ship:
             if self.fx: self.fx.play(FXEngine.AFTERBURNER)
         elif b[KEY_BREAK].justPressed() and sr[KEY_BREAK] == shift: player_speed = 1<<16
         elif b[KEY_EJECT].pressed() and sr[KEY_EJECT] == shift: return False
-        elif b[KEY_MOVE_RIGHT].pressed(): player_angle[0] -= 1<<16; player_angle[2] = -3; cx = SHIP_X-1
-        elif b[KEY_MOVE_LEFT].pressed(): player_angle[0] += 1<<16; player_angle[2] = 3; cx = SHIP_X+1
-        elif b[KEY_MOVE_DOWN].pressed(): player_angle[1] -= 1<<16; cy = SHIP_Y-1
-        elif b[KEY_MOVE_UP].pressed(): player_angle[1] += 1<<16; cy = SHIP_Y+1
+        elif b[KEY_MOVE_RIGHT].pressed(): player_angle[0] -= 1<<16; player_angle[2] = -3; cx = PC.SHIP_X-1
+        elif b[KEY_MOVE_LEFT].pressed(): player_angle[0] += 1<<16; player_angle[2] = 3; cx = PC.SHIP_X+1
+        elif b[KEY_MOVE_DOWN].pressed(): player_angle[1] -= 1<<16; cy = PC.SHIP_Y-1
+        elif b[KEY_MOVE_UP].pressed(): player_angle[1] += 1<<16; cy = PC.SHIP_Y+1
         elif b[KEY_FIRE].justPressed() and self.laser_energy > 0:
             self.laser.append(Laser(player_angle[0], player_angle[1]))
             self.fire_time = new_time; self.laser_energy -= 1
             if self.fx: self.fx.play(FXEngine.LASER)
         else: player_angle[2] = 0
 
-        self.cockpit_sprite_x, self.cockpit_sprite_y = cx, cy
+        self.cockpit_sprite_x = cx
+        self.cockpit_sprite_y = cy
+
         if ((int(ticks_diff(new_time, self.fire_time))<<16)//1000000) > (1000*PC.FPS):
             if self.laser_energy < 5: self.laser_energy += 1
             self.fire_time = new_time
+
         player_angle[0] = max(-2293760, min(2293760, player_angle[0]))
         player_angle[1] = max(-2162688, min(2162688, player_angle[1]))
         if self.afterburner_time != 0:
-            self.cockpit_sprite_x = SHIP_X + choice([1,0,-1])
-            self.cockpit_sprite_y = SHIP_Y + choice([1,0,-1])
+            self.cockpit_sprite_x += choice([1,0,-1])
+            self.cockpit_sprite_y += choice([1,0,-1])
             if rumble: rumble(20)
             if ((int(ticks_diff(new_time, self.afterburner_time))<<16)//1000000) > 250000:
                 self.afterburner_time = 0; player_target_speed = 1<<16
@@ -828,10 +823,10 @@ class Laser:
         if (self.x > (PC.SPACE_WIDTH<<16)) or (self.x < -(PC.SPACE_WIDTH<<16)) or (self.y > (PC.SPACE_HEIGHT>>1<<16)) or (self.y < -(PC.SPACE_HEIGHT>>1<<16)):
             pass
         else:     
-            self.screen_pos_x = project(self.x, self.z, CENTER_X, 0)
-            self.screen_pos_y = project(self.y, self.z, CENTER_Y, 0)
-            self.space = fp2int(fpdiv(Z_DISTANCE<<16, fpmul(13107, self.z)))
-            self.size = fp2int(fpdiv(Z_DISTANCE<<16, fpmul(52429, self.z)))
+            self.screen_pos_x = project(self.x, self.z, PC.CENTER_X, 0)
+            self.screen_pos_y = project(self.y, self.z, PC.CENTER_Y, 0)
+            self.space = fp2int(fpdiv(PC.Z_DISTANCE<<16, fpmul(13107, self.z)))
+            self.size = fp2int(fpdiv(PC.Z_DISTANCE<<16, fpmul(52429, self.z)))
             self.draw()
         return (self.z > (60<<16)) or (self.z < -(60<<16))
         
@@ -1031,12 +1026,12 @@ class SettingsMenu:
             self.background.run()
           
             display.drawText("SETTINGS", 22 * PC.SCREEN_SCALE, 2 * PC.SCREEN_SCALE, PC.WHITE)
-            display.drawLine(0, 9 * PC.SCREEN_SCALE, WIDTH, 9 * PC.SCREEN_SCALE, PC.WHITE)
+            display.drawLine(0, 9 * PC.SCREEN_SCALE, PC.WIDTH, 9 * PC.SCREEN_SCALE, PC.WHITE)
             
             if self.remapping:
                 display.fill(PC.BLACK)
                 display.drawText("PRESS NEW KEY FOR:", 2 * PC.SCREEN_SCALE, 2 * PC.SCREEN_SCALE, PC.WHITE)
-                display.drawLine(0, 9 * PC.SCREEN_SCALE, WIDTH, 9 * PC.SCREEN_SCALE, PC.WHITE)
+                display.drawLine(0, 9 * PC.SCREEN_SCALE, PC.WIDTH, 9 * PC.SCREEN_SCALE, PC.WHITE)
                 
                 key_names = ["FIRE", "SHIFT", "MOVE LEFT", "MOVE RIGHT", 
                              "MOVE UP", "MOVE DOWN", "AFTERBURNER", 
@@ -1057,7 +1052,7 @@ class SettingsMenu:
                 sleep(0.3)
                 continue
             
-            display.drawText("A:Remap L:Shift B:Save", 1 * PC.SCREEN_SCALE, HEIGHT - 6 * PC.SCREEN_SCALE, PC.LIGHTGRAY)
+            display.drawText("A:Remap L:Shift B:Save", 1 * PC.SCREEN_SCALE, PC.HEIGHT - 6 * PC.SCREEN_SCALE, PC.LIGHTGRAY)
             
             start_idx = max(0, min(self.selected - 2, len(self.settings_items) - PC.SETTING_ITEMS))
             for i in range(start_idx, min(start_idx + PC.SETTING_ITEMS, len(self.settings_items))):
@@ -1069,7 +1064,7 @@ class SettingsMenu:
             if len(self.settings_items) > PC.SETTING_ITEMS:
                 scrollbar_height = min(35, 35 * PC.SETTING_ITEMS / len(self.settings_items))
                 scrollbar_pos = 12 * PC.SCREEN_SCALE + (35 * PC.SCREEN_SCALE - scrollbar_height) * self.selected / (len(self.settings_items) - 1)
-                display.drawFilledRectangle(WIDTH - 2, int(scrollbar_pos), 2, int(scrollbar_height), PC.WHITE)
+                display.drawFilledRectangle(PC.WIDTH - 2, int(scrollbar_pos), 2, int(scrollbar_height), PC.WHITE)
             
             display.update()
             
@@ -1127,7 +1122,7 @@ def run_campaign(campaign_engine):
     
     launch()
     collect()
-    display.setFPS(FPS)
+    display.setFPS(PC.FPS)
     
     stars = Stars(PC.STAR_COUNT, 5, 85)
     mission_type = mission_config.get("type", "mixed")
@@ -1227,7 +1222,7 @@ def run_campaign(campaign_engine):
     collect()
     if mission_successful:
         home()
-        display.setFPS(FPS)
+        display.setFPS(PC.FPS)
         collect()
         campaign_engine.show_mission_success()
     else:
@@ -1274,7 +1269,7 @@ while True:
         launch()
         collect()
         print(f"Free memory after launch: {mem_free()}")
-        display.setFPS(FPS)
+        display.setFPS(PC.FPS)
         stars = Stars(PC.STAR_COUNT, 5)
         astroids = Astroids(12)
         ship = Ship()
@@ -1298,7 +1293,7 @@ while True:
     elif (game == 1):
         launch()
         collect()
-        display.setFPS(FPS)
+        display.setFPS(PC.FPS)
         stars = Stars(PC.STAR_COUNT, 5, 85)
         enemies = Enemies(3)
         ship = Ship()
