@@ -1,12 +1,7 @@
 # color_enhancements.py - Color-specific enhancements loaded via exec() on ThumbyColor only
-from random import randint
-from platform_loader import audio_load, audio_play, audio_stop, audio_set_loop, audio_set_volume, audio_get_position, audio_set_end_callback, audio_clear_end_callback, audio_open_id, audio_play_id, audio_close_ids, buttonMENU
-import time
-import gc
+from time import sleep_ms
+from platform_loader import audio_stop, audio_set_loop, audio_set_volume, audio_set_end_callback, audio_clear_end_callback, audio_open_id, audio_play_id, audio_close_ids, buttonMENU
 
-# Import game globals that we'll be modifying
-from platform_constants import get_constants
-PC = get_constants(True)  # Force ThumbyColor constants
 
 print("Loading ThumbyColor enhancements...")
 
@@ -41,11 +36,11 @@ class CampaignBackground:
         self.debrief = loc+"mission_debrief_128_55.COL.bin"
     def run(self, num):
         if num == 0:
-            display.draw_fullwidth_sprite(self.backgounrd)
+            display.draw_sprite_from_file(self.backgounrd)
         elif num == 1:
-            display.draw_fullwidth_sprite(self.briefing, 20)
+            display.draw_sprite_from_file(self.briefing, y=20)
         elif num == 2:
-          display.draw_fullwidth_sprite(self.debrief, 20)
+          display.draw_sprite_from_file(self.debrief, y=20)
     def __del__(self):
         del self.backgounrd
 
@@ -79,7 +74,7 @@ class FXEngine:
     
     def __del__(self):
         audio_stop()
-        time.sleep_ms(50)
+        sleep_ms(50)
         audio_close_ids()
         gc.collect()
 
