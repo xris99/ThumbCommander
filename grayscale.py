@@ -7,7 +7,7 @@ from math import sqrt, floor
 from array import array
 from thumbyButton import buttonA, buttonB, buttonU, buttonD, buttonL, buttonR
 from sys import modules
-
+from fpmath import fpmul, fpdiv
 __version__ = '4.0.2-hemlock'
 
 emulator = None
@@ -15,15 +15,7 @@ try:
     import emulator
 except ImportError:
     pass
-
-@micropython.viper
-def fpdiv(a:int, b:int) -> int:
-    return ((a << 6) // (b >> 6)) << 4
-
-@micropython.viper
-def fpmul(a:int, b:int) -> int:
-    return (a >> 6) * (b >> 6) >> 4
-        
+    
 class Sprite:
     @micropython.native
     def __init__(self, width, height, bitmapData, x = 0, y=0, key=-1, mirrorX=False, mirrorY=False):

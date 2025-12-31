@@ -35,8 +35,7 @@ class PlatformConstants:
             self.SPACE_WIDTH = const(2559)
             self.SPACE_HEIGHT = const(2559)
             self.SPACE_STARS = const(350)
-            self.SPACE_ASTROIDS = const(1730)
-            self.SPACE_ENEMIES = const(1000)
+    
             
             # UI dimensions - UPDATED to actual framebuffer font size
             self.FONT_WIDTH = const(8)      # Changed from 6 to 8
@@ -103,8 +102,6 @@ class PlatformConstants:
             self.SPACE_HEIGHT = const(1400)
             self.Z_DISTANCE = const(30)
             self.SPACE_STARS = const(200)
-            self.SPACE_ASTROIDS = const(1000)
-            self.SPACE_ENEMIES = const(1000)
           
             # UI dimensions
             self.FONT_WIDTH = const(3)

@@ -7,6 +7,8 @@ path.insert(0, '/Games/ThumbCommander')
 from platform_loader import display, IS_THUMBY_COLOR, Sprite, PC, create_sprite, play_cutscene_animation, create_cancel_callback, audio_load, audio_play, audio_stop, audio_set_loop, audio_set_volume, audio_get_position, rumble, buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, buttonLB, buttonRB, buttonMENU, dpadPressed, inputJustPressed
 display.enableGrayscale()
 
+from fpmath import int2fp, fp2int, fp2float, float2fp, fpmul, fpdiv, project, fpsin, fpcos, rotate_z_x, rotate_z_y, sign, sort_by_z, apply_physics
+
 # Set platform-appropriate frequency
 if not IS_THUMBY_COLOR:
     from machine import freq
@@ -37,7 +39,6 @@ from thumbyHardware import reset
 from random import randint, randrange, choice
 from time import sleep
 from utime import ticks_us, ticks_ms, ticks_diff
-from math import sin, pi, cos, exp
 from array import array
 from gc import collect, mem_free
 import json
@@ -121,158 +122,6 @@ def copySprite(obj:Sprite):
         newSprite.bitmap[1][:] = obj.bitmap[1]
         newSprite.setFrame(obj.currentFrame)
     return newSprite
-      
-@micropython.viper
-def int2fp(v:int) -> int:
-    return v << 16
-
-@micropython.viper
-def fp2int(v:int) -> int:
-    return v >> 16
-
-@micropython.native
-def fp2float(v:int) -> float:
-    return v / 65536
-
-@micropython.native
-def float2fp(v:float) -> int:
-    return int(v * 65536)
-
-@micropython.viper
-def fpmul(a:int, b:int) -> int:
-    return (a >> 6) * (b >> 6) >> 4
-
-@micropython.viper
-def fpmul_a(a:int, b:int) -> int:
-    return (a >> 8) * (b >> 8)
-    
-@micropython.viper
-def fpdiv(a:int, b:int) -> int:
-    return a if (b >> 6) == 0 else ((a << 6) // (b >> 6)) << 4
-
-@micropython.viper
-def fpdiv_a(a:int, b:int) -> int:
-    return ((a << 4) // (b >> 4)) << 8 # TODO: 4 and 8 for Thumby!
-
-@micropython.viper
-def fpdiv_b(a:int, b:int) -> int:
-    return a if (b >> 3) == 0 else ((a << 3) // (b >> 3)) << 10 # TODO: 4 and 8 for Thumby!
-  
-# calc x,y on screen
-@micropython.viper
-def project(xy:int, z:int, center_xy:int) -> int:
-    a:int = fpdiv(xy, z)
-    b:int = int(a)>>16
-    return b + center_xy
-
-# calc x,y on screen
-@micropython.viper
-def project_a(xy:int, z:int, center_xy:int, sprite_wh:int=0) -> int:
-    a:int = fpdiv_a(xy, abs(z))
-    b:int = int(a)>>16
-    c:int = sprite_wh >> 1
-    return b + center_xy - c
-
-# calc x,y on screen
-@micropython.viper
-def project_b(xy:int, z:int, center_xy:int, sprite_wh:int=0) -> int:
-    a:int = fpdiv_b(xy, abs(z))
-    b:int = int(a)>>16
-    c:int = sprite_wh >> 1
-    return b + center_xy - c
-  
-# Sin/cos tables and functions (unchanged)
-sintab_sz = const(1024)
-sintab_mask = const(sintab_sz - 1)
-sintab_quart_mask = const(sintab_mask >> 2)
-sintab_half_mask = const(sintab_mask >> 1)
-sintab_sz_quart = const(sintab_sz >> 2)
-sintab_sz_half = const(sintab_sz >> 1)
-sintab = array('l', [ int(sin(i * ((2 * pi) / sintab_sz)) * 65536) for i in range(sintab_sz // 4)])
-
-@micropython.viper
-def fpsin(a:int) -> int:
-    a &= sintab_mask
-    ta:int = a & sintab_quart_mask
-    if (a & sintab_half_mask) >= sintab_sz_quart:
-        ta = sintab_quart_mask - ta
-    v:int = ptr32(sintab)[ta]
-    if a >= sintab_sz_half:
-        return 0 - v
-    return v
-
-@micropython.viper
-def fpcos(a:int) -> int:
-    return int(fpsin(a + sintab_sz_quart))
-
-@micropython.viper
-def rotate_z_x(x:int,y:int, angle:int) -> int:
-    a:int = fpmul(x, fpcos(angle))
-    b:int = fpmul(y, fpsin(angle))
-    return int(a - b)
-
-@micropython.viper
-def rotate_z_x1(x:int,y:int, angle:int) -> int:
-    a:int = fpmul_a(x, fpcos(angle))
-    b:int = fpmul_a(y, fpsin(angle))
-    return int(a - b)
-    
-@micropython.viper
-def rotate_z_y(x:int,y:int, angle:int) -> int:    
-    a:int = fpmul(x, fpsin(angle))
-    b:int = fpmul(y, fpcos(angle))
-    return int(a + b)
-
-@micropython.viper
-def rotate_z_y1(x:int,y:int, angle:int) -> int:
-    a:int = fpmul_a(x, fpsin(angle))
-    b:int = fpmul_a(y, fpcos(angle))
-    return int(a + b)
-
-def sign(x):
-    return (x > 0) - (x < 0)
-
-@micropython.native
-def sort_by_z(arr):
-    """In-place insertion sort by Z (descending) - O(n) for nearly-sorted"""
-    n = len(arr)
-    i = 1
-    while i < n:
-        key = arr[i]
-        key_z = key[2]
-        j = i - 1
-        while j >= 0 and arr[j][2] < key_z:
-            arr[j + 1] = arr[j]
-            j -= 1
-        arr[j + 1] = key
-        i += 1
-
-# Physics table 
-TABLE_SIZE = const(128)
-MIN_DAMPING = const(7)
-MAX_T_DAMPING = const(10<<16)
-EXP_TABLE = array('l', [0] * TABLE_SIZE)
-for _i in range(TABLE_SIZE):
-    EXP_TABLE[_i] = int(exp(-_i * (MAX_T_DAMPING>>16) / TABLE_SIZE) * 65536)
-del _i
-
-@micropython.native
-def apply_physics(damping: int, desired_vel: int, initial_vel: int, t: int) -> int:
-    if damping < MIN_DAMPING:
-        return desired_vel
-    else:
-        dv = initial_vel - desired_vel
-        t_damping = fpdiv_a(t, damping)
-        if t_damping >= MAX_T_DAMPING:
-            e = 0
-        else:
-            # Scale for smaller table
-            scaled = (t_damping * TABLE_SIZE) // (MAX_T_DAMPING >> 16)
-            idx = min(TABLE_SIZE - 2, max(0, scaled >> 16))
-            frac = scaled & 0xFFFF
-            e = EXP_TABLE[idx] + (((EXP_TABLE[idx + 1] - EXP_TABLE[idx]) * frac) >> 16)
-        new_vel = ((dv * e) >> 16) + desired_vel
-        return new_vel
 
 @micropython.native
 def getSprite(z, shape):
@@ -364,7 +213,7 @@ class Stars:
                           speed])
             else:
                 stars[i] = array('l', [randint(-200*PC.SCREEN_SCALE,200*PC.SCREEN_SCALE)<<16,
-                          randint(-200,200)<<16,
+                          randint(-200*PC.SCREEN_SCALE,200*PC.SCREEN_SCALE)<<16,
                           7<<16,
                           choice(PC.STARCOLORS),
                           0])    
@@ -393,10 +242,8 @@ class Stars:
             
             # Rotate around z-axis
             if angle != 0:
-                temp_x = fpmul(s[0], fpcos(angle)) - fpmul(s[1], fpsin(angle))
-                temp_y = fpmul(s[0], fpsin(angle)) + fpmul(s[1], fpcos(angle))
-                s[0] = temp_x
-                s[1] = temp_y
+                s[0] = rotate_z_x(s[0], s[1], angle)
+                s[1] = rotate_z_y(s[0], s[1], angle)
          
             if s[2] < (1<<16):
                 a = randint(0, 4096)
@@ -414,8 +261,8 @@ class Astroids:
      
     @micropython.native
     def new_astroid(self):
-        a = array('l', [randrange(-PC.SPACE_ASTROIDS<<16, PC.SPACE_ASTROIDS<<16),      #0: x
-                          randrange(-PC.SPACE_ASTROIDS<<16, PC.SPACE_ASTROIDS<<16),    #1: y
+        a = array('l', [randrange(-PC.SPACE_WIDTH<<16, PC.SPACE_WIDTH<<16),      #0: x
+                          randrange(-PC.SPACE_HEIGHT<<16, PC.SPACE_HEIGHT<<16),    #1: y
                           60<<16,                            #2: z
                           randint(-655360,655360),           #3: x-velocity
                           randint(-655360,655360),           #4: y-velocity
@@ -429,7 +276,7 @@ class Astroids:
     def _update_astroid(self, a):
         """Update asteroid position and return screen coordinates"""
         for c in range(2):
-            if (a[c] > (PC.SPACE_ASTROIDS<<16)) or (a[c] < -(PC.SPACE_ASTROIDS<<16)):
+            if (a[c] > (PC.SPACE_WIDTH<<16)) or (a[c] < -(PC.SPACE_WIDTH<<16)):
                 a[c+3] = -a[c+3]
             a[c] += a[c+3]
             a[c] += player_angle[c] + (player_speed-65536)
@@ -463,8 +310,8 @@ class Astroids:
             a = self.astroids[i]
             self._update_astroid(a)
             mySprite = getSprite(a[2], a[6])
-            x = project_a(a[0], a[2], CENTER_X, mySprite.scaledWidth)
-            y = project_a(a[1], a[2], CENTER_Y, mySprite.scaledHeight)
+            x = project(a[0], a[2], CENTER_X, mySprite.scaledWidth)
+            y = project(a[1], a[2], CENTER_Y, mySprite.scaledHeight)
 
             # Collision with player
             if a[2] < (8<<16):
@@ -519,8 +366,8 @@ class Enemies:
      
     @micropython.native
     def new_enemy(self):
-        e = array('O', [randrange(-PC.SPACE_ENEMIES<<16, PC.SPACE_ENEMIES<<16),      #0: x
-                        randrange(-PC.SPACE_ENEMIES<<16, PC.SPACE_ENEMIES<<16),      #1: y
+        e = array('O', [randrange(-PC.SPACE_WIDTH<<16, PC.SPACE_WIDTH<<16),      #0: x
+                        randrange(-PC.SPACE_HEIGHT<<16, PC.SPACE_HEIGHT<<16),    #1: y
                         45<<16,                            #2: z
                         randrange(0, 12),                  #3: x-orientation (0:-180, 6:0, 12:+180)
                         randrange(0, 12),                  #4: y-orientation (0:-180, 6:0, 12:+180)
@@ -556,8 +403,8 @@ class Enemies:
             e[2] += e[13]
 
         if player_angle[2] != 0:
-            e[0] = rotate_z_x1(e[0], e[1], player_angle[2])
-            e[1] = rotate_z_y1(e[0], e[1], player_angle[2])
+            e[0] = rotate_z_x(e[0], e[1], player_angle[2])
+            e[1] = rotate_z_y(e[0], e[1], player_angle[2])
 
         if (e[0] > (PC.SPACE_WIDTH*3<<16)): e[0] = -(PC.SPACE_WIDTH<<16)
         elif (e[0] < -(PC.SPACE_WIDTH*3<<16)): e[0] = PC.SPACE_WIDTH<<16
@@ -678,8 +525,8 @@ class Enemies:
 
                 x, y = 0, 0
                 if e[14]:
-                    x = project_b(e[0], e[2], CENTER_X, mySprite.scaledWidth)
-                    y = project_b(e[1], e[2], CENTER_Y, mySprite.scaledHeight)
+                    x = project(e[0], e[2], CENTER_X, mySprite.scaledWidth)
+                    y = project(e[1], e[2], CENTER_Y, mySprite.scaledHeight)
                     mySprite.x = x
                     mySprite.y = y
                     display.drawSpriteWithScale(mySprite)
@@ -981,8 +828,8 @@ class Laser:
         if (self.x > (PC.SPACE_WIDTH<<16)) or (self.x < -(PC.SPACE_WIDTH<<16)) or (self.y > (PC.SPACE_HEIGHT>>1<<16)) or (self.y < -(PC.SPACE_HEIGHT>>1<<16)):
             pass
         else:     
-            self.screen_pos_x = project_a(self.x, self.z, CENTER_X, 0)
-            self.screen_pos_y = project_a(self.y, self.z, CENTER_Y, 0)
+            self.screen_pos_x = project(self.x, self.z, CENTER_X, 0)
+            self.screen_pos_y = project(self.y, self.z, CENTER_Y, 0)
             self.space = fp2int(fpdiv(Z_DISTANCE<<16, fpmul(13107, self.z)))
             self.size = fp2int(fpdiv(Z_DISTANCE<<16, fpmul(52429, self.z)))
             self.draw()

@@ -7,18 +7,11 @@ from engine_draw import back_fb
 from  engine import time_to_next_tick, tick, fps_limit
 import framebuf
 from machine import Timer, Pin
+from fpmath import fpmul, fpdiv
 
 timer = Timer()
 
 PC = get_constants(True)  # Force ThumbyColor constants
-
-@micropython.viper
-def fpdiv(a:int, b:int) -> int:
-    return ((a << 6) // (b >> 6)) << 4
-
-@micropython.viper
-def fpmul(a:int, b:int) -> int:
-    return (a >> 6) * (b >> 6) >> 4
 
 buzzer = Pin(5, Pin.OUT)
 def _rumble(duration:int):
