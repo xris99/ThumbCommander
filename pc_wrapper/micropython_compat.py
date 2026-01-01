@@ -165,6 +165,17 @@ class MicroPythonArray:
         else:
             self._data.extend(iterable)
 
+    def pop(self, index=-1):
+        """Remove and return item at index (default last)"""
+        if self._is_object_array:
+            return self._data.pop(index)
+        else:
+            # Standard array doesn't have pop, convert to list, pop, rebuild
+            temp = list(self._data)
+            result = temp.pop(index)
+            self._data = _original_array(self._data.typecode, temp)
+            return result
+
     def __repr__(self):
         if self._is_object_array:
             return f"array('O', {self._data!r})"
