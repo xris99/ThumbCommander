@@ -37,9 +37,9 @@ class PlatformConstants:
     
             
             # UI dimensions - UPDATED to actual framebuffer font size
-            self.FONT_WIDTH = const(8)      # Changed from 6 to 8
-            self.FONT_HEIGHT = const(8)     # Changed from 10 to 8
-            self.FONT_SPACE = const(0)      # Changed from 2 to 0 for framebuffer
+            self.FONT_WIDTH = const(8)      
+            self.FONT_HEIGHT = const(8)     
+            self.FONT_SPACE = const(0)      
             self.FONT_FILE = "/lib/font6x10.bin"  # Not used but kept for compatibility
             self.TEXTBOX_WIDTH = const(100)
             self.TEXTBOX_HEIGHT = const(100)
@@ -112,7 +112,7 @@ class PlatformConstants:
             self.TEXTBOX_HEIGHT = self.HEIGHT
             
             # Sprite scaling
-            self.SPRITE_SCALE = const(1)
+            self.SPRITE_SCALE = const(65535)
             self.COCKPIT_HEIGHT = const(18)
             
             # Performance
