@@ -95,6 +95,7 @@ else:
     buttonRB = buttonR
     buttonMENU = buttonB
     
+    from os import stat
     class CancelCallback:
         __slots__ = ('counter',)
         def __init__(self):
@@ -137,8 +138,8 @@ else:
                 width, height = 74, 30
             
             # Center the animation
-            x = (_WIDTH - width) // 2
-            y = (_HEIGHT - height) // 2
+            x = (PC.WIDTH - width) // 2
+            y = (PC.HEIGHT - height) // 2
             
             # Calculate buffer size for grayscale bitmap
             bitmap_byte_count = width * ((height + 7) // 8)
@@ -174,7 +175,7 @@ else:
                 collect()
                 
         except Exception as e:
-            print(f"Error playing grayscale cutscene {filename}: {e}")
+            print(f"Error playing grayscale cutscene\n{filename}:\n{e}")
         
     print(f"Thumby display initialized. Free memory: {gc.mem_free()}")
 
