@@ -13,6 +13,7 @@ from fpmath import int2fp, fp2int, fp2float, float2fp, fpmul, fpdiv, project, fp
 if not IS_THUMBY_COLOR:
     from machine import freq
     freq(200_000_000)
+    hud_fb = None
     # Show intro while loading
     import Intro
     Intro.__init__()
@@ -20,7 +21,7 @@ if not IS_THUMBY_COLOR:
 else:
     from engine import freq
     from framebuf import FrameBuffer, RGB565
-    hud_buffer = bytearray(24 * 24 * 2)  # RGB565
+    hud_buffer = bytearray(24 * 24 * 2)
     hud_fb = FrameBuffer(hud_buffer, 24, 24, RGB565)
     freq(300_000_000)
     play_cutscene_animation(loc+"intro_128_80.COL.bin", 21, create_cancel_callback())
@@ -61,33 +62,8 @@ player_angle = [0, 0, 0]
 score = 0
 hudShip = None
 
-DEFAULT_KEYS = array('O', [
-    'A',  # FIRE (index 0)
-    'B',  # SHIFT (index 1)
-    'L',  # MOVE_LEFT (index 2)
-    'R',  # MOVE_RIGHT (index 3)
-    'D',  # MOVE_UP (index 4)
-    'U',  # MOVE_DOWN (index 5)
-    'U',  # AFTERBURNER (index 6)
-    'D',  # BREAK (index 7)
-    'RB' if IS_THUMBY_COLOR else 'R',  # TARGET_NEXT (index 8)
-    'LB' if IS_THUMBY_COLOR else 'L',   # TARGET_PREV (index 9)
-    'A'   # EJECT (index 10)
-])
-
-SHIFT_REQUIRED = array('B', [
-    False,  # FIRE (index 0)
-    False,  # SHIFT (index 1) 
-    False,  # MOVE_LEFT (index 2)
-    False,  # MOVE_RIGHT (index 3)
-    False,  # MOVE_UP (index 4)
-    False,  # MOVE_DOWN (index 5)
-    True,   # AFTERBURNER (index 6) 
-    True,   # BREAK (index 7)
-    not IS_THUMBY_COLOR,   # TARGET_NEXT (index 8)
-    not IS_THUMBY_COLOR,    # TARGET_PREV (index 9)
-    True    # EJECT (index 10)
-])
+DEFAULT_KEYS = array('O', ['A','B','L','R','D','U','U','D','RB' if IS_THUMBY_COLOR else 'R','LB' if IS_THUMBY_COLOR else 'L','A'])
+SHIFT_REQUIRED = array('B', [False,False,False,False,False,False,True,True,not IS_THUMBY_COLOR,not IS_THUMBY_COLOR,True])
 
 # Constants for key indexes
 KEY_FIRE = const(0)
@@ -215,8 +191,8 @@ class Stars:
         global player_speed
 
         for s in self.stars:
-            x = project(s[0], s[2], PC.CENTER_X)
-            y = project(s[1], s[2], PC.CENTER_Y)
+            x = project(s[0], s[2], PC.CENTER_X,0)
+            y = project(s[1], s[2], PC.CENTER_Y,0)
             size = 1 if s[4] == 0 else fp2int(fpdiv(PC.Z_DISTANCE<<16, fpmul(72090, s[2])))
   
             if (-size < x < PC.WIDTH + size) and (-size < y < PC.HEIGHT + size):
@@ -244,7 +220,7 @@ class Stars:
 
 class Astroids:
     def __init__(self, num=5):
-        astroids = array('O', [None] * num)
+        astroids = list([None] * num)
         for i in range(num):
             astroids[i] = self.new_astroid()
         self.astroids = astroids
@@ -344,7 +320,7 @@ class Astroids:
 
 class Enemies:
     def __init__(self, num=1):
-        enemies = array('O', [None] * num)
+        enemies = list([None] * num)
         for i in range(num):
             enemies[i] = self.new_enemy()
         
@@ -628,12 +604,12 @@ class Pilot:
 
 class Ship:
     def __init__(self):
+        self.cockpit_sprite_x = PC.SHIP_X
+        self.cockpit_sprite_y = PC.SHIP_Y
         # Platform-specific cockpit sprite
         if IS_THUMBY_COLOR:
             # Load color versions
             self.cockpit_sprite = loc+"cockpit_118_53.COL.bin"
-            self.cockpit_sprite_x = PC.SHIP_X
-            self.cockpit_sprite_y = PC.SHIP_Y
             self.cockpit_top_sprite = loc+"cockpit_top_118_8.COL.bin"
             self.cockpit_top_sprite_x = PC.SHIP_X
             self.stick_left_sprite = create_sprite(28, 16,loc+"stick_left_28_16.COL.bin", PC.SHIP_X+44, PC.SHIP_Y+37, 0)
@@ -689,6 +665,8 @@ class Ship:
         if IS_THUMBY_COLOR:
             display.draw_sprite_from_file(self.cockpit_sprite, self.cockpit_sprite_x, self.cockpit_sprite_y, 0)
         else:
+            self.cockpit_sprite.x = self.cockpit_sprite_x
+            self.cockpit_sprite.y = self.cockpit_sprite_y
             display.drawSprite(self.cockpit_sprite)
         display.drawSprite(self.target_active_sprite if self.laser_energy == 0 else self.target_sprite)
         if IS_THUMBY_COLOR:
@@ -872,7 +850,7 @@ def eject():
     if IS_THUMBY_COLOR:
         play_cutscene_animation(loc+"eject_128_80.COL.bin", 20, create_cancel_callback())
     else:
-        play_cutscene_animation(loc+"eject_74_30.BIT.bin", 10, create_cancel_callback())
+        play_cutscene_animation(loc+"eject_72_40.BIT.bin", 10, create_cancel_callback())
     sleep(0.3)
     collect()  # Clean up after animation
   
@@ -952,8 +930,8 @@ def menu():
                     display.drawText("Settings", 21, 20, PC.SELECT)
                     display.drawText("Exit Game", 21, 30, PC.UNSELECT)
                 elif i==4:
-                    display.drawText("Exit Game", 21, 20, PC.UNSELECT)
-                    display.drawText("", 21, 30, PC.SELECT)
+                    display.drawText("Settings", 21, 20, PC.UNSELECT)
+                    display.drawText("Exit Game", 21, 30, PC.SELECT)
             
             display.update()
             
