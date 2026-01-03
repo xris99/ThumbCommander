@@ -24,10 +24,10 @@ def draw_half_circle_energy(display, x_center, y_center, radius, energy, max_ene
 
 def draw_hull_status(display, lifes_left):
     # Lives indicator with icons
-    display.drawText("HULL:", 5, 10, PC.LIGHTGRAY)
+    display.drawText("HULL:", 5, 11, PC.LIGHTGRAY)
     for i in range(5):
         # Filled life icon
-        display.drawFilledRectangle(35 + i*8, 10, 6, 6, PC.GREEN if i < lifes_left else PC.DARKGRAY)
+        display.drawFilledRectangle(35 + i*8, 11, 6, 6, PC.GREEN if i < lifes_left else PC.DARKGRAY)
       
 class CampaignBackground:
     def __init__(self):
