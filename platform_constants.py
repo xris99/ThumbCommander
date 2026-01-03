@@ -1,7 +1,12 @@
 # platform_constants.py - Platform-specific constants
+try:
+    from micropython import const
+except ImportError:
+    # Fallback for standard Python environments
+    const = lambda x: x
+    
 class PlatformConstants:
     """All platform-specific constants in one place"""
-
     def __init__(self, is_thumby_color):
         if is_thumby_color:
             # ThumbyColor constants (128x128)
