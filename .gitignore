@@ -13,3 +13,10 @@ build/
 .pc_wrapper_settings.json
 keymap.json
 campaign_saves.json
+UNIFIED_SCALE_CAMERA_SYSTEM.md
+WAYPOINT_SYSTEM.md
+settings.json
+ThumbCommander_main.py
+.gitignore
+ThumbCommander_simulation.py
+ThumbCommander_unified_camera.py

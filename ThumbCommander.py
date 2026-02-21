@@ -12,7 +12,7 @@ from fpmath import int2fp, fp2int, fp2float, float2fp, fpmul, fpdiv, project, fp
 # Set platform-appropriate frequency
 if not IS_THUMBY_COLOR:
     from machine import freq
-    freq(200_000_000)
+    freq(150_000_000)
     hud_fb = None
     # Show intro while loading
     import Intro
@@ -30,10 +30,10 @@ else:
 OBJECTS = [None, None, None, None]
 
 # Load sprites with platform-appropriate versions
-OBJECTS[0] = create_sprite(56, 54, (loc+"explode_56_54.BIT.bin", loc+"explode_56_54.SHD.bin"), 0, 0, 0)
-OBJECTS[1] = create_sprite(56, 47, (loc+"astroid1_56_47.BIT.bin", loc+"astroid1_56_47.SHD.bin"), 0, 0, 0)
-OBJECTS[2] = create_sprite(56, 47, (loc+"astroid2_56_47.BIT.bin", loc+"astroid2_56_47.SHD.bin"), 0, 0, 0)
-OBJECTS[3] = create_sprite(70, 59, (loc+"enemy1_70_59.BIT.bin", loc+"enemy1_70_59.SHD.bin"), 0, 0, 0)
+OBJECTS[0] = create_sprite(32, 31, (loc+"explode_32_31.BIT.bin", loc+"explode_32_31.SHD.bin"), 0, 0, 0, cWidth=56, cHeight=54)
+OBJECTS[1] = create_sprite(32, 27, (loc+"astroid1_32_27.BIT.bin", loc+"astroid1_32_27.SHD.bin"), 0, 0, 0, cWidth=56, cHeight=47)
+OBJECTS[2] = create_sprite(32, 27, (loc+"astroid2_32_27.BIT.bin", loc+"astroid2_32_27.SHD.bin"), 0, 0, 0, cWidth=56, cHeight=47)
+OBJECTS[3] = create_sprite(40, 34, (loc+"enemy1_40_34.BIT.bin", loc+"enemy1_40_34.SHD.bin"), 0, 0, 0, cWidth=70, cHeight=59)
 
 # Import game modules
 from thumbyHardware import reset
@@ -91,7 +91,7 @@ def copySprite(obj:Sprite):
 
 @micropython.native
 def getSprite(z, shape):
-    OBJECTS[shape].setScale(fpdiv((71<<16)-abs(z), 60<<16))
+    OBJECTS[shape].setScale(fpdiv(fpmul((71<<16)-abs(z),113377), 60<<16)) 
     return OBJECTS[shape]
 
 def button_exists(button) -> bool:
@@ -325,7 +325,7 @@ class Enemies:
             enemies[i] = self.new_enemy()
         
         # Create shield sprite with platform awareness
-        self.shieldSprite = create_sprite(70, 70, (loc+"shield_70_70.BIT.bin", loc+"shield_70_70.SHD.bin"), 0, 0, 0)
+        self.shieldSprite = create_sprite(40, 40, (loc+"shield_40_40.BIT.bin", loc+"shield_40_40.SHD.bin"), 0, 0, 0, cWidth=70, cHeight=70)
         
         self.enemies = enemies
         self.last_time = 0
@@ -402,7 +402,7 @@ class Enemies:
             if (abs(laser[l].z-e[2]) < (2<<16)) and (laser[l].screen_pos_x > mySprite.x) and (laser[l].screen_pos_x < (mySprite.x+mySprite.scaledWidth)) and (laser[l].screen_pos_y > mySprite.y) and (laser[l].screen_pos_y < (mySprite.y+mySprite.scaledHeight)):
                 del laser[l]
                 e[7] -= 1
-                self.shieldSprite.setScale(fpdiv((71<<16)-abs(e[2]), 60<<16))
+                self.shieldSprite.setScale(fpdiv(fpmul((71<<16)-abs(e[2]),113377), 60<<16)) 
                 self.shieldSprite.x = x-1
                 self.shieldSprite.y = y-1
                 display.drawSpriteWithScale(self.shieldSprite)
@@ -689,8 +689,8 @@ class Ship:
             for i in range(lifes): display.drawFilledRectangle(self.cockpit_sprite.x + 19, cy - i*3, 2, 2, PC.WHITE)
             for i in range(self.laser_energy): display.drawFilledRectangle(self.cockpit_sprite.x + 45, cy - i*3, 2, 2, PC.WHITE)
             display.drawSprite(self.radar_sprite)
-        px = PC.CENTER_X + (fpmul(player_angle[0], PC.SPRITE_SCALE)>>16)
-        py = PC.CENTER_Y + (fpmul(player_angle[1], PC.SPRITE_SCALE)>>17)
+        px = PC.CENTER_X + (fpmul(player_angle[0], PC.SCREEN_SCALE<<16)>>16)
+        py = PC.CENTER_Y + (fpmul(player_angle[1], PC.SCREEN_SCALE<<16)>>17)
         display.setPixel(px, 1, PC.WHITE); display.setPixel(px, 2, PC.LIGHTGRAY)
         display.setPixel(PC.WIDTH-1, py, PC.WHITE); display.setPixel(PC.WIDTH-2, py, PC.LIGHTGRAY)
         self._run_hud()
@@ -1048,10 +1048,8 @@ class SettingsMenu:
             
             if buttonU.justPressed():
                 self.selected = (self.selected - 1) % len(self.settings_items)
-                sleep(0.15)
             elif buttonD.justPressed():
                 self.selected = (self.selected + 1) % len(self.settings_items)
-                sleep(0.15)
             elif buttonA.justPressed():
                 # Check for platform-specific action first
                 result = self.handle_special_action(self.selected)
@@ -1198,6 +1196,7 @@ def run_campaign(campaign_engine):
 
     del ship, stars, enemies, astroids
     collect()
+
     if mission_successful:
         home()
         display.setFPS(PC.FPS)

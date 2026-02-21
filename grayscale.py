@@ -1093,7 +1093,7 @@ class Grayscale:
     def drawSpriteWithScale(self, s):
         self.blitScaled(s.bitmap, s.x, s.y, s.scaledWidth, s.scaledHeight, s.key, s.mirrorX, s.mirrorY, fpdiv(256<<16, s.scale)>>16, s.width)
 
-def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, scale=1.00):   
+def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, cWidth=0, cHeight=0):   
     return Sprite(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
 
 display = Grayscale()

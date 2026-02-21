@@ -78,17 +78,14 @@ class ColorDisplay:
     @micropython.native  
     def drawSpriteWithScale(self, sprite):
         """Draw scaled sprite with viper-optimized lookup tables"""
-        width = sprite.scaledWidth
-        height = sprite.scaledHeight
-        realWidth = sprite.width
         scale = fpdiv(256<<16, sprite.scale)>>16
 
         # Fill pre-allocated tables in viper (no Python allocation)
-        self._fillLookupTables(self._x_table, self._y_table, width, height, scale,
+        self._fillLookupTables(self._x_table, self._y_table,  sprite.scaledWidth, sprite.scaledHeight, scale,
                                1 if sprite.mirrorX else 0, 1 if sprite.mirrorY else 0)
 
-        self._blitWithTables(sprite.frame_view, sprite.x, sprite.y, width, height,
-                             sprite.key, self._x_table, self._y_table, realWidth)
+        self._blitWithTables(sprite.frame_view, sprite.x, sprite.y,  sprite.scaledWidth, sprite.scaledHeight,
+                             sprite.key, self._x_table, self._y_table, sprite.width)
 
     @micropython.viper
     def _fillLookupTables(self, x_table, y_table, width:int, height:int, scale:int, mirrorX:int, mirrorY:int):
@@ -237,9 +234,9 @@ class ColorSprite:
         self.mirrorY = mirrorY
         
         # Scaling properties
-        self.scale = PC.SPRITE_SCALE  # Fixed point 16.16
-        self.scaledWidth = fpmul(width<<16, self.scale)>>16
-        self.scaledHeight = fpmul(height<<16, self.scale)>>16
+        self.scale = 1<<16
+        self.scaledWidth = width
+        self.scaledHeight = height
         
         # File handle for efficient frame switching
         self.file_handle = None
@@ -308,10 +305,9 @@ class ColorSprite:
     @micropython.native  
     def setScale(self, scale):
         """Set sprite scale in fixed point"""
-        self.scale = fpmul(scale, PC.SPRITE_SCALE)
+        self.scale = scale
         self.scaledWidth = fpmul(self.width<<16, self.scale)>>16
         self.scaledHeight = fpmul(self.height<<16, self.scale)>>16
-    
     
     def __del__(self):
         """Clean up file handle when sprite is destroyed"""
@@ -329,7 +325,7 @@ class ColorSprite:
 # Set global Sprite class
 Sprite = ColorSprite
 
-def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, scale=1.00):
+def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, cWidth=0, cHeight=0):
     """ThumbyColor version that prioritizes color sprites with memory management"""
     # Force GC before creating new sprites
     gc.collect()
@@ -337,8 +333,8 @@ def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, m
     if isinstance(bitmap_data, tuple) and isinstance(bitmap_data[0], str):
         base_file = bitmap_data[0]
         # Calculate output dimensions
-        output_width = int(width * scale)
-        output_height = int(height * scale)
+        output_width = width if cWidth == 0 else cWidth
+        output_height = height if cHeight == 0 else cHeight
         color_file = base_file.split("_")[0] + f'_{output_width}_{output_height}.COL.bin'
     elif isinstance(bitmap_data, str):
         # Try color version first
