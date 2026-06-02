@@ -217,11 +217,21 @@ class CampaignEngine:
         if not m: return
         title = f"MISSION {self.current_mission + 1}"
         text = f"{m.get('name','')}\n\n{m.get('briefing','')}"
-        obj = m.get("objectives", {})
-        if obj:
-            text += "\n\nMISSION OBJECTIVES:"
-            if "survive_time" in obj: text += f"\n- Survive for {obj['survive_time']} seconds"
-            if "kills" in obj: text += f"\n- Destroy {obj['kills']} enemies / asteroids"
+        if "waypoints" in m:
+            wps = m["waypoints"]
+            text += f"\n\nWAYPOINTS: {len(wps)}"
+            for i, wp in enumerate(wps):
+                obj = wp.get("objectives", {})
+                text += f"\n\nWP {i+1}: {wp.get('type','mixed')}"
+                if obj.get("kills"): text += f"\n- Destroy {obj['kills']} targets"
+                if obj.get("survive_time"): text += f"\n- Survive {obj['survive_time']}s"
+                if obj.get("reach"): text += "\n- Reach waypoint"
+        else:
+            obj = m.get("objectives", {})
+            if obj:
+                text += "\n\nMISSION OBJECTIVES:"
+                if "survive_time" in obj: text += f"\n- Survive for {obj['survive_time']} seconds"
+                if "kills" in obj: text += f"\n- Destroy {obj['kills']} enemies / asteroids"
         self.show_scrolling_text(title, text, type=1)
 
     def show_mission_debriefing(self, mission_score):
@@ -263,6 +273,10 @@ class CampaignEngine:
         display.update()
         while not buttonA.justPressed(): display.update()
         sleep(0.2)
+
+    def get_mission_data(self):
+        """Get the full mission data dict for the current mission"""
+        return self._get_mission(self.current_mission)
 
     def get_mission_config(self):
         """Get the configuration for the current mission"""

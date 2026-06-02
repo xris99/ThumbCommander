@@ -1,0 +1,71 @@
+{
+  "title": "Deep Patrol",
+  "description": "Navigate through waypoints deep in enemy territory. Each waypoint brings new challenges as you push further into Kilrathi space.",
+  "intro": "Command has identified key Kilrathi positions along the frontier. Your patrol route takes you through three sectors. Reach each waypoint, complete your objectives, and report back alive.",
+  "outro": "Outstanding work, pilot! Your deep patrol has provided critical intelligence on Kilrathi positions. The Confederation fleet can now plan a full offensive. You are cleared for shore leave.",
+  "missions": [
+    {
+      "name": "Sector Sweep",
+      "briefing": "A simple two-waypoint patrol. Navigate to the first waypoint through an asteroid field, then proceed to the second waypoint where enemy scouts have been spotted.",
+      "debriefing": "Sector clear. Good flying out there.",
+      "waypoints": [
+        {
+          "position": [500, 200, 45],
+          "type": "asteroids",
+          "difficulty": 1,
+          "asteroids": 8,
+          "objectives": {
+            "survive_time": 15,
+            "reach": true
+          }
+        },
+        {
+          "position": [-800, -300, 50],
+          "type": "dogfight",
+          "difficulty": 1,
+          "enemies": 1,
+          "objectives": {
+            "kills": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "Gauntlet Run",
+      "briefing": "Intelligence reports three Kilrathi outposts along a patrol route. Fly through each waypoint, survive the resistance, and destroy all hostiles.",
+      "debriefing": "All three outposts neutralized. The corridor is open for our fleet.",
+      "waypoints": [
+        {
+          "position": [300, 0, 40],
+          "type": "mixed",
+          "difficulty": 2,
+          "enemies": 1,
+          "asteroids": 6,
+          "objectives": {
+            "kills": 2,
+            "reach": true
+          }
+        },
+        {
+          "position": [-600, 400, 50],
+          "type": "dogfight",
+          "difficulty": 2,
+          "enemies": 2,
+          "objectives": {
+            "kills": 3
+          }
+        },
+        {
+          "position": [1000, -500, 35],
+          "type": "asteroids",
+          "difficulty": 3,
+          "asteroids": 10,
+          "objectives": {
+            "survive_time": 20,
+            "reach": true
+          }
+        }
+      ]
+    }
+  ]
+}

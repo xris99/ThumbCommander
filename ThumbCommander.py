@@ -201,16 +201,17 @@ class Stars:
             # move forward
             if s[4] == 0:
                 for c in range(2):
-                    s[c] += player_angle[c] + (player_speed-65536)
+                    s[c] += player_angle[c] // 4 + (player_speed-65536)
                     if (s[c] > (PC.SPACE_STARS<<16)) or (s[c] < -(PC.SPACE_STARS<<16)): 
                         s[c] = -s[c]
             s[2]  -= fpmul(s[4], player_speed)
             
             # Rotate around z-axis
             if angle != 0:
-                s[0] = rotate_z_x(s[0], s[1], angle)
+                new_x = rotate_z_x(s[0], s[1], angle)
                 s[1] = rotate_z_y(s[0], s[1], angle)
-         
+                s[0] = new_x
+
             if s[2] < (1<<16):
                 a = randint(0, 4096)
                 radius = int2fp(randint(PC.WIDTH // self.scale, PC.WIDTH*2) * self.scale)
@@ -220,16 +221,19 @@ class Stars:
 
 class Astroids:
     def __init__(self, num=5):
-        astroids = list([None] * num)
-        for i in range(num):
-            astroids[i] = self.new_astroid()
-        self.astroids = astroids
+        self._total = num
+        self.astroids = []
+        self._spawn_left = num
+        # Spread spawns over 3–5 s at 30 fps (90–150 frames)
+        self._spawn_interval = randrange(90, 151) // num
+        if self._spawn_interval < 2: self._spawn_interval = 2
+        self._spawn_counter = 0
      
     @micropython.native
     def new_astroid(self):
         a = array('l', [randrange(-PC.SPACE_WIDTH<<16, PC.SPACE_WIDTH<<16),      #0: x
                           randrange(-PC.SPACE_HEIGHT<<16, PC.SPACE_HEIGHT<<16),    #1: y
-                          60<<16,                            #2: z
+                          70<<16,                            #2: z
                           randint(-655360,655360),           #3: x-velocity
                           randint(-655360,655360),           #4: y-velocity
                           randint(6554, 13107),              #5: z-velocity
@@ -248,8 +252,9 @@ class Astroids:
             a[c] += player_angle[c] + (player_speed-65536)
         a[2] -= fpmul(a[5], player_speed)
         if player_angle[2] != 0:
-            a[0] = rotate_z_x(a[0], a[1], player_angle[2])
+            new_x = rotate_z_x(a[0], a[1], player_angle[2])
             a[1] = rotate_z_y(a[0], a[1], player_angle[2])
+            a[0] = new_x
 
     @micropython.native
     def _check_laser_hit(self, a, x, y, sw, sh, laser, fx):
@@ -269,6 +274,13 @@ class Astroids:
     @micropython.native
     def run(self, laser=[], fx=None, mission_phase_complete=False):
         global lifes
+        # Gracefully spawn remaining asteroids
+        if self._spawn_left > 0:
+            self._spawn_counter += 1
+            if self._spawn_counter >= self._spawn_interval:
+                self._spawn_counter = 0
+                self.astroids.append(self.new_astroid())
+                self._spawn_left -= 1
         sort_by_z(self.astroids)
 
         i = 0
@@ -319,34 +331,52 @@ class Astroids:
             i += 1
 
 class Enemies:
-    def __init__(self, num=1):
-        enemies = list([None] * num)
-        for i in range(num):
-            enemies[i] = self.new_enemy()
-        
+    def __init__(self, num=1, front=None, behind=None):
+        self._total = num
+        self.enemies = []
+        # Build spawn queue: fixed z-values first, then random fill
+        queue = []
+        if front is not None and behind is not None:
+            for _ in range(front): queue.append(70 << 16)
+            for _ in range(behind): queue.append(-70 << 16)
+        self._spawn_queue = queue[:num]
+        self._spawn_left = num
+        # Spread spawns over 5–10 s at 30 fps (150–300 frames)
+        self._spawn_interval = randrange(150, 301) // num
+        if self._spawn_interval < 2: self._spawn_interval = 2
+        self._spawn_counter = 0
+
         # Create shield sprite with platform awareness
         self.shieldSprite = create_sprite(40, 40, (loc+"shield_40_40.BIT.bin", loc+"shield_40_40.SHD.bin"), 0, 0, 0, cWidth=70, cHeight=70)
-        
-        self.enemies = enemies
+
         self.last_time = 0
      
     @micropython.native
-    def new_enemy(self):
-        e = array('O', [randrange(-PC.SPACE_WIDTH<<16, PC.SPACE_WIDTH<<16),      #0: x
-                        randrange(-PC.SPACE_HEIGHT<<16, PC.SPACE_HEIGHT<<16),    #1: y
-                        45<<16,                            #2: z
-                        randrange(0, 12),                  #3: x-orientation (0:-180, 6:0, 12:+180)
-                        randrange(0, 12),                  #4: y-orientation (0:-180, 6:0, 12:+180)
-                        randint(6<<16,12<<16),             #5: thrust
-                        choice(SHIPS),                     #6: sprite_shape
-                        5,                                 #7: health
-                        0,                                 #8: selected
-                        [],                                #9: Laser
-                        None,                             #10: Pilot
-                        0,                                #11: x-acceleration
-                        0,                                #12: y-acceleration
-                        0,                                #13: z-acceleration
-                        True])                            #14: visible
+    def new_enemy(self, start_z=None):
+        if start_z is None:
+            start_z = choice([70, -70]) << 16
+        # Face toward the player: tx=3 when in front (z>0), tx=9 when behind (z<0)
+        if (start_z > 0):
+            facing = 3
+            multi_x = 1
+        else:
+            facing = 9
+            multi_x = 2
+        e = array('O', [randrange(-PC.SPACE_WIDTH<<16, PC.SPACE_WIDTH<<16)*multi_x,#0: x
+                        randrange(-PC.SPACE_HEIGHT<<16, PC.SPACE_HEIGHT<<16),     #1: y
+                        start_z,                                                  #2: z
+                        facing,                                                   #3: x-orientation
+                        randrange(4, 8),                                          #4: y-orientation (roughly level)
+                        randint(6<<16,12<<16),                                    #5: thrust
+                        choice(SHIPS),                                            #6: sprite_shape
+                        5,                                                        #7: health
+                        0,                                                        #8: selected
+                        [],                                                       #9: Laser
+                        None,                                                     #10: Pilot
+                        0,                                                        #11: x-acceleration
+                        0,                                                        #12: y-acceleration
+                        0,                                                        #13: z-acceleration
+                        True])                                                    #14: visible
         e[10] = Pilot(e)
         e[11] = ((e[5] + (60<<16) - abs(e[2])) * fpcos(ORIENTATION[e[3]]))>>16
         e[12] = ((e[5] + (60<<16) - abs(e[2])) * (fpsin(ORIENTATION[e[3]]) * fpsin(ORIENTATION[e[4]]))) >> 32
@@ -369,8 +399,9 @@ class Enemies:
             e[2] += e[13]
 
         if player_angle[2] != 0:
-            e[0] = rotate_z_x(e[0], e[1], player_angle[2])
+            new_x = rotate_z_x(e[0], e[1], player_angle[2])
             e[1] = rotate_z_y(e[0], e[1], player_angle[2])
+            e[0] = new_x
 
         if (e[0] > (PC.SPACE_WIDTH*3<<16)): e[0] = -(PC.SPACE_WIDTH<<16)
         elif (e[0] < -(PC.SPACE_WIDTH*3<<16)): e[0] = PC.SPACE_WIDTH<<16
@@ -468,6 +499,14 @@ class Enemies:
 
         if IS_THUMBY_COLOR:
             hud_fb.fill(0)
+        # Gracefully spawn remaining enemies
+        if self._spawn_left > 0:
+            self._spawn_counter += 1
+            if self._spawn_counter >= self._spawn_interval:
+                self._spawn_counter = 0
+                start_z = self._spawn_queue.pop(0) if self._spawn_queue else None
+                self.enemies.append(self.new_enemy(start_z))
+                self._spawn_left -= 1
         sort_by_z(self.enemies)
 
         i = 0
@@ -523,7 +562,7 @@ class Pilot:
 
     def __init__(self, enemy):
         self.enemy = enemy
-        self.timer = self.state_timer = self.state = self.damage_timer = 0
+        self.timer = self.state_timer = self.state = self.damage_timer = self.turn_timer = 0
         self.tx = 3 if enemy[2] > 0 else 9
         self.ty = 6
         self.last_hp = enemy[7]
@@ -596,9 +635,12 @@ class Pilot:
 
         self._do_state(z)
 
-        # Turn toward target
-        for ax, tgt in ((3, self.tx), (4, self.ty)):
-            if e[ax] != tgt: e[ax] = (e[ax] + (1 if (tgt - e[ax] + 6) % 12 > 6 else -1)) % 12
+        # Turn toward target (throttled: ~4 ticks per step so 180° takes ~2.3s)
+        self.turn_timer += 1
+        if self.turn_timer >= 4:
+            self.turn_timer = 0
+            for ax, tgt in ((3, self.tx), (4, self.ty)):
+                if e[ax] != tgt: e[ax] = (e[ax] + (1 if (tgt - e[ax] + 6) % 12 > 6 else -1)) % 12
 
         self._do_fire(z)
 
@@ -1078,123 +1120,143 @@ class SettingsMenu:
                 save_keymaps(KEYMAPS)
                 return
 
+def _spawn_wp_entities(wp_config):
+    """Spawn enemies/asteroids for a waypoint config dict."""
+    mission_type = wp_config.get("type", "mixed")
+    difficulty = wp_config.get("difficulty", 1)
+    enemy_count = wp_config.get("enemies", 0)
+    asteroid_count = wp_config.get("asteroids", 0)
+    enemy_health = min(5, 3 + difficulty // 2)
+    enemy_speed = 6554 + (difficulty * 1000)
+    enemies = None
+    astroids = None
+    if mission_type in ("dogfight", "mixed"):
+        front = wp_config.get("front")
+        behind = wp_config.get("behind")
+        enemies = Enemies(max(1, enemy_count), front, behind)
+        for e in enemies.enemies:
+            e[7] = enemy_health
+            e[5] = enemy_speed
+    if mission_type in ("asteroids", "mixed"):
+        astroids = Astroids(max(5, asteroid_count + (difficulty * 2)))
+    return enemies, astroids
+
 def run_campaign(campaign_engine):
     global lifes, player_speed, player_target_speed, player_angle, score
-    
-    mission_config = campaign_engine.get_mission_config()
-    if not mission_config:
+
+    mission_data = campaign_engine.get_mission_data()
+    if not mission_data:
         return (0, False)
-    
-    mission_objectives = campaign_engine.get_mission_objectives()
-    
-    campaign_engine.show_mission_briefing(mission_config)
-    
+
+    campaign_engine.show_mission_briefing(mission_data)
+
+    # Import waypoint system (lazy load to save memory)
+    from waypoint_system import WaypointManager, convert_legacy_mission, draw_waypoint_3d, draw_waypoint_radar
+
+    # Convert mission to waypoint format (handles both legacy and new)
+    wp_data = convert_legacy_mission(mission_data)
+    wp_mgr = WaypointManager(wp_data)
+
     lifes = 5
     player_speed = player_target_speed = float2fp(1)
     player_angle = [0, 0, 0]
     score = 0
     hudShip = None
     if hud_fb: hud_fb.fill(0)
-    
+
     launch()
     collect()
     display.setFPS(PC.FPS)
-    
+
     stars = Stars(PC.STAR_COUNT, 5, 85)
-    mission_type = mission_config.get("type", "mixed")
-    
-    difficulty = mission_config.get("difficulty", 1)
-    enemy_count = mission_config.get("enemies", 0)
-    asteroid_count = mission_config.get("asteroids", 0)
-    
-    enemy_health = min(5, 3 + difficulty // 2)
-    enemy_speed = 6554 + (difficulty * 1000)
-    
-    if mission_type == "dogfight" or mission_type == "mixed":
-        enemies = Enemies(max(1, enemy_count))
-        for enemy in enemies.enemies:
-            enemy[7] = enemy_health
-            enemy[5] = enemy_speed
-    else:
-        enemies = None
-    
-    if mission_type == "asteroids" or mission_type == "mixed":
-        astroids = Astroids(max(5, asteroid_count + (difficulty * 2)))
-    else:
-        astroids = None
-    
+
+    # Spawn entities for first waypoint
+    current_wp = wp_mgr.get_current()
+    wp_config = wp_mgr.get_config_for_waypoint(current_wp)
+    enemies, astroids = _spawn_wp_entities(wp_config)
+
     ship = Ship()
-    
-    mission_start_time = ticks_ms()
-    mission_duration = 0
-    kills_needed = mission_objectives.get("kills", 0)
-    survive_time = mission_objectives.get("survive_time", 0) * 1000
-    has_time_objective = survive_time > 0
-    has_kill_objective = kills_needed > 0
-    total_kills = 0
-    mission_phase_complete = False
     mission_successful = False
     display.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
-    
+
     while lifes > 0:
         display.fill(PC.BLACK)
-        
-        current_time = ticks_ms()
-        mission_duration = ticks_diff(current_time, mission_start_time)
-        
-        time_objective_met = has_time_objective and mission_duration >= survive_time
-        kill_objective_met = has_kill_objective and total_kills >= kills_needed
-        
-        if has_time_objective and has_kill_objective:
-            mission_phase_complete = time_objective_met and kill_objective_met
-        elif has_time_objective:
-            mission_phase_complete = time_objective_met
-        elif has_kill_objective:
-            mission_phase_complete = kill_objective_met
-        
-        if mission_phase_complete:
-            if enemies and len(enemies.enemies) > 0:
-                pass
-            elif astroids and len(astroids.astroids) > 0:
-                pass    
-            else:
-                mission_successful = True
-                break
-        
+
+        current_wp = wp_mgr.get_current()
+        if not current_wp:
+            mission_successful = True
+            break
+
+        # Update waypoint position (moves relative to player like all objects)
+        wp_mgr.update_position(current_wp, player_angle, player_speed)
+
+        # Check if player has reached waypoint (heading directly at it)
+        if wp_mgr.check_reached(current_wp):
+            wp_mgr.reached = True
+
+        # Check heading for directional survival time
+        heading = wp_mgr.is_heading_towards(current_wp, player_angle, player_speed)
+        wp_mgr.tick_survive(heading)
+
         previous_score = score
-        
+
         if enemies:
             if not ship.move_me(enemies.enemies): break
         else:
             if not ship.move_me(None): break
-        
+
         stars.run(player_angle[2])
-  
+
+        # Check if waypoint objectives are met
+        wp_complete = wp_mgr.check_objectives(current_wp)
+        wp_mgr.wp_complete = wp_complete
+
+        # Clear hud_fb explicitly each frame (enemies.run does this when
+        # enemies exist, but for asteroid-only waypoints it must be done here)
+        if not enemies and hud_fb:
+            hud_fb.fill(0)
+
         if enemies:
-            enemies.run(ship.laser, ship.fx, mission_phase_complete)
+            enemies.run(ship.laser, ship.fx, wp_complete)
         if astroids:
-            astroids.run(ship.laser, ship.fx, mission_phase_complete)
-        
+            astroids.run(ship.laser, ship.fx, wp_complete)
+
+        # Track kills for waypoint manager
         if score > previous_score:
-            new_kills = score - previous_score
-            total_kills += new_kills
-        
+            for _ in range(score - previous_score):
+                wp_mgr.add_kill()
+
+        # Check if waypoint cleared (objectives met + entities gone)
+        if wp_complete:
+            entities_remain = (enemies and len(enemies.enemies) > 0) or \
+                              (astroids and len(astroids.astroids) > 0)
+            if not entities_remain:
+                # Advance to next waypoint
+                if not wp_mgr.advance():
+                    mission_successful = True
+                    break
+                # Spawn entities for next waypoint
+                current_wp = wp_mgr.get_current()
+                if current_wp:
+                    wp_config = wp_mgr.get_config_for_waypoint(current_wp)
+                    del enemies, astroids
+                    collect()
+                    enemies, astroids = _spawn_wp_entities(wp_config)
+
+        # Draw waypoint marker in 3D space
+        draw_waypoint_3d(current_wp, player_angle[2])
+
+        # Draw waypoint on radar BEFORE ship.run() which blits hud_fb
+        draw_waypoint_radar(current_wp, hud_fb)
+
         ship.run()
-        
-        progress = ""
-        if mission_phase_complete:
-            progress += " CLEAR"
-        else:
-            if kills_needed > 0:
-                progress = f"{total_kills}/{kills_needed}"
-                progress += " *" if kill_objective_met else ""
-            if survive_time > 0:
-                time_remaining = max(0, (survive_time - mission_duration) // 1000)
-                progress += f"  {time_remaining}s"
-        display.drawText(f"STAT: {progress}", 2 * PC.SCREEN_SCALE, 2 * PC.SCREEN_SCALE, PC.WHITE)
+
+        # HUD status line
+        status = wp_mgr.get_status_text()
+        display.drawText(status, 2 * PC.SCREEN_SCALE, 2 * PC.SCREEN_SCALE, PC.WHITE)
         display.update()
 
-    del ship, stars, enemies, astroids
+    del ship, stars, enemies, astroids, wp_mgr
     collect()
 
     if mission_successful:
@@ -1205,7 +1267,7 @@ def run_campaign(campaign_engine):
     else:
         eject() if lifes > 0 else die()
         collect()
-    
+
     return (score, mission_successful)
 
 class CampaignBackground:

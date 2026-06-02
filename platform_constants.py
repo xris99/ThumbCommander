@@ -77,7 +77,7 @@ class PlatformConstants:
             # HUD positioning
             self.HUD_X = const(4)
             self.HUD_Y = const(30)
-            self.HUD_SCALE = const(14000)
+            self.HUD_SCALE = const(24500)
             self.RADAR_X = const(88)
             self.RADAR_Y = const(28)
             self.COUNTER_X = const(52)
