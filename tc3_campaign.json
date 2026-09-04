@@ -11,6 +11,7 @@
       "config": {
         "type": "dogfight",
         "enemies": 3,
+        "enemy_types": [1, 2],
         "difficulty": 2
       },
       "objectives": {
@@ -24,6 +25,7 @@
       "config": {
         "type": "mixed",
         "enemies": 2,
+        "enemy_types": [2, 0],
         "asteroids": 8,
         "difficulty": 3
       },
@@ -39,6 +41,7 @@
       "config": {
         "type": "mixed",
         "enemies": 4,
+        "enemy_types": [1, 0],
         "asteroids": 6,
         "difficulty": 3
       },
@@ -54,6 +57,7 @@
       "config": {
         "type": "dogfight",
         "enemies": 5,
+        "enemy_types": [1,2],
         "difficulty": 3
       },
       "objectives": {
@@ -67,6 +71,7 @@
       "config": {
         "type": "mixed",
         "enemies": 6,
+        "enemy_types": [0, 1, 2],
         "asteroids": 10,
         "difficulty": 4
       },
@@ -82,6 +87,7 @@
       "config": {
         "type": "dogfight",
         "enemies": 7,
+        "enemy_types": [2,0],
         "difficulty": 4
       },
       "objectives": {
@@ -95,6 +101,7 @@
       "config": {
         "type": "mixed",
         "enemies": 8,
+        "enemy_types": [3, 1],
         "asteroids": 12,
         "difficulty": 4
       },
@@ -110,6 +117,7 @@
       "config": {
         "type": "mixed",
         "enemies": 9,
+        "enemy_types": [0,1,2],
         "asteroids": 15,
         "difficulty": 5
       },
@@ -125,6 +133,7 @@
       "config": {
         "type": "dogfight",
         "enemies": 12,
+        "enemy_types": [0,1,2],
         "difficulty": 5
       },
       "objectives": {

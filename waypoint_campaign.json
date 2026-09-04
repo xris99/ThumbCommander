@@ -24,6 +24,7 @@
           "type": "dogfight",
           "difficulty": 1,
           "enemies": 1,
+          "enemy_types": [0, 1, 2],
           "objectives": {
             "kills": 2
           }
@@ -40,6 +41,7 @@
           "type": "mixed",
           "difficulty": 2,
           "enemies": 1,
+          "enemy_types": [2, 0, 1],
           "asteroids": 6,
           "objectives": {
             "kills": 2,
@@ -51,6 +53,7 @@
           "type": "dogfight",
           "difficulty": 2,
           "enemies": 2,
+          "enemy_types": [0, 1],
           "objectives": {
             "kills": 3
           }

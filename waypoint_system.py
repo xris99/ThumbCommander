@@ -24,7 +24,7 @@ _SH3 = PC.SPACE_HEIGHT * 3 << 16
 class Waypoint:
     __slots__ = ('x', 'y', 'z', 'visible', 'type', 'difficulty',
                  'enemies', 'asteroids', 'front', 'behind',
-                 'obj_kills', 'obj_time', 'obj_reach')
+                 'enemy_types', 'obj_kills', 'obj_time', 'obj_reach')
 
     def __init__(self, wp_data):
         pos = wp_data.get("position", [0, 0, 45])
@@ -38,6 +38,7 @@ class Waypoint:
         self.asteroids = wp_data.get("asteroids", 0)
         self.front = wp_data.get("front")
         self.behind = wp_data.get("behind")
+        self.enemy_types = wp_data.get("enemy_types", None)
         obj = wp_data.get("objectives", {})
         self.obj_kills = obj.get("kills", 0)
         self.obj_time = obj.get("survive_time", 0)
@@ -163,7 +164,7 @@ class WaypointManager:
 
     def get_config_for_waypoint(self, wp):
         """Build mission config dict from waypoint data."""
-        return {
+        result = {
             "type": wp.type,
             "difficulty": wp.difficulty,
             "enemies": wp.enemies,
@@ -171,6 +172,8 @@ class WaypointManager:
             "front": wp.front,
             "behind": wp.behind
         }
+        if wp.enemy_types is not None: result["enemy_types"] = wp.enemy_types
+        return result
 
 
 def draw_waypoint_3d(wp, roll_angle=0):
@@ -228,7 +231,7 @@ def convert_legacy_mission(mission_data):
         return mission_data["waypoints"]
     config = mission_data.get("config", {})
     objectives = mission_data.get("objectives", {})
-    return [{
+    result = {
         "position": [0, 0, 45],
         "type": config.get("type", "mixed"),
         "difficulty": config.get("difficulty", 1),
@@ -237,4 +240,7 @@ def convert_legacy_mission(mission_data):
         "front": config.get("front"),
         "behind": config.get("behind"),
         "objectives": objectives
-    }]
+    }
+    et = config.get("enemy_types")
+    if et: result["enemy_types"] = et
+    return [result]

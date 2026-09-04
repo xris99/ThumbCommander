@@ -33,7 +33,11 @@ OBJECTS = [None, None, None, None]
 OBJECTS[0] = create_sprite(32, 31, (loc+"explode_32_31.BIT.bin", loc+"explode_32_31.SHD.bin"), 0, 0, 0, cWidth=56, cHeight=54)
 OBJECTS[1] = create_sprite(32, 27, (loc+"astroid1_32_27.BIT.bin", loc+"astroid1_32_27.SHD.bin"), 0, 0, 0, cWidth=56, cHeight=47)
 OBJECTS[2] = create_sprite(32, 27, (loc+"astroid2_32_27.BIT.bin", loc+"astroid2_32_27.SHD.bin"), 0, 0, 0, cWidth=56, cHeight=47)
-OBJECTS[3] = create_sprite(40, 34, (loc+"enemy1_40_34.BIT.bin", loc+"enemy1_40_34.SHD.bin"), 0, 0, 0, cWidth=70, cHeight=59)
+# Enemy sprites loaded lazily — only 2 sprite textures in RAM at once, stored in OBJECTS[3] and [4].
+# _active_types holds the 2 active type-indices; slot = 3 + position in that list.
+OBJECTS.append(None)  # slot for active ship type A
+OBJECTS.append(None)  # slot for active ship type B
+SHIP_NAMES = ["enemy1", "enemy2", "enemy3", "wingman"]
 
 # Import game modules
 from thumbyHardware import reset
@@ -52,7 +56,7 @@ X_MIRROR = [False,False,False,False,True,True,True,True,True,False,False,False,F
 Y_SHIFT = [0,-7,-14,-21,-14,-7,0,7,14,21,14,7,0]
 Y_MIRROR = [True,False,False,False,False,False,True,True,True,True,True,True,True]
 ASTROIDS = [1, 2]
-SHIPS = [3]
+_active_types = [0, 1]  # 2 active enemy type-indices mapped to OBJECTS[3] and [4]
 
 # Player properties
 player_speed = 65536
@@ -91,8 +95,30 @@ def copySprite(obj:Sprite):
 
 @micropython.native
 def getSprite(z, shape):
-    OBJECTS[shape].setScale(fpdiv(fpmul((71<<16)-abs(z),113377), 60<<16)) 
-    return OBJECTS[shape]
+    if shape <= 2:
+        obj = OBJECTS[shape]
+    elif _active_types[0] == shape - 3:
+        obj = OBJECTS[3]
+    elif _active_types[1] == shape - 3:
+        obj = OBJECTS[4]
+    else:
+        return None
+    if obj:
+        obj.setScale(fpdiv(fpmul((71<<16)-abs(z),113377), 60<<16))
+    return obj
+
+def load_enemy_sprites(type_indices):
+    global _active_types
+    _active_types = type_indices
+    OBJECTS[3] = None
+    OBJECTS[4] = None
+    collect()
+    for slot in (3, 4):
+        name = SHIP_NAMES[type_indices[slot - 3]]
+        if IS_THUMBY_COLOR:
+            OBJECTS[slot] = Sprite(70, 59, loc+name+"_70_59.COL.bin", 0, 0, 0, False, False)
+        else:
+            OBJECTS[slot] = create_sprite(40, 34, (loc+name+"_40_34.BIT.bin", loc+name+"_40_34.SHD.bin"), 0, 0, 0, cWidth=70, cHeight=59)
 
 def button_exists(button) -> bool:
     try:
@@ -368,7 +394,7 @@ class Enemies:
                         facing,                                                   #3: x-orientation
                         randrange(4, 8),                                          #4: y-orientation (roughly level)
                         randint(6<<16,12<<16),                                    #5: thrust
-                        choice(SHIPS),                                            #6: sprite_shape
+                        choice(_active_types) + 3,                                 #6: type+3 (0=dead)
                         5,                                                        #7: health
                         0,                                                        #8: selected
                         [],                                                       #9: Laser
@@ -1131,6 +1157,11 @@ def _spawn_wp_entities(wp_config):
     enemies = None
     astroids = None
     if mission_type in ("dogfight", "mixed"):
+        # Convert JSON type indices (3-9) to 0-based, ensure exactly 2 slots
+        types = wp_config.get("enemy_types")
+        if not types: types = [0, 1]
+        if len(types) == 1: types = types + [types[0]]
+        load_enemy_sprites(types[:2])
         front = wp_config.get("front")
         behind = wp_config.get("behind")
         enemies = Enemies(max(1, enemy_count), front, behind)
@@ -1333,6 +1364,7 @@ while True:
         launch()
         collect()
         display.setFPS(PC.FPS)
+        load_enemy_sprites([0, 1])  # enemy1 + enemy2 for standard dogfight
         stars = Stars(PC.STAR_COUNT, 5, 85)
         enemies = Enemies(3)
         ship = Ship()
