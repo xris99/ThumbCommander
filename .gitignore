@@ -1,4 +1,4 @@
-# Python cache files
+# Python cache / build artifacts
 __pycache__/
 *.pyc
 *.pyo
@@ -9,14 +9,20 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Claude Code local settings
 .claude/settings.local.json
-.pc_wrapper_settings.json
+
+# Runtime state - created on the device (/Games/ThumbCommander/) or by
+# the PC wrapper (games/thumbcommander/) while running
 keymap.json
+settings.json
 campaign_saves.json
+.pc_wrapper_settings.json
+
+# Long design docs, kept local only
 UNIFIED_SCALE_CAMERA_SYSTEM.md
 WAYPOINT_SYSTEM.md
-settings.json
-ThumbCommander_main.py
-.gitignore
-ThumbCommander_simulation.py
-ThumbCommander_unified_camera.py
+
+# Pre-refactor monolith, kept for reference
+legacy/

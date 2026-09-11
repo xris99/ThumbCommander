@@ -1,115 +1,85 @@
-# ThumbCommander - PC Edition
+# PC Target — CPython/pygame Emulation of the ThumbyColor Firmware
 
-This wrapper allows you to run the ThumbyColor version of ThumbCommander on your PC using Python and pygame.
+The `thumby_engine.pc` package lets the *same* engine and game source that
+runs on a ThumbyColor run unmodified on a PC (CPython + pygame). It
+emulates the firmware modules the engine and games import:
 
-## Features
+| Firmware module | Emulated by            | Notes                                            |
+|-----------------|------------------------|--------------------------------------------------|
+| `micropython`   | `micropython_compat.py`| `@viper`/`@native`/`@baseline` no-op decorators, `const`, `ptr8/16/32`, `array` 'O' typecode |
+| `utime` / `time`| `utime.py`             | MicroPython-style `ticks_ms/us/diff`, 32-bit wrap |
+| `machine`       | `machine.py`           | `Pin`, `Timer` (threaded), `SPI` stubs, `freq()` no-op |
+| `gc`            | `gc_compat.py`         | `collect()` / `mem_free()` wrappers over CPython gc |
+| `framebuf`      | `framebuf.py`          | `FrameBuffer` with RGB565/GS8, blit, text (8x8 builtin font) |
+| `engine`        | `engine.py`            | `tick()` / `time_to_next_tick()` / `fps_limit()` with FPS-correction factor |
+| `engine_io`     | `engine_io.py`         | The 9 button ID constants (also the ThumbyColor platform *detector*) |
+| `engine_draw`   | `engine_draw.py`       | `back_fb()` → pygame window (scaled RGB565→RGB888 blit) |
+| `_thread`       | `_thread.py`           | `start_new_thread()` / lock primitives |
+| `audio`         | `thumby_engine.audio.pc`| pygame.mixer IMA-ADPCM decoder @ 15625 Hz, `open_id`/`play_id`/`close_ids` |
+| `thumbyButton`  | `thumbyButton.py`      | `ButtonClass` over keyboard state, polled once per `tick()` |
+| `thumbyHardware`| `thumbyHardware.py`    | Original-Thumby `sw*` switch stubs, `reset()` exits |
 
-- Complete ThumbyColor game experience on PC
-- No modifications to the original game code
-- All game logic runs through wrapper modules
-- RGB565 framebuffer emulation
-- Keyboard controls mapped to Thumby buttons
+## How it works
 
-## Requirements
+`bootstrap()` (this package's `__init__`) is the single entry point:
 
-- Python 3.7 or higher
-- pygame 2.0 or higher
+1. Puts the repository root on `sys.path` so `import thumby_engine` works.
+2. Saves the stdlib `time` as `sys.modules['_stdlib_time_backup']` (used by
+   `fps_calibration.py`).
+3. Imports all emulation modules **before** swapping `sys.modules`, so their
+   own `import time` binds the real stdlib module.
+4. Registers them in `sys.modules` under the *firmware* names
+   (`time`→`utime`, `audio`→pygame module, …), so `import time`,
+   `import engine`, … in engine and game code resolve to the emulations.
+5. `chdir()`s into the game directory (same as the firmware does on the
+   device before running `main.py`), so runtime state
+   (`keymap.json`, `settings.json`, `.pc_wrapper_settings.json`,
+   `campaign_saves.json`) is written next to the game.
 
-## Installation
+It is idempotent. The launcher (`tool/run_pc.py`) is the sole entry point
+on the PC and calls it before importing the game; the platform module
+never knows it runs on a PC - to it, the emulation is just a ThumbyColor.
 
-1. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Running a game
 
-2. Run the game:
-   ```bash
-   python run_pc.py
-   ```
+```bash
+# from the repository root
+python3 tool/run_pc.py              # runs games/thumbcommander
+python3 tool/run_pc.py --recalibrate
+python3 tool/run_pc.py --headless   # SDL dummy video/audio (CI)
+```
 
-   Or make it executable (Linux/Mac):
-   ```bash
-   chmod +x run_pc.py
-   ./run_pc.py
-   ```
+The launcher: (a) calls `bootstrap()`, (b) runs a one-time FPS
+calibration (plays the intro cutscene to measure rendering overhead and
+saves a correction factor to `.pc_wrapper_settings.json`, which
+`pc/engine.py` applies to `fps_limit()`; `--recalibrate` forces it), and
+(c) imports the game's `main` module, whose trailing `main()` call starts
+the game.
 
 ## Controls
 
-| Keyboard Key | Thumby Button |
-|--------------|---------------|
-| Arrow Keys   | D-Pad         |
-| Z            | Button A (Fire)|
-| X            | Button B      |
-| A            | Left Bumper   |
-| S            | Right Bumper  |
-| ESC          | Menu          |
+| Keyboard key | ThumbyColor button |
+|--------------|--------------------|
+| Arrow keys   | D-Pad              |
+| Y            | Button A (fire)    |
+| X            | Button B           |
+| A            | Left bumper (LB)   |
+| S            | Right bumper (RB)  |
+| ESC          | Menu               |
 
-## How It Works
+(A is mapped to `Y` because the reference keyboard layout is German
+QWERTZ, where the physical `Z` key produces `Y`.)
 
-The wrapper creates a compatibility layer that:
+## Requirements
 
-1. **MicroPython Emulation**: Provides decorators like `@micropython.viper` and `@micropython.native` as no-ops
-2. **Framebuffer**: Implements MicroPython's `framebuf.FrameBuffer` with RGB565 support
-3. **Display**: Uses pygame to render the framebuffer to a window
-4. **Input**: Maps keyboard keys to button states
-5. **Hardware Stubs**: Provides dummy implementations for audio, rumble, etc.
-
-All game code runs unchanged - the wrapper injects compatibility modules before the game starts.
-
-## Technical Details
-
-### Wrapper Architecture
-
-```
-run_pc.py (launcher)
-    └── Sets up sys.path and sys.modules
-    └── Imports pc_wrapper modules
-    └── Runs ThumbCommander.py
-
-pc_wrapper/
-    ├── micropython_compat.py    # @viper, @native decorators
-    ├── framebuf.py              # FrameBuffer with RGB565
-    ├── thumbycolor_native.py    # Display & Sprite classes
-    ├── thumbyButton.py          # Button input handling
-    ├── engine.py                # Engine module stub
-    ├── engine_io.py             # IO constants
-    ├── audio.py                 # Audio stubs
-    ├── utime.py                 # Time functions
-    ├── machine.py               # Machine module
-    └── ...
-```
-
-### RGB565 Format
-
-The ThumbyColor uses RGB565 format (16-bit color):
-- 5 bits red (0-31)
-- 6 bits green (0-63)
-- 5 bits blue (0-31)
-
-The wrapper's framebuffer correctly handles this format and converts it to RGB888 for pygame rendering.
-
-### Viper Methods
-
-The game uses `@micropython.viper` decorated functions for performance. On PC, these decorators are no-ops, but the code runs correctly in standard Python.
+- Python 3.8+
+- pygame 2.0+ (`pip install -r requirements.txt` from the repository root)
 
 ## Limitations
 
-- Audio playback is stubbed (no sound on PC)
-- Rumble/haptic feedback is disabled
-- Some visual effects may look different
-- Performance is not representative of hardware
-
-## Troubleshooting
-
-### ImportError: No module named 'pygame'
-Install pygame: `pip install pygame`
-
-### Game window doesn't appear
-Make sure pygame is properly installed and your system supports OpenGL/SDL2
-
-### Keyboard not responding
-Click on the game window to ensure it has focus
-
-## License
-
-This wrapper is provided as-is for running ThumbCommander on PC. The game code remains unchanged and retains its original license.
+- Rendering is per-pixel in Python, so absolute performance is far below
+  the RP2350 hardware; the FPS calibration compensates the *relative*
+  overhead of the window blit.
+- No rumble (no haptics on a PC).
+- The 8x8 text font is built into `framebuf.py`; the font *file* a game
+  loads only affects the glyph count/width bookkeeping, not the glyphs.

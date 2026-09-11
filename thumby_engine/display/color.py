@@ -1,13 +1,13 @@
-# thumbycolor_native.py 
+# Color (RGB565) display driver for ThumbyColor and the PC emulation.
 from array import array
-import gc
-import struct
-from platform_constants import get_constants
+from gc import collect , mem_free
+from struct import unpack
+from ..platform.constants import get_constants
 from engine_draw import back_fb
 from  engine import time_to_next_tick, tick, fps_limit
 import framebuf
 from machine import Timer, Pin
-from fpmath import fpmul, fpdiv
+from ..util.fpmath import fpmul, fpdiv
 
 timer = Timer()
 
@@ -26,7 +26,7 @@ def _norumble(thisTimer):
 class ColorDisplay:
     """Native resolution ThumbyColor display using internal buffer"""
 
-    def __init__(self):
+    def __init__(self, font=None, fps=0):
         # Get the engine's framebuffer
         self.engine_fb = back_fb()
 
@@ -40,11 +40,14 @@ class ColorDisplay:
         self._x_table = array('H', [0] * 128)
         self._y_table = array('H', [0] * 128)
 
-        # Font setup
-        self.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
+        # The engine is game-agnostic: font and target FPS are supplied by
+        # the game (e.g. display.setFont(PC.FONT_FILE, ...) / setFPS(PC.FPS)).
+        self.font_bmap = None
+        if font is not None:
+            self.setFont(*font)
+        if fps:
+            fps_limit(fps)
 
-        fps_limit(PC.FPS)
-    
     def fill(self, color):
         """Fill screen with color"""
         self.internal_fb.fill(color)
@@ -166,7 +169,7 @@ class ColorDisplay:
             with open(filename, 'rb') as f:
                 # Read header (4 bytes: width + height as uint16)
                 header = f.read(4)
-                width, height = struct.unpack('<HH', header)
+                width, height = unpack('<HH', header)
                 f.read(4)  # Skip frame count and flags
                 self._stream_sprite_to_fb(f, x, y, width, height, key)
                 return True
@@ -192,10 +195,19 @@ class ColorDisplay:
         # Blit our internal buffer to the engine's framebuffer
         self.engine_fb.blit(self.internal_fb, 0, 0) 
         
+    def blit_framebuffer(self, fb, x, y, key=-1, palette=None):
+        """Public blit of an arbitrary framebuffer (used by the cutscene
+        player). palette: optional 256-color RGB565 palette to map an
+        8-bit indexed source through."""
+        if palette is not None:
+            self.internal_fb.blit(fb, x, y, key, palette)
+        else:
+            self.internal_fb.blit(fb, x, y, key)
+
     def show(self):
         """Alias for update()"""
         self.update()
-    
+
     def enableGrayscale(self):
         """Compatibility method"""
         pass
@@ -263,7 +275,7 @@ class ColorSprite:
         
         # Read header
         header = self.file_handle.read(8)
-        self.width, self.height, self.frameCount, flags = struct.unpack('<HHHH', header)
+        self.width, self.height, self.frameCount, flags = unpack('<HHHH', header)
         
         # Setup dimensions
         self.scaledWidth = fpmul(self.width<<16, self.scale)>>16
@@ -326,16 +338,29 @@ class ColorSprite:
 Sprite = ColorSprite
 
 def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, cWidth=0, cHeight=0):
-    """ThumbyColor version that prioritizes color sprites with memory management"""
+    """ThumbyColor version that prioritizes color sprites with memory management.
+
+    `bitmap_data` is either the path of a .COL.bin file, or a (BIT, SHD)
+    tuple of the 1-bit source sprite. In the tuple case the matching color
+    sprite is derived: <prefix>_<cWidth>_<cHeight>.COL.bin, looked up in the
+    same directory as the 1-bit sources. This lets a game call
+    create_sprite() identically on both platforms.
+    """
     # Force GC before creating new sprites
-    gc.collect()
+    collect()
     color_file = ""
     if isinstance(bitmap_data, tuple) and isinstance(bitmap_data[0], str):
         base_file = bitmap_data[0]
         # Calculate output dimensions
         output_width = width if cWidth == 0 else cWidth
         output_height = height if cHeight == 0 else cHeight
-        color_file = base_file.split("_")[0] + f'_{output_width}_{output_height}.COL.bin'
+        # Sprite names are '<prefix>_<w>_<h>.<ext>'; derive from the
+        # basename so underscores in parent directories can't break
+        # the lookup.
+        name = base_file.rsplit('/', 1)[-1]
+        prefix = name.split("_")[0]
+        directory = base_file[:len(base_file) - len(name)]
+        color_file = directory + prefix + f'_{output_width}_{output_height}.COL.bin'
     elif isinstance(bitmap_data, str):
         # Try color version first
         color_file = bitmap_data
@@ -345,5 +370,5 @@ def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, m
         
     print(f"Loading sprite: {color_file}")
     sprite = Sprite(0, 0, color_file, x, y, key, mirrorX, mirrorY)
-    print(f"Free memory after loading Sprite: {gc.mem_free()}")
+    print(f"Free memory after loading Sprite: {mem_free()}")
     return sprite

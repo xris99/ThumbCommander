@@ -1,25 +1,51 @@
-# platform_loader.py - Updated with memory-efficient imports using try/except
-import sys
-import gc
-import micropython
-from thumbyButton import ButtonClass
+# platform module - the single seam between a game and the hardware.
+#
+# A game does:
+#     from thumby_engine.platform import display, PC, Sprite, ...
+# and gets a stable, platform-neutral API no matter which target it runs on:
+#
+#   * ThumbyColor (RP2350):  RGB565 display, 9 buttons, IMA-ADPCM audio,
+#                            TDL8 palette-delta cutscenes
+#   * Thumby      (RP2040):  72x40 1-bit 4-level dither, 6 buttons,
+#                            no audio, silent 1-bit cutscenes
+#
+# Detection is hardware-only: the engine_io firmware module exists on the
+# ThumbyColor, not on the original Thumby. The PC target is invisible to
+# this module: tool/run_pc.py installs the CPython/pygame emulation
+# (thumby_engine.pc) into sys.modules before the game is imported, so the
+# PC runs the very same ThumbyColor path.
+#
+# On import this module: (1) detects the target, (2) wires the matching
+# display / input / audio / cutscene modules, (3) exposes the public API.
+# It is the only engine module that a game must import.
 
-# Platform detection
+from gc import mem_free
+
+# --- Target detection ------------------------------------------------------
+# The engine_io firmware module exists on ThumbyColor (and its PC
+# emulation) but not on the original Thumby.
 IS_THUMBY_COLOR = False
-
 try:
     import engine_io
     IS_THUMBY_COLOR = True
 except ImportError:
-    from thumbyHardware import swL, swR, swU, swD, swA, swB
+    pass
+IS_THUMBY = not IS_THUMBY_COLOR
 
-# Get platform constants
-from platform_constants import get_constants
+# --- Shared constants (engine fields; games extend the same object) --------
+from .constants import get_constants
 PC = get_constants(IS_THUMBY_COLOR)
 
-# Initialize all variables to None first
+# Buttons: every target provides a ButtonClass with pressed()/justPressed()
+# (firmware thumbyButton on the devices, the PC emulation on a PC).
+from thumbyButton import ButtonClass
+
+# --- Public API (initialized per platform below) ---------------------------
 display = None
 Sprite = None
+create_sprite = None
+play_cutscene_animation = None
+create_cancel_callback = None
 rumble = None
 audio_load = None
 audio_play = None
@@ -32,110 +58,13 @@ audio_clear_end_callback = None
 audio_open_id = None
 audio_play_id = None
 audio_close_ids = None
-play_cutscene_animation = None
-create_cancel_callback = None
-create_sprite = None
 
-# Platform-specific imports using try/except
-if not IS_THUMBY_COLOR:
-    from grayscale import display as _display, Sprite as _Sprite, create_sprite as _create_sprite  
-    display = _display
-    Sprite = _Sprite
-    create_sprite = _create_sprite
-    buttonA = ButtonClass(swA) # Left (A) button
-    buttonB = ButtonClass(swB) # Right (B) button
-    buttonU = ButtonClass(swU) # D-pad up
-    buttonD = ButtonClass(swD) # D-pad down
-    buttonL = ButtonClass(swL) # D-pad left
-    buttonR = ButtonClass(swR) # D-pad right
-    buttonLB = buttonL
-    buttonRB = buttonR
-    buttonMENU = buttonB
-    
-    from os import stat
-    class CancelCallback:
-        __slots__ = ('counter',)
-        def __init__(self):
-            self.counter = 0
-        def __call__(self, _):
-            self.counter += 1
-            if self.counter >= 6:
-                self.counter = 0
-                if buttonB and buttonB.justPressed():
-                    return False
-            return True
-    
-    def create_cancel_callback():
-        return CancelCallback()
-    
-    def play_cutscene_animation(filename, fps=20, frame_callback=None):
-        """Play grayscale sprite animation for Thumby (no audio support)"""
-        from gc import collect
-        
-        # Use the global display instance
-        global display
-        
-        # Set FPS
-        display.setFPS(fps)
-        
-        # Check if .SHD file exists (required for grayscale)
-        shd_filename = filename.replace('.BIT.bin', '.SHD.bin')
-        
-        try:
-            # Parse dimensions from filename
-            parts = filename.split('_')
-            if len(parts) >= 3:
-                try:
-                    width = int(parts[-2])
-                    height = int(parts[-1].replace('.BIT.bin', ''))
-                except ValueError:
-                    # Default dimensions if parsing fails
-                    width, height = 74, 30
-            else:
-                width, height = 74, 30
-            
-            # Center the animation
-            x = (PC.WIDTH - width) // 2
-            y = (PC.HEIGHT - height) // 2
-            
-            # Calculate buffer size for grayscale bitmap
-            bitmap_byte_count = width * ((height + 7) // 8)
-            
-            with open(filename, 'rb') as bit_file, open(shd_filename, 'rb') as shd_file:
-                # Calculate frame count from file size
-                file_size = stat(filename)[6]
-                frame_count = file_size // bitmap_byte_count
-                
-                print(f"Playing grayscale cutscene: {width}x{height}, {frame_count} frames")
-                
-                # Create reusable buffers
-                bit_buffer = bytearray(bitmap_byte_count)
-                shd_buffer = bytearray(bitmap_byte_count)
-                
-                # Play each frame
-                for frame_idx in range(frame_count):
-                    display.fill(0)
-                    
-                    # Read frame data
-                    bit_file.readinto(bit_buffer)
-                    shd_file.readinto(shd_buffer)
-                    
-                    # Use display's native blit for grayscale
-                    display.blit((bit_buffer, shd_buffer), x, y, width, height, -1, 0, 0)
-                    display.update()
-                    # Handle frame callback for cancellation
-                    if frame_callback:
-                        if not frame_callback(frame_idx):
-                            break
-                # Clean up
-                del bit_buffer, shd_buffer
-                collect()
-                
-        except Exception as e:
-            print(f"Error playing grayscale cutscene\n{filename}:\n{e}")
-        
-    print(f"Thumby display initialized. Free memory: {gc.mem_free()}")
-else:
+buttonA = buttonB = buttonU = buttonD = buttonL = buttonR = None
+buttonLB = buttonRB = buttonMENU = None
+
+if IS_THUMBY_COLOR:
+    # --- ThumbyColor (the PC emulation presents itself as one) --------------
+    import engine_io
     buttonA = ButtonClass(engine_io.A)
     buttonB = ButtonClass(engine_io.B)
     buttonU = ButtonClass(engine_io.UP)
@@ -145,47 +74,86 @@ else:
     buttonLB = ButtonClass(engine_io.LB)
     buttonRB = ButtonClass(engine_io.RB)
     buttonMENU = ButtonClass(engine_io.MENU)
-    # Try to import ThumbyColor display and sprite classes
-    try:
-        from thumbycolor_native import ColorDisplay, ColorSprite, _rumble, create_sprite as _create_sprite
-        display = ColorDisplay()
-        Sprite = ColorSprite
-        rumble = _rumble
-        create_sprite = _create_sprite
-        print(f"ThumbyColor display initialized. Free memory: {gc.mem_free()}")
-    except ImportError as e:
-        print(f"Warning: Could not import thumbycolor_native: {e}")
-    
-    try:
-        from audio import (load, play, stop, set_volume, set_loop, get_position, set_end_callback, clear_end_callback, open_id, play_id, close_ids)        
-        audio_load = load
-        audio_play = play
-        audio_stop = stop
-        audio_set_volume = set_volume
-        audio_set_loop = set_loop
-        audio_get_position = get_position
-        audio_set_end_callback = set_end_callback
-        audio_clear_end_callback = clear_end_callback
-        audio_open_id = open_id
-        audio_play_id = play_id
-        audio_close_ids = close_ids
-        from cutscene_utils import init_cutscene_utils, play_cutscene_animation as _play_cutscene, create_cancel_callback as _create_cancel
-        play_cutscene_animation = _play_cutscene
-        create_cancel_callback = _create_cancel
-        init_cutscene_utils(display, PC, audio_load, audio_play, audio_stop, buttonMENU)
-        print(f"Audio and Color Cutscene initialized. Free memory: {gc.mem_free()}")
-    except ImportError as e:
-        print(f"Warning: Could not import audio module or color_cutscene: {e}")    
 
-# Helper functions
+    from ..display.color import (ColorDisplay, ColorSprite,
+                                 _rumble, create_sprite as _create_sprite)
+    display = ColorDisplay()
+    Sprite = ColorSprite
+    rumble = _rumble
+    create_sprite = _create_sprite
+    print(f"ThumbyColor display initialized. Free memory: {mem_free()}")
+
+    # Audio: the IMA-ADPCM driver on the ThumbyColor. On a PC the emulation
+    # pre-registers its pygame.mixer implementation under this same module
+    # name, so the same import picks up that backend instead.
+    from ..audio.hardware import (load, play, stop, set_volume, set_loop,
+                                   get_position, set_end_callback,
+                                   clear_end_callback, open_id, play_id,
+                                   close_ids)
+    audio_load = load
+    audio_play = play
+    audio_stop = stop
+    audio_set_volume = set_volume
+    audio_set_loop = set_loop
+    audio_get_position = get_position
+    audio_set_end_callback = set_end_callback
+    audio_clear_end_callback = clear_end_callback
+    audio_open_id = open_id
+    audio_play_id = play_id
+    audio_close_ids = close_ids
+
+    from ..cutscene.color import (init_cutscene_utils,
+                                  play_cutscene_animation as _play_cutscene,
+                                  create_cancel_callback as _create_cancel)
+    play_cutscene_animation = _play_cutscene
+    create_cancel_callback = _create_cancel
+    init_cutscene_utils(display, PC, audio_load, audio_play, audio_stop,
+                        buttonMENU)
+    print(f"Audio and color cutscene initialized. Free memory: {mem_free()}")
+
+else:
+    # --- Original Thumby (no audio, 1-bit cutscenes) ------------------------
+    from thumbyHardware import swL, swR, swU, swD, swA, swB
+    buttonA = ButtonClass(swA)   # Left (A) button
+    buttonB = ButtonClass(swB)   # Right (B) button
+    buttonU = ButtonClass(swU)   # D-pad up
+    buttonD = ButtonClass(swD)   # D-pad down
+    buttonL = ButtonClass(swL)   # D-pad left
+    buttonR = ButtonClass(swR)   # D-pad right
+    buttonLB = buttonL
+    buttonRB = buttonR
+    buttonMENU = buttonB
+
+    from ..display.grayscale import Grayscale, Sprite as _Sprite
+    from ..display.grayscale import create_sprite as _create_sprite
+    display = Grayscale()
+    display.enableGrayscale()
+    Sprite = _Sprite
+    create_sprite = _create_sprite
+
+    from ..cutscene.grayscale import (init_grayscale_cutscene,
+                                      play_cutscene_animation as _play_cutscene,
+                                      create_cancel_callback as _create_cancel)
+    play_cutscene_animation = _play_cutscene
+    create_cancel_callback = _create_cancel
+    init_grayscale_cutscene(display, PC, buttonMENU)
+
+    print(f"Thumby display initialized. Free memory: {mem_free()}")
+
+
+# --- Input helpers ----------------------------------------------------------
 @micropython.native
 def dpadPressed():
-    """Returns true if any dpad buttons are currently pressed on the thumby."""
-    return (buttonU.pressed() or buttonD.pressed() or buttonL.pressed() or buttonR.pressed())
-  
+    """True if any d-pad button is currently pressed."""
+    return (buttonU.pressed() or buttonD.pressed() or
+            buttonL.pressed() or buttonR.pressed())
+
+
 @micropython.native
 def inputJustPressed():
-    """Returns true if any buttons were just pressed on the thumby."""
-    return (buttonA.justPressed() or buttonB.justPressed() or buttonU.justPressed() or 
-            buttonD.justPressed() or buttonL.justPressed() or buttonR.justPressed() or 
-            buttonLB.justPressed() or buttonRB.justPressed() or buttonMENU.justPressed())
+    """True if any button was just pressed."""
+    return (buttonA.justPressed() or buttonB.justPressed() or
+            buttonU.justPressed() or buttonD.justPressed() or
+            buttonL.justPressed() or buttonR.justPressed() or
+            buttonLB.justPressed() or buttonRB.justPressed() or
+            buttonMENU.justPressed())

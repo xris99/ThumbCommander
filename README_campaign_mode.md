@@ -4,7 +4,9 @@ This document explains how to use the campaign mode in ThumbCommander and add ow
 
 ## Implementation Steps
 
-Campaigns are stored in JSON files in the ThumbCommander directory.
+Campaigns are stored in JSON files in the game's `assets/` directory
+(`games/thumbcommander/assets/` in this repository,
+`/Games/ThumbCommander/assets/` on the device).
 To remove campaigns, simply delete the respective JSON file.
 Create campaign JSON files with your missions and stories. Only file in the format '*_campaign.json' are picked up!
 
@@ -60,7 +62,7 @@ In non-campaign mode (regular gameplay), the original endless gameplay mechanics
 
 1. Create a JSON file with the structure shown above
 2. Name it something descriptive ending with `_campaign.json` (e.g., `tc1_campaign.json`)
-3. Save it in your ThumbCommander directory
+3. Save it in the game's `assets/` directory, next to the sample campaigns
 
 **Campaign Order**: Campaigns are displayed in alphabetical order based on their filenames. To control the display order, use filename prefixes like `01_campaign.json`, `02_campaign.json`, etc.
 

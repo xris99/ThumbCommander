@@ -1,11 +1,12 @@
-# cutscene_utils.py - 8-bit delta compressed cutscenes with audio for ThumbyColor only
+# TDL8 (8-bit palette-delta) cutscene player with IMA-ADPCM audio, for
+# ThumbyColor and its PC emulation.
 import struct
 from os import stat
 from gc import collect
 from array import array
 from framebuf import FrameBuffer, GS8, RGB565
 
-# These will be injected by platform_loader
+# These references are injected by the platform module (init_cutscene_utils)
 display = None
 PC = None
 audio_load = None
@@ -14,7 +15,7 @@ audio_stop = None
 buttonCANCEL = None
 
 def init_cutscene_utils(display_ref, pc_ref, audio_load_ref, audio_play_ref, audio_stop_ref, button_cancel_ref):
-    """Initialize references - called by platform_loader"""
+    """Initialize references - called by the platform module"""
     global display, PC, audio_load, audio_play, audio_stop, buttonCANCEL
     display = display_ref
     PC = pc_ref
@@ -135,7 +136,7 @@ def _play_8bit_delta_cutscene(filename, frame_callback, fps):
             
             # Clear display and blit with palette mapping
             display.fill(0)
-            display.internal_fb.blit(persistent_fb, x, y, 0, palette)
+            display.blit_framebuffer(persistent_fb, x, y, 0, palette)
             
             display.update()
             

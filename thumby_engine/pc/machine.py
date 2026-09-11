@@ -1,7 +1,7 @@
 """
-MicroPython machine module for PC
-Provides Pin, Timer, and SPI stubs for hardware compatibility
-Audio is handled by pc_wrapper/audio.py (no PWM emulation needed)
+CPython emulation of the MicroPython `machine` module.
+Provides Pin, Timer, and SPI stubs for hardware compatibility.
+Audio is handled by thumby_engine.audio.pc (no PWM emulation needed).
 """
 
 import threading

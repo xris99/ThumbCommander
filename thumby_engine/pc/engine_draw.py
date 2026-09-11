@@ -1,6 +1,7 @@
 """
-Engine draw module for PC
-Provides back_fb object that the hardware thumbycolor_native uses to render
+CPython emulation of the ThumbyColor `engine_draw` firmware module.
+Provides the back_fb() back framebuffer that the color display
+(thumby_engine.display.color) renders into via pygame.
 """
 
 import sys
@@ -17,9 +18,8 @@ def _ensure_pygame():
     if pygame is None:
         try:
             import pygame as pg
-            import os
             # IMPORTANT: Initialize mixer at 15625 Hz BEFORE pygame.init()
-            # This must match the frequency in pc_wrapper/audio.py
+            # This must match the frequency in thumby_engine.audio.pc
             # pygame.mixer can only be initialized ONCE, so we do it here first
             pg.mixer.pre_init(frequency=15625, size=-16, channels=1, buffer=512)
             try:
@@ -42,7 +42,7 @@ class BackFrameBuffer:
     On PC, we render it to pygame surface
     """
 
-    def __init__(self, width=128, height=128, scale=4):
+    def __init__(self, width=128, height=128, scale=4, caption=None):
         self.width = width
         self.height = height
         self.scale = scale
@@ -52,13 +52,15 @@ class BackFrameBuffer:
         # Initialize pygame
         if _ensure_pygame():
             self.screen = pygame.display.set_mode((width * scale, height * scale))
-            pygame.display.set_caption("ThumbCommander - ThumbyColor Edition (PC)")
+            if caption is None:
+                caption = "ThumbyColor (PC)"
+            pygame.display.set_caption(caption)
             self.clock = pygame.time.Clock()
 
     def blit(self, source_fb, x, y, key=-1, palette=None):
         """
         Blit a framebuffer to the pygame screen
-        This is called by the hardware thumbycolor_native.py in update()
+        This is called by the color display's update()
 
         Args:
             source_fb: FrameBuffer object to blit from

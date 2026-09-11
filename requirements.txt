@@ -1,0 +1,11 @@
+# PC wrapper only (thumby_engine.pc) - the CPython/pygame emulation of
+# the ThumbyColor firmware used by tool/run_pc.py. Not needed on the
+# Thumby/ThumbyColor hardware targets.
+pygame>=2.0
+
+# Device deployment (tool/deploy.py) - not installed as a dependency:
+#   * mpy-cross  - must match the MicroPython version on the target
+#                  device (use the one shipped with the device firmware,
+#                  or a matching build). deploy.py finds it on PATH or
+#                  takes --mpy-cross PATH.
+#   * mpremote   - pip install mpremote - only needed for --remote pushes.

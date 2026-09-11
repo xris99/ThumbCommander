@@ -1,7 +1,8 @@
 # waypoint_system.py - Waypoint navigation for multi-stage missions
-# Compile to .mpy for deployment: python3 -m mpy_cross waypoint_system.py
-from fpmath import fpmul, fpsin, fpcos, project, rotate_z_x, rotate_z_y, sign
-from platform_loader import PC, display, IS_THUMBY_COLOR
+# (Deployment/compilation is handled by tool/deploy.py.)
+from thumby_engine.util.fpmath import (fpmul, fpsin, fpcos, project,
+                                       rotate_z_x, rotate_z_y, sign)
+from thumby_engine.platform import PC, display, IS_THUMBY_COLOR
 
 # Fixed z-distance for waypoint (always at max range)
 WP_Z = 60 << 16

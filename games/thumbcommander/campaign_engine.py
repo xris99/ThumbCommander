@@ -1,14 +1,15 @@
-from platform_loader import PC, display, buttonA, buttonB, buttonU, buttonD, buttonL, buttonR, IS_THUMBY_COLOR
+from thumby_engine.platform import (PC, display, buttonA, buttonB, buttonU,
+                                    buttonD, buttonL, buttonR, IS_THUMBY_COLOR)
 from time import sleep
 from utime import ticks_ms, ticks_diff
 import os
 from gc import collect
-import stream_json as sj
+from thumby_engine.util import stream_json as sj
 
 
 class CampaignEngine:
-    def __init__(self, game_loc="/Games/ThumbCommander/"):
-        self.game_loc = game_loc
+    def __init__(self):
+        self.campaign_dir = 'assets/'
         self.campaign_file = None
         self.current_campaign = None
         self.current_mission = 0
@@ -19,22 +20,22 @@ class CampaignEngine:
         self._mission_cache_idx = -1
         self._load_campaigns()
         self.background = None
-        display.setFont("/lib/font3x5.bin", 3, 5, 1)
+        display.setFont('assets/font3x5.bin', 3, 5, 1)
 
     def _load_campaigns(self):
         """Load campaign headers only (title + description) - no full JSON parse"""
         try:
-            files = [f for f in os.listdir(self.game_loc) if f.endswith("_campaign.json")]
+            files = [f for f in os.listdir(self.campaign_dir) if f.endswith("_campaign.json")]
             files.sort()
             self.campaigns = {}
             self.campaign_order = []
             for file in files:
-                data = sj.read_fields(self.game_loc + file, ['title', 'description'])
+                data = sj.read_fields(self.campaign_dir + file, ['title', 'description'])
                 if data['title']:
                     self.campaigns[data['title']] = {"file": file, "description": data['description'] or ""}
                     self.campaign_order.append(data['title'])
             try:
-                with open(self.game_loc + "campaign_saves.json", 'r') as f:
+                with open("campaign_saves.json", 'r') as f:
                     import json
                     self.campaign_saves = json.loads(f.read())
             except: self.campaign_saves = {}
@@ -48,7 +49,7 @@ class CampaignEngine:
         if self._mission_cache_idx == idx and self._mission_cache:
             return self._mission_cache
         if not self.campaign_file: return None
-        result = sj.get_array_object(self.game_loc + self.campaign_file, 'missions', idx)
+        result = sj.get_array_object(self.campaign_dir + self.campaign_file, 'missions', idx)
         if result:
             self._mission_cache = result
             self._mission_cache_idx = idx
@@ -57,14 +58,14 @@ class CampaignEngine:
     def _count_missions(self):
         """Count missions using streaming"""
         if not self.campaign_file: return 0
-        return sj.count_array(self.game_loc + self.campaign_file, 'missions')
+        return sj.count_array(self.campaign_dir + self.campaign_file, 'missions')
 
     def load_campaign(self, campaign_file):
         """Set campaign file for on-demand loading"""
         self.campaign_file = campaign_file
         self._mission_cache = None
         self._mission_cache_idx = -1
-        self.current_campaign = sj.read_field(self.game_loc + campaign_file, 'title')
+        self.current_campaign = sj.read_field(self.campaign_dir + campaign_file, 'title')
         return self.current_campaign is not None
 
     def save_progress(self):
@@ -73,7 +74,7 @@ class CampaignEngine:
         self.campaign_saves[self.current_campaign] = {"mission": self.current_mission, "score": self.total_score}
         try:
             import json
-            with open(self.game_loc + "campaign_saves.json", 'w') as f:
+            with open("campaign_saves.json", 'w') as f:
                 f.write(json.dumps(self.campaign_saves))
             return True
         except: return False
@@ -254,7 +255,7 @@ class CampaignEngine:
     def show_campaign_complete(self):
         """Show campaign completion screen"""
         if not self.campaign_file: return
-        outro = sj.read_field(self.game_loc + self.campaign_file, 'outro') or 'Congratulations on completing the campaign!'
+        outro = sj.read_field(self.campaign_dir + self.campaign_file, 'outro') or 'Congratulations on completing the campaign!'
         self.show_scrolling_text("CAMPAIGN COMPLETE", f"Total Score: {self.total_score}\n\n{outro}")
         if self.current_campaign in self.campaign_saves:
             del self.campaign_saves[self.current_campaign]
@@ -305,7 +306,7 @@ class CampaignEngine:
             else:
                 self.current_mission = 0
                 self.total_score = 0
-                intro = sj.read_field(self.game_loc + self.campaign_file, 'intro')
+                intro = sj.read_field(self.campaign_dir + self.campaign_file, 'intro')
                 if intro: self.show_scrolling_text("INTRODUCTION", intro)
             return self
 
@@ -331,12 +332,12 @@ class CampaignEngine:
         """Show mission failed screen with attempt information"""
         display.fill(0)
         if self.background: self.background.run(0)
-        display.setFont("/lib/font5x7.bin", 5, 7, 1)
+        display.setFont('assets/font5x7.bin', 5, 7, 1)
         display.drawText("MISSION", (PC.WIDTH - 7 * (PC.FONT_WIDTH+PC.FONT_SPACE)) // 2, 10*PC.SCREEN_SCALE, PC.WHITE)
         display.drawText("FAILED", (PC.WIDTH - 6 * (PC.FONT_WIDTH+PC.FONT_SPACE)) // 2, 20*PC.SCREEN_SCALE, PC.WHITE)
         display.update()
         sleep(1)
-        display.setFont("/lib/font3x5.bin", 3, 5, 1)
+        display.setFont('assets/font3x5.bin', 3, 5, 1)
         display.fill(0)
         if self.background: self.background.run(0)
         display.drawText(f"Attempt {attempt} of {max_attempts}", 4, 10*PC.SCREEN_SCALE, PC.WHITE)
@@ -349,9 +350,9 @@ class CampaignEngine:
         """Show mission success screen"""
         display.fill(0)
         if self.background: self.background.run(0)
-        display.setFont("/lib/font5x7.bin", 5, 7, 1)
+        display.setFont('assets/font5x7.bin', 5, 7, 1)
         display.drawText("MISSION", (PC.WIDTH - 7 * (PC.FONT_WIDTH+PC.FONT_SPACE)) // 2, 10*PC.SCREEN_SCALE, PC.WHITE)
         display.drawText("COMPLETE", (PC.WIDTH - 8 * (PC.FONT_WIDTH+PC.FONT_SPACE)) // 2, 20*PC.SCREEN_SCALE, PC.WHITE)
         display.update()
         sleep(2)
-        display.setFont("/lib/font3x5.bin", 3, 5, 1)
+        display.setFont('assets/font3x5.bin', 3, 5, 1)

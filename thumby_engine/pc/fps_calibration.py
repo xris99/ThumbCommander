@@ -1,6 +1,7 @@
 """
-FPS Calibration for PC Wrapper
-Automatically measures rendering overhead and calculates FPS correction factor
+FPS calibration for the PC target.
+Automatically measures rendering overhead and calculates an FPS
+correction factor, which pc/engine.py applies to fps_limit().
 """
 
 import os
@@ -8,14 +9,20 @@ import json
 import sys
 import struct
 
-# Import the backed-up stdlib time module that was saved in run_pc.py
-# This avoids the utime patching issue
+# Import the backed-up stdlib time module that was saved by
+# thumby_engine.pc.bootstrap() (before sys.modules['time'] was swapped
+# for the utime emulation). This avoids the utime patching issue.
 _stdlib_time = sys.modules.get('_stdlib_time_backup')
 if _stdlib_time is None:
-    # Fallback if not run through launcher (e.g., direct testing)
+    # Fallback if not run through the PC bootstrap (e.g. direct testing)
     import time as _stdlib_time
 
 SETTINGS_FILE = ".pc_wrapper_settings.json"
+
+# The timed reference render: the game's intro cutscene (TDL8 palette-
+# delta). Path is relative to the game directory (bootstrap() chdirs
+# there).
+VIDEO_FILE = "assets/intro_128_80.COL.bin"
 
 def load_settings():
     """Load settings from file if it exists"""
@@ -51,66 +58,49 @@ def calibrate_fps():
     print("="*70 + "\n")
     
     try:
-        # Import required modules
-        from platform_constants import get_constants
-        from thumbycolor_native import ColorDisplay
-        import cutscene_utils
-        import pc_wrapper.audio as audio
-        
-        # Initialize
-        PC = get_constants(is_thumby_color=True)
-        display = ColorDisplay()
-        
-        # Mock button
-        class MockButton:
-            def pressed(self):
-                return False
-        
-        button_menu = MockButton()
-        
-        # Initialize cutscene_utils
-        cutscene_utils.init_cutscene_utils(
-            display,
-            PC,
-            lambda f: audio.load(f),
-            lambda: audio.play(),
-            lambda: audio.stop(),
-            button_menu
-        )
-        
+        # Drive the calibration through the platform module: it has
+        # already created the display and initialized the color
+        # cutscene player (thumby_engine.cutscene.color).
+        import thumby_engine.platform as platform
+        from thumby_engine.cutscene import color as cutscene
+
         # Get video info
-        video_file = "intro_128_80.COL.bin"
+        video_file = VIDEO_FILE
         if not os.path.exists(video_file):
             print(f"[FPS Calibration] Warning: {video_file} not found, using default correction")
             return 1.3  # Default ~30% overhead
-        
+
         with open(video_file, 'rb') as f:
             magic = f.read(4)
             if magic != b'TDL8':
                 print(f"[FPS Calibration] Invalid video file, using default correction")
                 return 1.3
-            
+
             width, height, frame_count = struct.unpack('<HHH', f.read(6))
-        
+
         target_fps = 21
         expected_duration = frame_count / target_fps
-        
+
         print(f"Calibrating with intro cutscene:")
         print(f"  {frame_count} frames at target {target_fps} FPS")
         print(f"  Expected duration: {expected_duration:.2f}s")
         print(f"\nPlaying cutscene (no audio for calibration)...")
-        
-        # Disable audio for calibration
-        original_audio_load = cutscene_utils.audio_load
-        cutscene_utils.audio_load = None
-        
-        # Measure actual playback time
-        start = _stdlib_time.perf_counter()
-        cutscene_utils.play_cutscene_animation(video_file, fps=target_fps, frame_callback=None)
-        actual_duration = _stdlib_time.perf_counter() - start
-        
-        # Restore audio
-        cutscene_utils.audio_load = original_audio_load
+
+        # Disable audio for calibration (the cutscene module derives the
+        # .ima name and skips loading when audio_load is None)
+        original_audio_load = cutscene.audio_load
+        cutscene.audio_load = None
+
+        try:
+            # Measure actual playback time (no frame callback: the run
+            # cannot be cancelled, so the measurement is deterministic)
+            start = _stdlib_time.perf_counter()
+            platform.play_cutscene_animation(video_file, fps=target_fps,
+                                             frame_callback=None)
+            actual_duration = _stdlib_time.perf_counter() - start
+        finally:
+            # Restore audio
+            cutscene.audio_load = original_audio_load
         
         # Calculate actual FPS and correction factor
         actual_fps = frame_count / actual_duration

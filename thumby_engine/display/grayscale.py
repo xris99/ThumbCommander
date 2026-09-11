@@ -1,13 +1,13 @@
 
 from utime import sleep_ms, ticks_diff, ticks_ms, sleep_us
 from machine import Pin, SPI, idle, mem32
-import _thread
+from  _thread import start_new_thread, stack_size
 from os import stat
 from math import sqrt, floor
 from array import array
 from thumbyButton import buttonA, buttonB, buttonU, buttonD, buttonL, buttonR
 from sys import modules
-from fpmath import fpmul, fpdiv
+from ..util.fpmath import fpmul, fpdiv
 __version__ = '4.0.2-hemlock'
 
 emulator = None
@@ -189,7 +189,7 @@ class Grayscale:
 
         self._brightness = 127
         try:
-            with open("thumby.cfg", "r") as fh:
+            with open("/thumby.cfg", "r") as fh:
                 _, _, conf = fh.read().partition("brightness,")
                 b = int(conf.split(',')[0])
                 # Set to the relevant brightness level
@@ -219,7 +219,7 @@ class Grayscale:
 
         if not emulator:
             try:
-                with open("thumbyGS.cfg", "r") as fh:
+                with open("/thumbyGS.cfg", "r") as fh:
                     vls = fh.read().split('\n')
                     for fhd in vls:
                         if fhd.startswith('gsV3,'):
@@ -298,9 +298,9 @@ class Grayscale:
         if self._state[_ST_THREAD] == _THREAD_RUNNING:
             return
 
-        _thread.stack_size(2048)
+        stack_size(2048)
         self._init_grayscale()
-        _thread.start_new_thread(self._display_thread, ())
+        start_new_thread(self._display_thread, ())
         while self._state[_ST_THREAD] != _THREAD_RUNNING:
             idle()
 
@@ -1093,8 +1093,11 @@ class Grayscale:
     def drawSpriteWithScale(self, s):
         self.blitScaled(s.bitmap, s.x, s.y, s.scaledWidth, s.scaledHeight, s.key, s.mirrorX, s.mirrorY, fpdiv(256<<16, s.scale)>>16, s.width)
 
-def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, cWidth=0, cHeight=0):   
+def create_sprite(width, height, bitmap_data, x=0, y=0, key=-1, mirrorX=False, mirrorY=False, cWidth=0, cHeight=0):
+    """1-bit (BIT + SHD) sprite. `bitmap_data` is a bytearray pair, or a
+    (bit_path, shd_path) tuple loaded from files."""
     return Sprite(width, height, bitmap_data, x, y, key, mirrorX, mirrorY)
 
-display = Grayscale()
-display.enableGrayscale()
+# NOTE: the display instance is created by thumby_engine.platform
+# (one instance per running program); this module only provides the
+# Grayscale/Sprite classes and the helpers above.

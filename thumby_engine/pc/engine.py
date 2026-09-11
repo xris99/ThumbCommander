@@ -1,6 +1,7 @@
 """
-Engine module for PC
-Provides compatibility with ThumbyColor engine module timing and input
+CPython emulation of the ThumbyColor `engine` firmware module.
+Provides FPS limiting (tick / time_to_next_tick / fps_limit) and input
+polling (via thumbyButton.update_button_state) on a PC.
 """
 
 import time
@@ -39,7 +40,7 @@ def _load_fps_correction():
 
 # Import button update function for input polling
 try:
-    from pc_wrapper.thumbyButton import update_button_state
+    from .thumbyButton import update_button_state
 except ImportError:
     try:
         from thumbyButton import update_button_state
