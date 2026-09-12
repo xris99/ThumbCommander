@@ -15,13 +15,15 @@ Device layout after deployment:
   :/lib/thumby_engine/          (the engine as a package of .mpy files -
                                  a proper folder, never the device root)
   :/Games/ThumbCommander/
-      main.py                   (entry point - the only .py on the
-                                 device: the firmware can only start
-                                 .py files, so this is a small shim
+      ThumbCommander.py         (entry point on the Thumby - the only .py
+                                 on the device: the firmware can only
+                                 start .py files, so this is a small shim
                                  that puts the game dir on sys.path
                                  and imports MainGame; the engine
                                  resolves from /lib, a firmware default
-                                 path)
+                                 path. The ThumbyColor firmware starts
+                                 main.py, so the same shim is deployed
+                                 under that name there)
       MainGame.mpy              (the real entry module)
       ...                       (every other module as its own .mpy)
       manifest.txt, icon.bmp    (game browser metadata - ThumbyColor
@@ -36,8 +38,10 @@ Code deployment:
     the device all code is bytecode, which is what saves the little
     RAM they have;
   * the only exception is the entry point: the firmware can only
-    start .py files, so main.py is copied as-is and everything else
-    (including MainGame.py) is compiled;
+    start .py files, so the shim (main.py in the repo) is copied
+    as-is - as ThumbCommander.py on the Thumby, as main.py on the
+    ThumbyColor - and everything else (including MainGame.py) is
+    compiled;
   * a compile failure fails the whole deploy - there is no .py
     fallback, because .py source costs too much RAM on the devices;
   * the native/viper emitter requires an explicit target architecture,
@@ -84,10 +88,16 @@ DEVICE_GAME_DIR = '/Games/ThumbCommander'
 DEVICE_ENGINE_DIR = '/lib/thumby_engine'
 
 # The one file the firmware runs directly. It can only be a .py, so the
-# game ships a small shim main.py (game dir on sys.path + import
-# MainGame); main.py is the single file deployed as source,
-# everything else is .mpy.
+# game ships a small shim (main.py in the repo: game dir on sys.path +
+# import MainGame); it is the single file deployed as source,
+# everything else is .mpy. The name on the device is platform-specific:
+# the Thumby firmware starts ThumbCommander.py, the ThumbyColor starts
+# main.py.
 GAME_ENTRY = 'main.py'
+DEVICE_ENTRY = {
+    'thumby': 'ThumbCommander.py',
+    'thumbycolor': 'main.py',
+}
 
 GAME_DIR = 'games/thumbcommander'
 
@@ -113,7 +123,8 @@ ENGINE_THUMBYCOLOR = [
 ]
 
 GAME_COMMON = [
-    GAME_ENTRY,           # main.py - deployed as-is, never compiled
+    GAME_ENTRY,           # shim - deployed as-is (renamed per platform),
+                          # never compiled
     'MainGame.py',
     'constants.py',
     'campaign_engine.py',
@@ -233,12 +244,14 @@ def stage(platform, manifest, stage_base):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(os.path.join(REPO_ROOT, f), dst)
 
-    # Game modules (main.py included - it stays .py, see compile_dir)
+    # Game modules (the entry shim included - it stays .py, see
+    # compile_dir; on the device it is named per platform)
     game_dir = os.path.join(stage_dir, 'Games', 'ThumbCommander')
     os.makedirs(game_dir, exist_ok=True)
     for f in manifest['game']:
+        dst_name = DEVICE_ENTRY[platform] if f == GAME_ENTRY else f
         shutil.copy2(os.path.join(REPO_ROOT, GAME_DIR, f),
-                     os.path.join(game_dir, f))
+                     os.path.join(game_dir, dst_name))
 
     # Assets: the one flat directory, filtered per platform
     asset_src = os.path.join(REPO_ROOT, GAME_DIR, ASSETS_DIR)
@@ -403,7 +416,8 @@ def main():
             compile_dir(os.path.join(stage_dir, 'lib', 'thumby_engine'),
                         mpy_cross, args.keep_py, arch)
             compile_dir(os.path.join(stage_dir, 'Games', 'ThumbCommander'),
-                        mpy_cross, args.keep_py, arch, entry=GAME_ENTRY)
+                        mpy_cross, args.keep_py, arch,
+                        entry=DEVICE_ENTRY[platform])
         else:
             print(f'[{platform}] not compiled (--no-compile, debug only)')
         if args.remote:

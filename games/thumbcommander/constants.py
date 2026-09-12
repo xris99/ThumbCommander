@@ -43,7 +43,7 @@ if not IS_THUMBY_COLOR:
     PC.SPACE_STARS = const(200)
 
     # UI
-    PC.FONT_FILE = "assets/font3x5.bin"
+    PC.FONT_FILE = "/lib/font3x5.bin"
     PC.FONT_WIDTH = const(3)
     PC.FONT_HEIGHT = const(5)
     PC.FONT_SPACE = const(1)

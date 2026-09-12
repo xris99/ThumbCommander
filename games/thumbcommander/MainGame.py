@@ -199,40 +199,6 @@ def save_keymaps(keymap):
 # Global variable to store key mappings
 KEYMAPS = load_keymaps()
 
-@micropython.native
-def star_step(s, angle, scale):
-    global player_speed, player_angle
-
-    sp = s[4]
-    x = project(s[0], s[2], PC.CENTER_X, 0)
-    y = project(s[1], s[2], PC.CENTER_Y, 0)
-    size = 1 if sp == 0 else fp2int(fpdiv(PC.Z_DISTANCE << 16, fpmul(72090, s[2])))
-
-    if (-size < x < PC.WIDTH + size) and (-size < y < PC.HEIGHT + size):
-        display.drawFilledRectangle(x, y, size, size, s[3])
-
-    # move forward
-    if sp == 0:
-        for c in range(2):
-            s[c] += (player_angle[c] >> 1) + (player_speed - 65536)
-            if (s[c] > (PC.SPACE_STARS << 16)) or (s[c] < -(PC.SPACE_STARS << 16)):
-                s[c] = -s[c]
-    s[2] -= fpmul(sp, player_speed)
-
-    # Rotate around z-axis
-    if angle != 0:
-        new_x = rotate_z_x(s[0], s[1], angle)
-        s[1] = rotate_z_y(s[0], s[1], angle)
-        s[0] = new_x
-
-    # Respawn when the star has passed the ship
-    if s[2] < (1 << 16):
-        a = randint(0, 4096)
-        radius = int2fp(randint(PC.WIDTH // scale, PC.WIDTH * 2) * scale)
-        s[0] = fpmul(radius, fpcos(a))
-        s[1] = fpmul(radius, fpsin(a))
-        s[2] = PC.Z_DISTANCE << 16
-
 # Game classes
 class Stars:
     def __init__(self, num=None, scale_pos=4, stable=80):
@@ -259,10 +225,41 @@ class Stars:
         self.scale = scale_pos
 
     @micropython.native
+    def star_step(self, s, angle):
+        sp = s[4]
+        x = project(s[0], s[2], PC.CENTER_X, 0)
+        y = project(s[1], s[2], PC.CENTER_Y, 0)
+        size = 1 if sp == 0 else fp2int(fpdiv(PC.Z_DISTANCE << 16, fpmul(72090, s[2])))
+
+        if (-size < x < PC.WIDTH + size) and (-size < y < PC.HEIGHT + size):
+            display.drawFilledRectangle(x, y, size, size, s[3])
+
+        # move forward
+        if sp == 0:
+            for c in range(2):
+                s[c] += (player_angle[c] >> 1) + (player_speed - 65536)
+                if (s[c] > (PC.SPACE_STARS << 16)) or (s[c] < -(PC.SPACE_STARS << 16)):
+                    s[c] = -s[c]
+        s[2] -= fpmul(sp, player_speed)
+
+        # Rotate around z-axis
+        if angle != 0:
+            new_x = rotate_z_x(s[0], s[1], angle)
+            s[1] = rotate_z_y(s[0], s[1], angle)
+            s[0] = new_x
+
+        # Respawn when the star has passed the ship
+        if s[2] < (1 << 16):
+            a = randint(0, 4096)
+            radius = int2fp(randint(PC.WIDTH // self.scale, PC.WIDTH * 2) * self.scale)
+            s[0] = fpmul(radius, fpcos(a))
+            s[1] = fpmul(radius, fpsin(a))
+            s[2] = PC.Z_DISTANCE << 16
+
+    @micropython.native
     def run(self, angle=0):
-        scale = self.scale
         for s in self.stars:
-            star_step(s, angle, scale)
+            self.star_step(s, angle)
 
 class Astroids:
     def __init__(self, num=5):

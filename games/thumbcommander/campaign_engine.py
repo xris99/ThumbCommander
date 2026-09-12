@@ -20,7 +20,7 @@ class CampaignEngine:
         self._mission_cache_idx = -1
         self._load_campaigns()
         self.background = None
-        display.setFont('assets/font3x5.bin', 3, 5, 1)
+        display.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
 
     def _load_campaigns(self):
         """Load campaign headers only (title + description) - no full JSON parse"""
