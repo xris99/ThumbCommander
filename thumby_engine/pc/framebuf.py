@@ -192,6 +192,13 @@ class FrameBuffer:
                     self.buffer[idx] = col_lo
                     self.buffer[idx + 1] = col_hi
                     idx += 2
+        elif self.format == GS8:
+            val = col & 0xFF
+            for row in range(h):
+                idx = (y + row) * self.stride + x
+                for _ in range(w):
+                    self.buffer[idx] = val
+                    idx += 1
 
     def rect(self, x, y, w, h, col, fill=False):
         """Draw rectangle outline or filled"""

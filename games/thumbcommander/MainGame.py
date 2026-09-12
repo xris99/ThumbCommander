@@ -616,13 +616,18 @@ class Pilot:
         """Execute state behavior - set target orientation and thrust"""
         e, s, st = self.enemy, self.state, self.state_timer
         if s == 0:  # Patrol
-            if st % 20 == 0: self.tx, self.ty = randint(3,9), randint(4,8)
+            if st % 20 == 0: 
+                self.tx = randint(3,9)
+                self.ty = randint(4,8)
             e[5] = 8<<16
         elif s == 1:  # Intercept
-            self.tx, self.ty, e[5] = (3 if z > 0 else 9), 6, 15<<16
+            self.tx = (3 if z > 0 else 9)
+            self.ty = 6
+            e[5] = 15<<16
         elif s == 2:  # Engage
             self.tx = (5 if self.flank else 7) if z < (18<<16) else 3
-            self.ty, e[5] = 6, 14<<16
+            self.ty = 6
+            e[5] = 14<<16
         elif s == 3:  # Evade
             self.tx, self.ty = Pilot._EVADE[(st // 15) & 3]
             e[5] = 18<<16
@@ -652,7 +657,9 @@ class Pilot:
         if self.timer < PILOT_PERIOD: return
         self.timer = 0
         self.state_timer += 1
-        e, z, st = self.enemy, self.enemy[2], self.state_timer
+        e = self.enemy
+        z = self.enemy[2]
+        st = self.state_timer
 
         # Threat check
         threat = 0
@@ -661,7 +668,8 @@ class Pilot:
         elif 0 < z < (20<<16): threat = 2
 
         # State transitions
-        old, hp = self.state, e[7]
+        old = self.state
+        hp = e[7]
         if hp < 3 and threat > 1 and old != 3 and st > 10: self.state = 3
         elif z > (8<<16):
             if z > (50<<16): self.state = 1
@@ -696,9 +704,15 @@ class Ship:
         self.cockpit_sprite_y = PC.SHIP_Y
         # Platform-specific cockpit sprite
         if IS_THUMBY_COLOR:
-            # Load color versions
-            self.cockpit_sprite = "assets/cockpit_118_53.COL.bin"
-            self.cockpit_top_sprite = "assets/cockpit_top_118_8.COL.bin"
+            # Load color versions (open once per flight, streamed per frame)
+            self.cockpit_sprite = open("assets/cockpit_118_53.COL.bin", "rb")
+            hd = self.cockpit_sprite.read(8)
+            self.cockpit_w = hd[0] | (hd[1] << 8)
+            self.cockpit_h = hd[2] | (hd[3] << 8)
+            self.cockpit_top_sprite = open("assets/cockpit_top_118_8.COL.bin", "rb")
+            hd = self.cockpit_top_sprite.read(8)
+            self.cockpit_top_w = hd[0] | (hd[1] << 8)
+            self.cockpit_top_h = hd[2] | (hd[3] << 8)
             self.cockpit_top_sprite_x = PC.SHIP_X
             self.stick_left_sprite = create_sprite(28, 16, "assets/stick_left_28_16.COL.bin", PC.SHIP_X+44, PC.SHIP_Y+37, 0)
             self.stick_right_sprite = create_sprite(28, 16, "assets/stick_right_28_16.COL.bin", PC.SHIP_X+46, PC.SHIP_Y+37, 0)
@@ -727,6 +741,11 @@ class Ship:
         self._button_states = [eval("button" + KEYMAPS[i]) for i in range(len(KEYMAPS))]
         display.setFont(PC.FONT_FILE, PC.FONT_WIDTH, PC.FONT_HEIGHT, PC.FONT_SPACE)
 
+    def __del__(self):
+        if IS_THUMBY_COLOR:
+            self.cockpit_sprite.close()
+            self.cockpit_top_sprite.close()
+
     @micropython.native
     def _run_hud(self):
         """Draw HUD ship and score"""
@@ -751,14 +770,14 @@ class Ship:
         for laser in self.laser:
             if laser.run(): self.laser.remove(laser)
         if IS_THUMBY_COLOR:
-            display.draw_sprite_from_file(self.cockpit_sprite, self.cockpit_sprite_x, self.cockpit_sprite_y, 0)
+            display.draw_open_sprite(self.cockpit_sprite, self.cockpit_sprite_x, self.cockpit_sprite_y, self.cockpit_w, self.cockpit_h, 0)
         else:
             self.cockpit_sprite.x = self.cockpit_sprite_x
             self.cockpit_sprite.y = self.cockpit_sprite_y
             display.drawSprite(self.cockpit_sprite)
         display.drawSprite(self.target_active_sprite if self.laser_energy == 0 else self.target_sprite)
         if IS_THUMBY_COLOR:
-            display.draw_sprite_from_file(self.cockpit_top_sprite, self.cockpit_top_sprite_x, 0, 0)
+            display.draw_open_sprite(self.cockpit_top_sprite, self.cockpit_top_sprite_x, 0, self.cockpit_top_w, self.cockpit_top_h, 0)
             draw_hull_status(display, lifes)
             draw_half_circle_energy(display, self.cockpit_sprite_x + 59, self.cockpit_sprite_y + 26, 13, self.laser_energy, 5)
             self.radar_sprite.x = self.cockpit_sprite_x + PC.RADAR_X

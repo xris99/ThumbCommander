@@ -108,27 +108,33 @@ def _play_8bit_delta_cutscene(filename, frame_callback, fps):
         # Create persistent 8-bit index buffer
         index_buffer = bytearray(width * height)
         persistent_fb = FrameBuffer(index_buffer, width, height, GS8)
+        header_buffer = bytearray(8)
+        header_mv = memoryview(header_buffer)
+        run_buffer = bytearray(256)
+        run_fb = FrameBuffer(run_buffer, 256, 1, GS8)
         
         # Play each frame
         for frame_idx in range(frame_count):
             # Seek to frame data
             f.seek(frame_offsets[frame_idx])
             
-            # Read frame type and data
-            frame_type = f.read(4)
-            data_size = struct.unpack('<I', f.read(4))[0]
-            
-            # Process frame based on type
-            if frame_type == b'FULL':
+            # Read 8-byte frame header (type byte + data size), allocation-free
+            f.readinto(header_mv)
+            frame_type = header_buffer[0]
+            data_size = header_buffer[4] | (header_buffer[5] << 8) | (header_buffer[6] << 16) | (header_buffer[7] << 24)
+
+            # Process frame based on type (first byte unique: F/U/D/S)
+            if frame_type == 0x46:  # b'FULL'
                 # RLE compressed full frame
-                _rle_decompress_8bit_stream(f, data_size, index_buffer, temp_buffer)
-            elif frame_type == b'URAW':
+                persistent_fb.fill(0)
+                _rle_decompress_8bit_stream(f, data_size, index_buffer, temp_buffer, run_buffer, run_fb)
+            elif frame_type == 0x55:  # b'URAW'
                 # Uncompressed full frame
-                _stream_into_buffer(f, data_size, index_buffer, temp_buffer)
-            elif frame_type == b'DLTA':
+                _stream_into_buffer(f, data_size, index_buffer)
+            elif frame_type == 0x44:  # b'DLTA'
                 # Delta frame - stream using temp_buffer (no allocation)
                 _apply_8bit_delta_stream(f, data_size, index_buffer, temp_buffer)
-            elif frame_type == b'SAME':
+            elif frame_type == 0x53:  # b'SAME'
                 # No changes
                 pass
             else:
@@ -144,36 +150,17 @@ def _play_8bit_delta_cutscene(filename, frame_callback, fps):
             if frame_callback:
                 if not frame_callback(frame_idx):
                     break
-            
-            collect()
         
         # Clean up
-        del temp_buffer, index_buffer, persistent_fb
+        del temp_buffer, index_buffer, persistent_fb, header_buffer, header_mv, run_buffer, run_fb
         collect()
 
-def _stream_into_buffer(file_handle, data_size, target_buffer, temp_buffer):
+def _stream_into_buffer(file_handle, data_size, target_buffer):
     """Stream data directly into buffer"""
-    bytes_read = 0
-    chunk_size = len(temp_buffer)
-    
-    while bytes_read < data_size:
-        to_read = min(chunk_size, data_size - bytes_read, len(target_buffer) - bytes_read)
-        if to_read <= 0:
-            break
-        
-        actual_read = file_handle.readinto(memoryview(temp_buffer)[0:to_read])
-        
-        for i in range(actual_read):
-            if bytes_read + i < len(target_buffer):
-                target_buffer[bytes_read + i] = temp_buffer[i]
-        
-        bytes_read += actual_read
+    file_handle.readinto(memoryview(target_buffer)[:min(data_size, len(target_buffer))])
 
-def _rle_decompress_8bit_stream(file_handle, data_size, index_buffer, temp_buffer):
+def _rle_decompress_8bit_stream(file_handle, data_size, index_buffer, temp_buffer, run_buffer, run_fb):
     """Stream RLE decompression for 8-bit data - no dynamic allocation"""
-    for i in range(len(index_buffer)):
-        index_buffer[i] = 0
-
     buf_pos = 0
     bytes_remaining = data_size
     chunk_size = (len(temp_buffer) // 2) * 2  # Multiple of 2 bytes per record
@@ -190,12 +177,21 @@ def _rle_decompress_8bit_stream(file_handle, data_size, index_buffer, temp_buffe
         while i + 1 < total_bytes and buf_pos < len(index_buffer):
             index = temp_buffer[i]
             count = temp_buffer[i + 1] + 1
-            for _ in range(count):
-                if buf_pos < len(index_buffer):
-                    index_buffer[buf_pos] = index
-                    buf_pos += 1
-                else:
-                    break
+            if count >= 8:
+                # Long run: fill scratch once, copy in bulk
+                run_fb.fill(index)
+                end = buf_pos + count
+                if end > len(index_buffer):
+                    end = len(index_buffer)
+                index_buffer[buf_pos:end] = run_buffer[:end - buf_pos]
+                buf_pos = end
+            else:
+                for _ in range(count):
+                    if buf_pos < len(index_buffer):
+                        index_buffer[buf_pos] = index
+                        buf_pos += 1
+                    else:
+                        break
             i += 2
 
         # Move remainder to start of buffer
@@ -207,7 +203,7 @@ def _apply_8bit_delta_stream(file_handle, data_size, index_buffer, temp_buffer):
     """Apply delta changes by streaming - no large allocation"""
     # Read change count (4 bytes)
     file_handle.readinto(memoryview(temp_buffer)[0:4])
-    change_count = struct.unpack('<I', temp_buffer[0:4])[0]
+    change_count = temp_buffer[0] | (temp_buffer[1] << 8) | (temp_buffer[2] << 16) | (temp_buffer[3] << 24)
 
     bytes_remaining = data_size - 4
     chunk_size = (len(temp_buffer) // 5) * 5  # Multiple of 5 bytes per record
@@ -223,7 +219,7 @@ def _apply_8bit_delta_stream(file_handle, data_size, index_buffer, temp_buffer):
         # Process complete 5-byte records (4 byte pixel_idx + 1 byte new_index)
         i = 0
         while i + 5 <= total_bytes and changes_processed < change_count:
-            pixel_idx = struct.unpack('<I', temp_buffer[i:i+4])[0]
+            pixel_idx = temp_buffer[i] | (temp_buffer[i + 1] << 8) | (temp_buffer[i + 2] << 16) | (temp_buffer[i + 3] << 24)
             if pixel_idx < len(index_buffer):
                 index_buffer[pixel_idx] = temp_buffer[i+4]
             i += 5

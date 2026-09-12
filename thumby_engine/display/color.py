@@ -40,6 +40,11 @@ class ColorDisplay:
         self._x_table = array('H', [0] * 128)
         self._y_table = array('H', [0] * 128)
 
+        # Reusable row scratch for _stream_sprite_to_fb (allocated on first use)
+        self._row_w = 0
+        self._row_buffer = None
+        self._row_fb = None
+
         # The engine is game-agnostic: font and target FPS are supplied by
         # the game (e.g. display.setFont(PC.FONT_FILE, ...) / setFPS(PC.FPS)).
         self.font_bmap = None
@@ -177,16 +182,26 @@ class ColorDisplay:
             print(f"Error drawing sprite from file {filename}: {e}")
             return False
 
-    @micropython.native  
+    @micropython.native
     def _stream_sprite_to_fb(self, file_handle, x, y, width, height, key):
-        row_bytes = width * 2
-        row_buffer = bytearray(row_bytes)
-        row_fb = framebuf.FrameBuffer(row_buffer, width, 1, framebuf.RGB565)
+        if self._row_w != width:
+            self._row_w = width
+            self._row_buffer = bytearray(width * 2)
+            self._row_fb = framebuf.FrameBuffer(self._row_buffer, width, 1, framebuf.RGB565)
+        row_buffer = self._row_buffer
+        row_fb = self._row_fb
+        internal_fb = self.internal_fb
         for row in range(height):
             file_handle.readinto(row_buffer)
-            self.internal_fb.blit(row_fb, x, y + row, key)
+            internal_fb.blit(row_fb, x, y + row, key)
 
-    @micropython.native    
+    def draw_open_sprite(self, file_handle, x, y, width, height, key):
+        """Draw a single-frame .COL sprite from an already-open handle
+        (pixel data at offset 8) via the normal key-based row stream."""
+        file_handle.seek(8)
+        self._stream_sprite_to_fb(file_handle, x, y, width, height, key)
+
+    @micropython.native
     def update(self):
         """Update display by blitting internal buffer to engine framebuffer"""
         while (time_to_next_tick() > 0):
@@ -217,23 +232,8 @@ class ColorDisplay:
         fps_limit(fps)
     
     def setFont(self, fontFile, width, height, space):
-        """Load font file"""
-        try:
-            import os
-            self.font_width = width
-            self.font_height = height
-            self.font_space = space
-            
-            # Read font file
-            size = os.stat(fontFile)[6]
-            self.font_bmap = bytearray(size)
-            with open(fontFile, 'rb') as f:
-                f.readinto(self.font_bmap)
-                f.close()
-            self.font_glyphcnt = size // width
-        except:
-            # Fallback if font not found
-            self.font_bmap = None
+        """Text is rendered using the fb text() method. This is just for Thumby compatibility; the font is not used for rendering in ThumbyColor."""
+        self.font_bmap = None
             
 class ColorSprite:
     """Native resolution sprite for ThumbyColor with efficient scaling"""
