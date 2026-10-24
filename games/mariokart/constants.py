@@ -165,12 +165,9 @@ for _i in range(PC.COURSE_N):
 # Road half width + object widths (Q8: 8 = 1 world unit)
 PC.L8 = PC.L * 8
 PC.ROAD_HW = const(28)
-# 38 units were 8.5% of the road width (HW8 224 -> full width 448);
-# the reference karts sit closer to a sixth of the lane, so distant
-# opponents read as specks and vanished too early.  75 units is
-# ~16.7% of the road width: at the camera depth (CAM_BEHIND8 = 60)
-# the color projection gives 32*75/60 = 40 px, which matches the
-# player slot (KART_RACE_SCALE) exactly.
+# 75 units is ~16.7% of the road width: at the camera depth
+# (CAM_BEHIND8 = 60) the color projection gives 32*75/60 = 40
+# px, matching the player slot (KART_RACE_SCALE) exactly.
 PC.KART_W8 = const(75)
 PC.ITEM_W8 = const(36)
 PC.DECO_W8 = const(144)
@@ -183,14 +180,10 @@ PC.DECO_W8 = const(144)
 # the tangent.
 PC.SUB_N = const(PC.COURSE_N * 4)
 
-# Stride color blocks. The reference racer alternates asphalt/grass/
-# rumble colors every two segments of its SEG_L=200 resampled course
-# (n=73 segments for a ~14600 loop), so a color block is 2/73 of the
-# lap. In our substeps (SUB_N=336) one block is round(2/73*SUB_N)=9
-# substeps (~41 world units) and the alternation period is 18.
-# Alternating every substep ran ~9x faster than the reference and,
-# near the horizon where several substeps share one screen row, made
-# the red/white curb stripes flicker row by row.
+# Stride color blocks: the reference alternates asphalt/grass/
+# rumble every two segments of its SEG_L=200 course (n=73),
+# so a block is round(2/73*SUB_N)=9 substeps, period 18.
+# Per-substep alternation ran 9x fast and flickered curbs.
 PC.STRIP_BLOCK = const(9)
 PC.SCX = array('h')
 PC.SCY = array('h')
@@ -287,11 +280,8 @@ PC.ITEM_BOXES = [(int(_f * PC.L8), 0) for _f in BOX_FRACS]
 # Decorations just off the road:
 # (fraction of lap, side +1 right / -1 left, offset, kind)
 # kind: 0 cactus, 1 tree, 2 streetlamp
-# Twelve placements spaced a lap by ~126 units each showed only one
-# to five objects at a time and popped in and out every few seconds;
-# the reference road is lined continuously.  Twenty-two placements at
-# ~70 unit spacing keep a steady stream of scenery on both sides,
-# alternating sides and kinds.
+# Twenty-two placements at ~70 unit spacing keep a steady
+# stream of scenery on both sides, alternating sides/kinds.
 DECOS_RAW = (
     (0.02, 1, 46, 0), (0.06, -1, 50, 1), (0.11, 1, 48, 2),
     (0.15, -1, 52, 1), (0.20, 1, 45, 0), (0.24, -1, 49, 2),
@@ -311,13 +301,11 @@ for _f, _side, _off, _kind in DECOS_RAW:
                      int(_x - sin(_r) * _off * _s + 0.5),
                      int(_y + cos(_r) * _off * _s + 0.5)))
 
-# Spawn grid behind the start line (the first course point, the bottom
-# straight heading east), in track space: 2 rows x 4 lanes, staggered
-# so the field starts spread across the road. The player (kart 0)
-# starts on the centerline in the back row, behind the grid (the
-# front-left cell stays empty, hidden behind the camera). Slot 8 is
-# the player's; SPAWN_ORDER assigns the CPUs to the grid cells.
-# Distances are Q8 behind the line, lats are Q8 from the centerline.
+# Spawn grid behind the start line (the bottom straight
+# heading east), in track space: 2 rows x 4 lanes, staggered
+# so the field starts spread. The player (kart 0) takes the
+# centerline slot 8 behind the grid; SPAWN_ORDER hands the
+# CPUs the grid cells. All offsets are Q8.
 PC.SPAWN_PROG = tuple(-(28 + (i // 4) * 34) * 8 for i in range(8)) \
     + (-(28 + 34) * 8,)
 PC.SPAWN_LAT = tuple((-14, -5, 5, 14)[i % 4] * 8 for i in range(8)) \
@@ -402,10 +390,8 @@ else:
 
     PC.VIEW_SCALE = const(65536)
     PC.PX = const(64)
-    # The player slot sits low so the road runs under the kart the
-    # way it does in the reference racers; the old row-100 anchor
-    # left a band of road floating below the sprite and the slot
-    # dominated the middle of the screen.
+    # The player slot sits low so the road runs under the
+    # kart the way the reference racers paint it.
     PC.PY = const(113)
 
     PC.KART_RACE_SCALE = const(65536)   # 40x34 asset at 1.0 -> 40x34:
@@ -420,9 +406,8 @@ else:
 
     # Perspective camera + sprite scaling (Q8 world, Q16 vectors)
     PC.FOV_F = const(32)
-    # Horizon raised from 40: the green-band fix freed rows 34-39;
-    # the road now projects into them instead of losing that band to
-    # sky, giving more visible road between the hills and the kart.
+    # Horizon 34: rows 34-39 freed by the green-band fix let
+    # the road project into them instead of going to sky.
     PC.HORIZON = const(34)
     PC.NEAR8 = const(24)
     PC.FOG_FAR8 = const(1500)
@@ -431,11 +416,10 @@ else:
     PC.CAM_H8 = const(122)
     PC.FCH = const(3904)
     PC.DRAW_N = const(96)
-    # k2 makes the drawn width equal the perspective projection for a
-    # sprite of this asset width: w_draw / w_proj = asset_w * k2 /
-    # (FOV_F * 256), so k2 = FOV_F * 256 / asset_w.  The 40 px kart
-    # asset needs 8192 / 40 = 204.8 -> 204; the old 224 drew rivals
-    # ~10 % wider than their true projection (measured 110-112 %).
+    # k2 keeps drawn width == perspective projection for an
+    # asset width: w/w_proj = asset_w*k2/(FOV_F*256), so
+    # k2 = FOV_F*256/asset_w; the 40 px kart needs 8192/40
+    # -> 204 (the old 224 drew rivals ~10% too wide).
     PC.SCALE_K2_KART = const(204)
     PC.SCALE_K2_ITEM = const(256)
     PC.SCALE_K2_DECOS = (292, 256, 585)
@@ -463,21 +447,17 @@ else:
     PC.COLOR_HUD_BG = const(0x0008)
     PC.COLOR_MINI = const(0xFFFF)
 
-    # Sky: 5 horizontal bands, top to bottom; SKY_H is the horizon
-    # color and doubles as the full-fog color beyond FOG_FAR8.
-    # Blue gradient from the deep zenith to the steel-blue horizon.
-    # The old bands ran teal/green/olive into the horizon - a green
-    # wall above the hills; every band now keeps b > g so the whole
-    # sky reads as sky at all times.
+    # Sky: 5 horizontal bands, top to bottom; SKY_H is the
+    # horizon color and doubles as full-fog beyond FOG_FAR8.
+    # Blue gradient zenith to steel-blue horizon: every band
+    # keeps b > g so the sky never reads as a green wall.
     PC.SKY1 = const(0x0010)
     PC.SKY2 = const(0x214D)
     PC.SKY3 = const(0x3A30)
     PC.SKY4 = const(0x4AD2)
-    PC.SKY_H = const(0x5C54)   # light steel-blue horizon haze.  The
-    # old endpoint (0x4EE8) was green: it read as a green band above
-    # the hills and melted distant road and lane ink into grass -
-    # the horizon haze must read as sky, so a blue is the correct
-    # aerial-perspective endpoint.
+    PC.SKY_H = const(0x5C54)   # light steel-blue horizon haze:
+    # the aerial-perspective endpoint must read as sky - the
+    # old green 0x4EE8 melted road and lane ink into grass.
     PC.SUN = const(0xFFC0)
 
     # Parallax hills: precomputed run-length rows over 0..WIDTH-1,
@@ -531,10 +511,9 @@ else:
     PC.FOGT_CHECK_A = _fogt(PC.COLOR_CHECK_A)
     PC.FOGT_CHECK_B = _fogt(PC.COLOR_CHECK_B)
 
-    # Rumble curbs fade toward a dusty red and a warm pale, not the
-    # sky: blending the edge line toward the horizon color melted it
-    # into grass and sky, so far curbs vanished entirely.  Fading to
-    # these endpoints keeps the red/white hue readable at every level.
+    # Rumble curbs fade toward a dusty red and a warm pale, not
+    # the sky: fading the edge line toward the horizon melted
+    # it into grass and far curbs vanished entirely.
     PC.CURB_HAZE_A = const(0xA288)  # dusty red endpoint
     PC.CURB_HAZE_B = const(0xD67A)  # warm pale endpoint
 
@@ -555,10 +534,9 @@ else:
 
     PC.FOGT_CURB_A = _fog2(PC.COLOR_RUMBLE_A, PC.CURB_HAZE_A)
     PC.FOGT_CURB_B = _fog2(PC.COLOR_RUMBLE_B, PC.CURB_HAZE_B)
-    # Lane ink fades to the same warm pale as the white curbs.  The
-    # old _fogt table melted it into the horizon color: beyond level 6
-    # the center line had exactly the road's own haze value and the
-    # dashes simply disappeared in the distance and through curves.
+    # Lane ink fades to the same warm pale as the white curbs:
+    # the old _fogt table gave it the road's own haze beyond
+    # level 6 and the center line disappeared in the distance.
     PC.FOGT_LANE = _fog2(PC.COLOR_LANE, PC.CURB_HAZE_B)
     del _fog2
 

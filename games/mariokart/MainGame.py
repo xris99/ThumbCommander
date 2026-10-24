@@ -6,21 +6,17 @@
 #   * PC          (thumby_engine.pc - a CPython/pygame emulation of the
 #                  ThumbyColor firmware; started via tool/run_pc.py)
 #
-# The engine is a port of the classic OutRun-style segment renderer
-# (ported from the turbo-kart-grandprix reference): every kart lives
-# in track space (progress along the centerline + a lateral offset),
-# the camera sits behind the player looking along the course tangent,
-# and the road is painted strip by strip from far to near with
-# division-free projection (an INV16 reciprocal table). Every sprite
-# is depth-sorted and drawn exactly once. The AI is a pure
-# lateral-error controller that follows traffic instead of
-# rubber-banding, and the title screen is an attract mode: a live
-# CPU race running behind the panel.
+# OutRun-style segment renderer: karts live in track space (progress
+# along the centerline + lateral offset), the camera rides the course
+# tangent behind the player, and the road is painted strip by strip,
+# far to near, with division-free projection (the INV16 table). Every
+# sprite is depth-sorted and drawn once. The AI is a lateral-error
+# controller that follows traffic instead of rubber-banding; the title
+# screen is an attract mode (a live CPU race behind the panel).
 #
-# Three laps against CPU rivals. Item boxes drop mushroom (boost),
-# star (invincibility), banana (drop trap) and pokey (throw). The
-# color target gets sound, vibration and a full HUD from
-# color_enhancements.py; the original Thumby gets a compact HUD line.
+# Three laps against CPU rivals; items: mushroom (boost), star
+# (invincibility), banana (trap), pokey (throw). Color targets get
+# sound, vibration and a full HUD via color_enhancements.py.
 
 from thumby_engine.platform import (display, IS_THUMBY_COLOR, PC,
                                     create_sprite, play_cutscene_animation,
@@ -90,27 +86,20 @@ DECOS = [
             "assets/streetlamp_7_17.SHD.bin", 7, 17)]
 
 # --- Distance-rendering helpers ---------------------------------------------
-# The rotating-frame part of a projected depth swings with the camera's
-# heading oscillation (weaving, curves) by tens of units while the true
-# distance stays steady.  Feeding the sprite scale and the fog fade
-# straight from the raw depth let that swing re-shuffle the pixel grid
-# every other frame - the quick in/out flicker of distant karts and
-# roadside objects.  A running average (alpha 1/4) removes the swing;
-# the objects still grow steadily as they close in.
+# The camera's heading swing moves the raw view depth by tens of units
+# while the true distance stays steady; feeding the scale and fade from
+# the raw value re-shuffled the pixel grid every other frame. A running
+# average (alpha 1/4) removes the swing; approach still closes steadily.
 _ZSD = {}
 
 
+@micropython.native
 def _damp(zs, zq):
     """One step of depth damping; first sighting passes the raw depth.
-
-    A small deviation - the camera heading swing, tens of units - is
-    damped with alpha 1/4 so the pixel grid stays steady.  A LARGE
-    jump (a re-entry or a fast approach step beyond 96 units) snaps
-    instead of damping: converging across it left a kart drawing at
-    the stale, far distance for many ticks and then suddenly jumping
-    into size - the "shrinks then jumps by dimensions" of the bug
-    report.  Snapping makes the first drawn frame match the true
-    projection; the swing below the threshold keeps its damping."""
+    Small deviations (the heading swing) are damped with alpha 1/4; a
+    jump beyond 96 units (re-entry, fast approach) snaps so the first
+    drawn frame matches the true projection instead of converging from
+    a stale distance."""
     if zs is None:
         return zq
     d = zq - zs
@@ -119,6 +108,7 @@ def _damp(zs, zq):
     return (zs * 3 + zq) >> 2
 
 
+@micropython.native
 def _damped_zc(st, key, zc):
     """Quantize a raw view-space depth onto the 4-unit grid used for
     sprite scaling, then damp it with the running average above.  st is
@@ -136,46 +126,33 @@ def _damped_zc(st, key, zc):
 HYST_S = const(8)
 
 
+@micropython.native
 def _kart_gate(k, x8, y8, cam, W, H):
     """Project one kart for the sprite pass, with hysteresis on the
-    near plane and on the screen margins.
+    near plane and the screen margins.
 
-    The camera's heading swing moves a kart's raw view depth across
-    NEAR8 - and its screen point across the +-64 margins - for a tick
-    or two at a time.  The plain projection gate flicked the kart out
-    for the dip and back in when the swing passed: the hero or a rival
-    blinking at the bottom of the screen.  The depth damping fixed the
-    pixel grid, but the inclusion gates read the raw swing, so those
-    pops survived it.  Here the kart's damped depth (the same running
-    average the scale uses) decides visibility: a single-tick dip keeps
-    the kart drawn, and only a depth that truly leaves the band -
-    followed out by the damped value - culls it.  While the raw depth
-    sits under the near plane the kart is pinned to the bottom row at
-    its clamped size instead of exploding at the unclamped depth.
-    Returns (zc_eff, sx, sy) - zc_eff pinned into the visible band,
-    the painter's-order key - or None when the kart is culled.
+    The camera's heading swing moves a kart's raw depth across NEAR8
+    and its screen point across the +-64 margins for a tick or two,
+    which made the plain gate flick karts in and out (blinks at the
+    bottom of the screen). The kart's damped depth (the same average
+    the scale uses) decides visibility: a single-tick dip keeps the
+    kart drawn and only a depth that truly leaves the band culls it.
+    Under the near plane the kart is pinned to the bottom row at
+    clamped size. Returns (zc_eff, sx, sy) - the painter's order key -
+    or None when the kart is culled.
     """
     hx, hy, rx, ry, camx8, camy8, cx, cy, fch = cam
     dx = x8 - camx8
     dy = y8 - camy8
     zc = (dx * hx + dy * hy) >> 16
     xc = (dx * rx + dy * ry) >> 16
-    # A jump of more than 256 units of raw view depth in a single tick
-    # is never physical: the fastest closing speed is a few dozen units
-    # per tick and the camera heading swing is tens, so such a jump is
-    # the lap seam - the world-position wrap at the start/finish line -
-    # or a spin knockback.  The old code read that transient as a pass-
-    # behind: at every lap line every rival swung to a depth of
-    # -400..-700, the pin draw parked them full size beside the hero
-    # for a tick or two, the dip latch culled them at the third, and
-    # the re-sighting relit them when the wrap settled - the blink
-    # every kart performed at every crossing.  While the jump is
-    # running the kart keeps painting at its last known projection,
-    # frozen for at most four ticks (the wrap settles well inside that
-    # window); the dip and fog counters never see the bogus depth, and
-    # the stored raw depth is kept at its pre-jump value through the
-    # freeze so the return tick compares against the truth, not against
-    # the wrap.
+    # A raw-depth jump of more than 256 units in one tick is never
+    # physical (fastest close is a few dozen units/tick, the swing is
+    # tens): it is the lap-seam wrap or a spin knockback. Reading it as
+    # a pass-behind blinked every kart at every crossing; during the
+    # jump the kart keeps painting at its last projection, frozen at
+    # most four ticks, and the stored raw depth holds its pre-jump
+    # value so the return tick compares against the truth.
     pzc = k.get('zcr')
     if pzc is not None and (zc - pzc > 256 or pzc - zc > 256):
         nnt = k.get('nnt', 0) + 1
@@ -185,27 +162,20 @@ def _kart_gate(k, x8, y8, cam, W, H):
             return ld if ld is not None else None
     k['zcr'] = zc
     k['nnt'] = 0
-    # Karts keep a CONTINUOUS depth: the 4-unit quantization grid was
-    # meant to steady roadside sprites, but on a rival close to the
-    # player it stepped the scale in discrete 3-6 px jumps (the "size
-    # jumps too fast" complaint) and re-quantized the very swing the
-    # running average removes.  Damping alone keeps the pixel grid
-    # steady here, so the rival's size glides instead of stepping.
+    # Karts keep a CONTINUOUS depth: the 4-unit grid stepped the scale
+    # of close rivals into discrete jumps; damping alone keeps the
+    # pixel grid steady, so their size glides instead of stepping.
     zq = zc if zc < PC.FOG_FAR8 else PC.FOG_FAR8
-    # The lateral offset gets the same running average as the depth.
-    # At camera range a few degrees of heading swing move xc by tens
-    # of units and sx by twenty-odd pixels - far past the +-8 px
-    # hysteresis - so a rival beside the player toggled across the
-    # screen margins frame to frame.  Damped, a swing steps a few
-    # pixels at a time and the hysteresis holds it.
+    # The lateral offset gets the same running average: a few degrees
+    # of swing move sx by twenty-odd pixels, far past the +-8 px
+    # hysteresis; damped, a swing steps a few pixels and the gate holds.
     xcs = _damp(k.get('xcs'), xc)
     k['xcs'] = xcs
     prev = k.get('zs')
     if prev is None:
         # First sighting: the plain gate; no hysteresis to trade yet.
-        # Re-entry from the fog cull must pull clear of the line: a
-        # swing that merely dipped under it re-lit the distant dot for
-        # one tick and out again - the horizon flicker.
+        # Re-entry from the fog cull must pull clear of the line (a
+        # mere dip re-lit the dot for one tick - horizon flicker).
         if k.get('fog'):
             if zc > PC.FOG_FAR8 - 24:
                 k['zin'] = False
@@ -217,26 +187,19 @@ def _kart_gate(k, x8, y8, cam, W, H):
             k['lastd'] = None
             return None
         if zc < PC.NEAR8:
-            # Closer than the near plane: pin at the bottom row just
-            # like the running path does - a kart in front of the lens
-            # is drawn full size, never culled, even on its first
-            # frame.  The margin test is skipped in the pin zone: at
-            # the fixed near-plane scale a rival squeezing past sits
-            # "parked" behind the player while it is physically many
-            # lanes away, and the old margin cull lit a full-size
-            # re-pop when the lateral swung back - the in/out blink.
+            # Closer than the near plane: pin at the bottom row, full
+            # size, never culled. The margin test is skipped in the
+            # pin zone (a squeeze past reads as parked behind the
+            # player; the old margin cull blinked a full-size re-pop).
             # The scaled blit clips at the real screen edge, so the
-            # rival slides out continuously instead.
+            # rival slides out continuously.
             ix = PC.INV16[PC.NEAR8]
             sx = cx + ((xcs * PC.FOV_F * ix) >> 16)
             sy = H - 1
             # Depth pinned to the near plane for BOTH the sprite scale
-            # and the painter's key, exactly as the running pin path
-            # below returns it: the cull that dropped the damped depth
-            # must not have the raw dip value ride into the draw pass
-            # - scaling from the raw tiny zq drew the rival clamped to
-            # full size at a place the eye read as much farther, the
-            # re-pop blink of a squeeze that had just slid past.
+            # and the painter's key: letting the raw dip ride into the
+            # draw pass clamped a slid-past rival to full size where
+            # the eye read much farther - the re-pop blink.
             k['zs'] = PC.NEAR8
             k['zin'] = True
             k['rc'] = 0
@@ -251,11 +214,9 @@ def _kart_gate(k, x8, y8, cam, W, H):
             k['lastd'] = None
             return None
         # Re-acquire after any cull is debounced for two in-range
-        # frames: the swing can pull the point back inside the margins
-        # for a single tick after the kart slid off frame, and a one-
-        # tick relight read as a blink at the screen edge.  The k.get
-        # default of 2 lets a genuine first sighting at race start lit
-        # immediately (rc was never armed by a cull).
+        # frames (a one-tick dip back inside the margins read as an
+        # edge blink). The default of 2 lets a genuine first sighting
+        # light immediately (rc was never armed by a cull).
         rc = k.get('rc', 2) + 1
         if rc < 2:
             k['rc'] = rc
@@ -270,32 +231,24 @@ def _kart_gate(k, x8, y8, cam, W, H):
         return k['lastd']
     zs = _damp(prev, zq)
     k['zs'] = zs
-    # On a genuine cull the damped depth must be dropped: storing it
-    # past the cull (the line above did exactly that) made the next
-    # sighting damp from a stale value - e.g. a kart culled behind the
-    # camera carried a near-zero zs and re-entered drawn at clamped
-    # full size, many times too big, then shrank into place ("jumping
-    # by dimensions").  Clearing it lets the re-entry run the first-
-    # sighting path: the plain gate and the raw quantized depth, which
-    # is correct for the kart's true distance.
+    # On a genuine cull the damped depth must be dropped: a stale zs
+    # past the cull made the next sighting re-enter drawn at clamped
+    # full size, then shrink ("jumping by dimensions"). Clearing it
+    # lets the re-entry run the first-sighting path, from the raw
+    # quantized depth - correct for the true distance.
     if zc > PC.FOG_FAR8:
         nnf = k.get('nnf', 0) + 1
         if nnf < 3:
-            # The fog end is crossed for just a tick or two: the
-            # heading swing pushed the raw view depth over the line
-            # while the kart is still physically well inside it.  The
-            # old immediate cull blinked the distant dot for exactly
-            # the swing's length - the horizon flicker of attract dots
-            # that ran in the same rhythm on every seed.  Stay drawn
-            # on the damped depth (it is kept here, not dropped) and
-            # keep counting; only three straight ticks past the line
-            # mean the kart has run into the fog for good.
+            # The swing pushes the raw depth over the fog end for a
+            # tick or two while the kart is still inside; staying
+            # drawn here (damped depth kept) avoids the horizon
+            # blink. Only three straight ticks past the line mean the
+            # kart has run into the fog for good.
             k['nnf'] = nnf
         else:
-            # The latch remembers the cull so a heading swing that
-            # pushed the raw depth over the line cannot flip the kart
-            # back on the very next tick - re-entry must pull 24 units
-            # clear of the fog line first.
+            # The latch remembers the cull so the swing cannot flip
+            # the kart back on: re-entry must pull 24 units clear of
+            # the fog line first.
             k['zin'] = False
             k['fog'] = True
             k['zs'] = None
@@ -306,33 +259,18 @@ def _kart_gate(k, x8, y8, cam, W, H):
         k['nnf'] = 0
     if zs < PC.NEAR8 or zc < PC.NEAR8:
         # The pin zone is ALWAYS drawn - no margin test, no debounce.
-        # At the fixed near-plane scale a squeeze past the player is
-        # nearly stationary in sx: the pin scale moves the screen point
-        # only ~1.3 px per lateral unit, where the true scale at a
-        # depth of ~5 would slide ~6 px per unit.  The rival looks
-        # parked behind the player slot while it is physically many
-        # lanes off-side.  The old margin test culled it only once the
-        # lateral had swung past ~96 units - the kart was fully off
-        # frame at that point anyway - and when the damped lateral
-        # swung back the two-tick debounce relit it at full size: the
-        # pop blink the user sees beside the player.  The scaled blit
-        # clips at the real screen edge, so drawing the pin zone
-        # unconditionally slides the rival out continuously.  The
-        # behind-camera test moved INTO this branch: the heading swing
-        # dips a rival sweeping past beside the lens across zero depth
-        # for a tick or two while it is still physically in front.  A
-        # dip is now LATCHED AND DRAWN: the kart keeps painting at the
-        # pin scale straight through the dip - its projected point sits
-        # far off frame while it is beside the lens, and the scaled
-        # blit clips there anyway - so the squeeze never re-sights and
-        # never blinks between drawn and culled.  The old separate exit
-        # cleared the damped depth on every dip and the very next tick
-        # saw the rival as never-seen: scaled from the raw tiny depth
-        # it drew clamped to full size at the wrong spot, the re-pop
-        # blink.  Only a dip that holds three straight ticks means the
-        # kart has truly passed behind the lens; then the damped depth
-        # is dropped so the re-entry runs the first-sighting path and
-        # sizes from the raw distance, never from a stale near value.
+        # At the near-plane scale a squeeze past is nearly stationary
+        # in sx: it looks parked behind the player slot while being
+        # many lanes off-side, and the scaled blit clips at the real
+        # screen edge, so it slides out continuously. A behind-camera
+        # dip is LATCHED AND DRAWN: the point sits off frame beside
+        # the lens anyway, so the squeeze never re-sights and never
+        # blinks. Only a dip that holds three straight ticks means
+        # the kart truly passed behind the lens for good - then the
+        # damped depth is dropped so the re-entry runs the first-
+        # sighting path and sizes from the raw distance, never from
+        # a stale near value (clamping full size from the raw tiny
+        # depth was the re-pop blink).
         if zc <= 0:
             nnc = k.get('nnc', 0) + 1
             if nnc >= 3:
@@ -351,22 +289,17 @@ def _kart_gate(k, x8, y8, cam, W, H):
         k['zin'] = True
         k['rc'] = 0
         # Pin the stored depth to the near plane while drawing here:
-        # the sprite scale and the fade read k['zs'], and the damped
-        # value can sit at or below zero mid-dip - the reciprocal
-        # table would take a negative index; at the pin position the
-        # clamped slot size is what a squeeze past looks like anyway,
-        # so pinning loses nothing and keeps the ramp smooth on the
-        # way out (the next tick damps up from 24).
+        # the scale and fade read k['zs'] and a mid-dip damped value
+        # would index the reciprocal table below zero. At the pin
+        # position the clamped slot size is the squeeze look anyway,
+        # and the ramp stays smooth on the way out.
         k['zs'] = PC.NEAR8
         k['lastd'] = (PC.NEAR8, sx, sy)
         return k['lastd']
-    # The gate position rides the damped depth, not the raw one:
-    # the camera's heading swing moved sx by tens of pixels per
-    # tick - far beyond the +-8 px hysteresis - so a rival near
-    # the player toggled across the screen margins frame by
-    # frame (the flicker in/out the user reports).  The same
-    # damped zs the scale uses anchors the sprite where it is
-    # drawn; the margin test then sees a steady point.
+    # The gate position rides the damped depth, not the raw one: the
+    # swing moved sx by tens of pixels per tick, far beyond the +-8 px
+    # hysteresis, so close rivals toggled across the margins; the
+    # damped point is steady for the margin test.
     ix = PC.INV16[zs]
     sx = cx + ((xcs * PC.FOV_F * ix) >> 16)
     sy = cy + ((fch * ix) >> 16)
@@ -387,10 +320,9 @@ def _kart_gate(k, x8, y8, cam, W, H):
         return None
     if not k.get('zin'):
         # Same two-tick debounce as the first-sighting path: a kart
-        # that slid off frame may dip back inside the margins for a
-        # single tick when the heading swing passes - the plain relight
-        # made it blink at the screen edge.  A genuine re-entry holds
-        # the inside for several ticks and passes.
+        # that slid off frame may dip back inside for a single tick -
+        # a plain relight blinked at the edge. A genuine re-entry
+        # holds the inside for several ticks and passes.
         rc = k.get('rc', 0) + 1
         if rc < 2:
             k['rc'] = rc
@@ -406,13 +338,10 @@ def _kart_gate(k, x8, y8, cam, W, H):
 
 if IS_THUMBY_COLOR:
     # Representative color per kart sprite, sampled from the center
-    # column: the leftmost columns of the .COL.bin art are the magenta
-    # key, so a 1-pixel-wide scaled blit samples key pixels only and
-    # draws nothing - the fade's promised "single pixel" has to be
-    # painted by hand in the kart's own color instead.  The first
-    # non-key pixel in the center column wins (the topmost visible
-    # pixel, usually the helmet); an all-key column falls back to the
-    # horizon fog color.
+    # column: a 1-pixel-wide scaled blit samples only the magenta key
+    # and draws nothing, so the fade's final "single pixel" is painted
+    # by hand in the kart's own color. First non-key pixel wins (the
+    # helmet); an all-key column falls back to the horizon fog.
     def _kart_dot_color(sp):
         key = PC.KEY_MAGIC
         fv = sp.frame_view
@@ -555,6 +484,7 @@ def rebuild_buttons():
     BUTTONS = [eval("button" + KEYMAPS[i]) for i in range(len(KEYMAPS))]
 
 
+@micropython.native
 def keylabel(action):
     """Remap-aware, target-aware key name for hints."""
     k = KEYMAPS[action]
@@ -585,10 +515,12 @@ def get_pressed_key():
     return ''
 
 # --- Text / audio helpers ----------------------------------------------------
+@micropython.native
 def text_width(s):
     return len(s) * (PC.FONT_WIDTH + PC.FONT_SPACE) - PC.FONT_SPACE
 
 
+@micropython.native
 def center_x(s):
     return (PC.WIDTH - text_width(s)) // 2
 
@@ -609,6 +541,7 @@ def _audio_off():
 FX = None  # lazily created FXEngine (color only), shared across races
 
 
+@micropython.native
 def _fx():
     global FX
     if IS_THUMBY_COLOR and FX is None:
@@ -624,6 +557,7 @@ def _select_sfx():
         f.play(FXEngine.SELECT)
 
 
+@micropython.native
 def draw_sprite(sp):
     """Draw a sprite at its own x/y; use the scaled path only when a
     scale/mirror is actually in play (color drawSprite can't mirror)."""
@@ -639,6 +573,7 @@ def draw_sprite(sp):
             display.drawSprite(sp)
 
 # --- Track-space helpers (plain integer math on the precomputed arrays) -----
+@micropython.native
 def _sub_of_prog8(prog8):
     """Subsegment index for a Q8 progress value (wraps; negative
     values stay safe through MicroPython floor-mod). The subsegments
@@ -653,6 +588,7 @@ def _sub_of_prog8(prog8):
     return 0
 
 
+@micropython.native
 def _tp8(prog8, lat8):
     """World position (Q8) of a track-space point: centerline of the
     subsegment plus the right normal times the lateral offset."""
@@ -661,20 +597,21 @@ def _tp8(prog8, lat8):
             PC.SCY[s] + ((PC.SNY[s] * lat8) >> 16))
 
 
+@micropython.native
 def _kart_world8(k):
     if k['free']:
         return (k['wx8'], k['wy8'])
     return _tp8(k['prog'], k['lat'])
 
 
+@micropython.native
 def _proj_track8(wx8, wy8, s_hint, deep=False):
     """Inverse of _tp8 for a free kart: put an integrated world
     position back onto the course so prog/lat can feed laps, items,
-    traffic and the off-road flag.  The nearest point on the sub
-    chords is searched in a window around the kart's last known sub;
-    when the kart left that window (a knock, or a fast straight-line
-    re-acquire) the nearest sub is found globally and the window
-    retried once.  Returns (prog8, lat8, sub)."""
+    traffic and the off-road flag. The nearest point on the sub
+    chords is searched in a window around the kart's last known
+    sub; if the kart left the window, the nearest sub is found
+    globally and the window retried once. Returns (prog8, lat8, sub)."""
     n = PC.SUB_N
     bscore = None
     bex = 0
@@ -695,16 +632,10 @@ def _proj_track8(wx8, wy8, s_hint, deep=False):
             t = raw
         lat = (dx * PC.SNX[s] + dy * PC.SNY[s]) >> 16
         ex = raw - t
-        # Continuity bias: the along-road coordinate must keep walking
-        # with the hint, so a chord further from the hint's position
-        # pays a penalty.  Without it, a kart running off-road parallel
-        # to the road sees identical distances to every chord in the
-        # window and the plain minimum latches onto whichever the scan
-        # sees first - prog then collapses backwards a window per
-        # tick.  On a hairpin the two chord families inside the U are
-        # both visible; the bias keeps the hint walking until another
-        # stretch of road is genuinely much closer (a legitimate
-        # corner-cut that really does pull the kart ahead).
+        # Continuity bias: a chord further from the hint's position
+        # pays a penalty so the along-road coordinate keeps walking
+        # with the hint. Without it the plain minimum can latch onto
+        # the wrong chord family on a hairpin and collapse prog.
         d2 = ex * ex + lat * lat + off * off * 400
         if bscore is None or d2 < bscore:
             bscore = d2
@@ -731,6 +662,7 @@ def _proj_track8(wx8, wy8, s_hint, deep=False):
     return (bprog, blat, bs)
 
 
+@micropython.native
 def _camera(v):
     """Camera behind the followed kart (v['cam_idx']: the player in a
     real race, the leader in attract mode), looking along the course
@@ -739,23 +671,18 @@ def _camera(v):
     direction, the Q16 right vector, the Q8 camera position and the
     projection constants (screen center x, horizon row, FOV*height).
 
-    The heading is taken at the kart's sub, not the sub 60 units
-    behind: looking along the OLD tangent while the camera sits at the
-    kart's position minus that old step left the view axis turned off
-    the road whenever the road curved inside the behind distance - the
-    road slid sideways across the screen (never under the player) and
-    hugged one border through the attract race.  Looking along the
-    tangent the player is driving keeps the road centered at the
-    bottom and curving away with perspective, exactly as the reference
-    racer does."""
+    The heading comes from the kart's own sub, never a point behind
+    it: looking along an old tangent put the view axis off the road
+    on every curve and slid the road sideways across the screen.
+    The kart's own tangent keeps the road centered at the bottom,
+    curving away with perspective as the reference racer does."""
     p = v['karts'][v['cam_idx']]
     s = _sub_of_prog8(p['prog'])
     if p['free']:
-        # A free kart looks where its nose points, not along the
-        # course tangent: when it runs straight through a bend the
-        # road curves away across the screen, exactly as a camera
-        # bolted to the kart should.  The nose starts on the spawn
-        # tangent, so the countdown looks like the old tangent cam.
+        # A free kart looks along its nose, not the course tangent:
+        # running straight through a bend the road curves away, as
+        # a camera bolted to the kart should. The nose starts on the
+        # spawn tangent, so the countdown looks like the tangent cam.
         hx = fpcos(p['ang'])
         hy = fpsin(p['ang'])
     else:
@@ -770,6 +697,7 @@ def _camera(v):
             PC.WIDTH // 2, PC.HORIZON, PC.FCH)
 
 
+@micropython.native
 def _proj(x8, y8, cam):
     """Project a Q8 world point to (sx, sy, zc) or None when behind
     the near plane or past the fog. The world is flat, so the screen
@@ -787,6 +715,7 @@ def _proj(x8, y8, cam):
     return (sx, sy, zc)
 
 
+@micropython.native
 def _kart_update(k, steer_in, thr, dt):
     """One physics step.
 
@@ -877,17 +806,13 @@ def _kart_update(k, steer_in, thr, dt):
     k['steer'] += ((tgt - k['steer']) * STEER_LERP_Q) >> 8
     d = fpmul(k['s'], dt)
     if k['free']:
-        # Free heading (the player kart in a live race): the nose
-        # turns in world space under the steering lock and the kart
-        # drives along its nose.  With no steering input the nose
-        # holds its angle and the kart keeps driving straight - when
-        # the road curves away it leaves the road, which is exactly
-        # what the reference racer does and what the rail model got
-        # wrong (prog always advanced along the tangent, so an
-        # unsteered kart rode the centerline through every bend).
-        # prog/lat are re-derived by inverse projection, so laps,
-        # items, traffic and the off-road penalty run off the real
-        # world position.
+        # Free heading (player kart in a live race): the nose turns
+        # in world space under the steering lock and the kart drives
+        # along it - with no steering the kart keeps going straight
+        # and leaves the road when the road curves away, exactly like
+        # the reference racer. prog/lat are re-derived by inverse
+        # projection, so laps, items, traffic and the off-road flag
+        # run off the real world position.
         da = (k['steer'] * dt) >> YAW_SHIFT
         if da > YAW_MAX:
             da = YAW_MAX
@@ -914,13 +839,9 @@ def _kart_update(k, steer_in, thr, dt):
         k['lat'] = lat
         k['off'] = (lat > OFFROAD8 or lat < -OFFROAD8)
         # total is the along-road distance: take the wrapped forward
-        # step; a kart that turned back relative to the road adds
-        # nothing (there is no reverse).  The wrap is symmetric: a
-        # projection hop of about half a lap (the hairpin slide, the
-        # grass-wall snap, the first tick off the grid) must read as
-        # the small step the kart really took.  The old one-sided wrap
-        # counted a forward hop in full, which inflated the player's
-        # total by whole laps and ranked a last-place kart first.
+        # step; turning back relative to the road adds nothing (no
+        # reverse). The wrap is symmetric so a projection hop of
+        # half a lap reads as the small step actually taken.
         dd = ((prog - old + (PC.L8 >> 1)) % PC.L8) - (PC.L8 >> 1)
         if dd < 0:
             dd = 0
@@ -936,13 +857,9 @@ def _kart_update(k, steer_in, thr, dt):
         st = -st
     idx = (st * 326) >> 16
     # Round the forward advance to the nearest 1/8 unit instead of
-    # truncating.  On the color target (60 fps) a tick moves well
-    # under a full unit below ~7.5 units/s, and truncation froze every
-    # kart whose speed dipped under that: the title's attract pack
-    # crawled at a crawl, the camera crossed one subsegment every
-    # ~26 frames, and each crossing re-shuffled the strip painter's
-    # order - the whole scene flipped, which read as the attract mode
-    # throwing errors all over the screen.
+    # truncating: at 60 fps a tick moves under a full unit below
+    # ~7.5 units/s and truncation froze slow karts, which re-shuffled
+    # the strip painter's order on every subsegment crossing.
     adv = (fpmul(d, fpcos(idx)) + (1 << 12)) >> 13
     k['prog'] = (k['prog'] + adv) % PC.L8
     k['total'] += adv
@@ -965,6 +882,7 @@ def _kart_update(k, steer_in, thr, dt):
     k['y'] = wy8 << 13
 
 
+@micropython.native
 def _ai_decide(k, v):
     """The AI brain: a pure lateral-error controller with traffic
     follow. Aims at its lane target (or straight back at the
@@ -985,10 +903,8 @@ def _ai_decide(k, v):
     tv = k['sm']
     if k['ai']:
         tv = (tv * k['skill']) >> 16
-    # The traffic cap exists so a race pack does not unrealistically
-    # ram into the car ahead.  In attract mode the field is already
-    # spread mid-lap, so the cap only re-shuffles the pack and slows
-    # the demo down - skip it there.
+    # Traffic cap keeps a pack from ramming the car ahead; in attract
+    # the field is already spread, so the cap is skipped there.
     if not v['attract']:
         for o in v['karts']:
             if o is k or o['finish']:
@@ -1005,6 +921,7 @@ def _ai_decide(k, v):
     return (si, 0)
 
 
+@micropython.native
 def _ai_items(k, v, fx):
     """AI item usage: mushrooms always, stars when they matter,
     traps when a rival is lined up."""
@@ -1120,6 +1037,7 @@ def _use_item(k, v, fx):
             fx.play(FXEngine.HIT)
 
 
+@micropython.native
 def _delta_prog8(k, prog8):
     """Signed track distance (Q8) from the point at prog8 to the
     kart's position, wrapped to (-L/2, L/2]."""
@@ -1129,6 +1047,7 @@ def _delta_prog8(k, prog8):
     return d
 
 
+@micropython.native
 def _items_update(v, dt, fx):
     karts = v['karts']
     # item boxes: respawn, then pickup (track-space proximity)
@@ -1217,6 +1136,7 @@ def _items_update(v, dt, fx):
         v['pokeys'] = alive
 
 
+@micropython.native
 def _kart_collisions(v, fx):
     """Gentle kart-vs-kart: split the overlap along each kart's own
     right normal (each moves half) and share a small speed loss.
@@ -1277,6 +1197,7 @@ def _kart_collisions(v, fx):
                     rumble(40)
 
 
+@micropython.native
 def _isqrt_small(v):
     """Integer sqrt for v <= 3136 (56^2) - a handful of binary-search
     steps, called only on actual kart contact, so no table needed."""
@@ -1297,6 +1218,7 @@ def _isqrt_small(v):
 # OutRun projection with the division turned into a lookup in the
 # INV16 table. The road is painted one strip per subsegment, far to
 # near; every sprite is drawn exactly once, far to near.
+@micropython.native
 def _scale_for(zc, k2, w8):
     """Sprite scale (Q16) for an asset of world width w8 at depth zc.
     k2 is the precomputed (65536*FOV_F/asset_width >> 8) factor from
@@ -1310,6 +1232,7 @@ def _scale_for(zc, k2, w8):
     return s
 
 
+@micropython.native
 def _draw_sky(v):
     """The sky above the horizon. Color: five bands, the sun and two
     parallax hill layers that scroll with the camera's heading - they
@@ -1322,10 +1245,9 @@ def _draw_sky(v):
         display.drawFilledRectangle(0, 8, PC.WIDTH, 8, PC.SKY2)
         display.drawFilledRectangle(0, 16, PC.WIDTH, 8, PC.SKY3)
         display.drawFilledRectangle(0, 24, PC.WIDTH, 8, PC.SKY4)
-        # Horizon haze band: from row 32 down to the horizon line.
-        # Its height rides HORIZON so the band stays sky when the
-        # horizon is raised; the old fixed 8-row band painted a green
-        # floor above the hills.
+        # Horizon haze band from row 32 down to the horizon; its
+        # height rides HORIZON so the band stays sky when the
+        # horizon is raised.
         display.drawFilledRectangle(0, 32, PC.WIDTH,
                                     PC.HORIZON - 32, PC.SKY_H)
         display.drawFilledRectangle(96, 8, 8, 1, PC.SUN)
@@ -1346,19 +1268,13 @@ def _draw_sky(v):
             sang = (PC.SANG[s] + (f * dl) // seg) & 1023
         prev = v.get('sangprev')
         if prev is not None and v.get('camprev') == v['cam_idx']:
-            # Unwrap the frame's heading delta onto the sky scroll.
-            # The wrap must land zero on the centre: a straight gives
-            # zero delta and the hills stay put; a turn sweeps them
-            # in the same direction the far road sweeps, so the
-            # horizon scrolls with the road.  The old convention
+            # Unwrap the heading delta onto the sky scroll, landing
+            # zero on straights: straights hold the hills, turns
+            # sweep them with the far road.  The old convention
             # turned every straight into a +512 step, strobing the
-            # near hills 32 px a frame and corrupting every small
-            # turn into a huge jump.
-            #
-            # When the camera switches kart (attract lead changes,
-            # attract -> race), skip the frame's delta: the two
-            # karts' headings are unrelated and the difference would
-            # snap the whole sky sideways.
+            # near hills.  On a camera switch (attract lead change,
+            # attract -> race) skip the delta: the two headings are
+            # unrelated and the difference would snap the sky.
             d = ((sang - prev + 512) & 1023) - 512
             # One frame's real turn is a handful of units (the sharpest
             # corner on the whole course is about 3.5).  The attract demo
@@ -1399,6 +1315,7 @@ def _draw_sky(v):
                                         PC.COLOR_LINE)
 
 
+@micropython.native
 def _line(x0, y0, x1, y1, col):
     """drawLine with direction normalization: the Thumby's 1-bit driver
     turns axis-aligned lines into filled rectangles and early-returns
@@ -1419,6 +1336,7 @@ else:
     FOGMID_Y = -1
 
 
+@micropython.native
 def _proj_pt(x8, y8, cam):
     """Project a Q8 world point to (sx, sy, zc) without culling - the
     caller must keep the depth inside the table range."""
@@ -1437,12 +1355,14 @@ def _proj_pt(x8, y8, cam):
     return (sx, sy, zc)
 
 
+@micropython.native
 def _depth(x8, y8, cam):
     """View-space depth (Q8) of a world point."""
     hx, hy, rx, ry, camx8, camy8, cx, cy, fch = cam
     return ((x8 - camx8) * hx + (y8 - camy8) * hy) >> 16
 
 
+@micropython.native
 def _depth_line(cam, x1, y1, x2, y2, col):
     """A line between two Q8 world points, clipped to the
     near..fog depth band."""
@@ -1468,6 +1388,7 @@ def _depth_line(cam, x1, y1, x2, y2, col):
     _line(s1[0], s1[1], s2[0], s2[1], col)
 
 
+@micropython.native
 def _clip_project(a, b, cam):
     """Project the road strip between subsegment a (near) and b
     (far): the four road corners (centerline +- road half width),
@@ -1526,6 +1447,7 @@ def _clip_project(a, b, cam):
     return (res, zmin, zlo, zhi)
 
 
+@micropython.native
 def _row_xs(pts, y):
     """Min and max x of the (convex) strip polygon at row y."""
     lo = 32000
@@ -1555,6 +1477,7 @@ def _row_xs(pts, y):
     return (lo, hi)
 
 
+@micropython.native
 def _lane_trace(a, b, cam):
     """World-space centerline trace for the strip between subsegments
     a and b: the chord SCX/SCY[a] -> SCX/SCY[b], clipped into the
@@ -1602,6 +1525,7 @@ def _lane_trace(a, b, cam):
             end[1][0], end[1][1], end[1][2], za, zb)
 
 
+@micropython.native
 def _lat_trace(a, b, cam, lat8):
     """The chord of the strip between subsegments a and b offset
     laterally by lat8 (Q8 from the centerline), clipped to the visible
@@ -1643,6 +1567,7 @@ def _lat_trace(a, b, cam, lat8):
     return (seg[0][0], seg[0][1], seg[1][0], seg[1][1])
 
 
+@micropython.native
 def _draw_strips(v, cam):
     """Everything below the horizon: the grass base, then the road
     strip by strip from far to near.  The optics follow the reference
@@ -1684,13 +1609,10 @@ def _draw_strips(v, cam):
             ytop = PC.HORIZON
         if ybot > H - 1:
             ybot = H - 1
-        # Keep the strip inside the rows its own depth span owns.
-        # Clipping pushes the polygon beyond its real corners:
-        # near-plane points sit at rows down to the bottom row and
-        # fog-plane points sit at the horizon.  Painting there would
-        # overwrite the road of the strips that actually cover those
-        # rows - the horizontal grass bars and the wedges that ate
-        # into the road from below.
+        # Keep the strip inside the rows its own depth span owns:
+        # clipping pushes the polygon beyond its real corners,
+        # and painting there would overwrite the road of the
+        # strips that actually cover those rows.
         ze_hi = zhi if zhi < PC.FOG_FAR8 else PC.FOG_FAR8
         y_far = cy + ((fch * PC.INV16[ze_hi]) >> 16)
         if ytop < y_far:
@@ -1704,15 +1626,11 @@ def _draw_strips(v, cam):
         if ytop > ybot:
             continue
         tr = _lane_trace(a, b, cam) if COL else None
-        # Start/finish band: the nine boundary chords of the WORLD road
-        # grid (k=0 is the left edge, k=8 the right edge; columns of
-        # equal world width), anchored to lateral offsets from the
-        # centerline exactly like the lane dashes.  With these the
-        # checkerboard columns keep their true perspective when the
-        # camera sits off the centerline or heads at an angle to the
-        # road, instead of being squeezed into equal fractions of the
-        # painted span (which only matches the real grid when the
-        # camera is centered and aligned with the road tangent).
+        # Start/finish band: nine boundary chords of the WORLD
+        # road grid (k=0 left edge, k=8 right edge) anchored to
+        # lateral offsets like the lane dashes, so the checkerboard
+        # keeps true perspective when the camera is off the
+        # centerline or yawed, not equal fractions of the span.
         bnd = None
         if (a < 3 or a > n - 3) and i >= 0:
             bnd = []
@@ -1720,50 +1638,47 @@ def _draw_strips(v, cam):
                 bnd.append(_lat_trace(a, b, cam,
                                       -HW8 + ((k * HW8 * 2) >> 3)))
         strips.append((ytop, ybot, pts, a, i, zlo, tr, bnd))
-    # Painter's order by the TRUE near-corner depth (zlo, not the
-    # clip-polluted zmin): far strips first, near strips last, so a
-    # nearer strip's road overwrites a farther strip's grass wherever
-    # their row ranges overlap - which happens on curves, where depth
-    # is not monotonic along the track, and at the near plane below
-    # the bottom row.  A plain ytop sort is wrong whenever clipping
-    # collapses several strips to the same ytop.  Depth is quantized
-    # to an 8 unit grid before sorting: on a curve fold two
-    # subsegments sit at almost the same camera depth, and with raw
-    # depths the pair traded the fold rows every frame (sub-pixel
-    # jitter decided the winner each tick) - the speckled flicker
-    # patches over the road on curves.  Quantized, the pair ties, and
-    # the camera loop offset (field 4) breaks the tie: the strip
-    # nearer along the track keeps the row for every frame the fold
-    # exists, so the row paints steadily.
-    strips.sort(key=lambda s: (s[5] >> 3, s[4]), reverse=True)
-    if strips:
-        toprow = min(s[0] for s in strips)
-    else:
-        toprow = H
-    # Row-major paint: every screen row is painted exactly once, so
-    # strips whose row ranges overlap can no longer wipe each other's
-    # road with full-width grass bands.  Overlaps are real geometry:
-    # on curves the depth along the camera axis is not monotonic along
-    # the track (a fold puts two subsegments at the same screen row),
-    # and the near plane below the bottom row makes the camera's own
-    # segment and the one behind it share rows.  Road pieces - paint,
-    # curbs and lane dashes alike - are painted far -> near on top of
+    # Painter's order: far -> near by the TRUE near-corner depth
+    # zlo (quantized to an 8 unit grid), ties broken by the loop
+    # offset i so a curve fold keeps one owner every frame.  Raw
+    # depths let the fold pair trade rows each tick (speckled
+    # flicker); clip-polluted zmin collapses several strips to one
+    # key near the camera.  Insertion sort in place - no key tuples.
+    for j in range(1, len(strips)):
+        k = strips[j]
+        kz = k[5] >> 3
+        ki = k[4]
+        p = j - 1
+        while p >= 0:
+            pz = strips[p][5] >> 3
+            if pz < kz or (pz == kz and strips[p][4] < ki):
+                strips[p + 1] = strips[p]
+                p -= 1
+            else:
+                break
+        strips[p + 1] = k
+    toprow = H
+    for s in strips:
+        if s[0] < toprow:
+            toprow = s[0]
+    # Row-major paint: every screen row is painted exactly once,
+    # so overlapping strip row-ranges (real on curve folds and at
+    # the near plane) can no longer wipe each other's road. Road
+    # pieces - paint, curbs, dashes - are painted far -> near over
     # the grass stripe, so a nearer quad overwrites a farther dash
-    # exactly where the camera ray hits nearer road first: the dashes
-    # that survive are the ones the eye should see.
-    # Road edge memory: the silhouette edge of the road jumps by more
-    # than a pixel per row on the far road.  The last row's clamped
-    # edges are kept only to bridge the one- or two-row holes that
-    # projection rounding leaves between neighbouring strip footprints
-    # on a curve crest - a bare row there read as road markings
-    # simply not being drawn.
+    # where the camera ray hits nearer road first.
+    # Road edge memory: keeps the last row's clamped edges only to
+    # bridge the one- or two-row holes that projection rounding
+    # leaves between strip footprints on a curve crest.
     prev_nxl = None
     prev_nxr = None
     last_road = None
     bridge = 0
     blk = PC.STRIP_BLOCK
+    claim = []
+    dashes = []
     for y in range(PC.HORIZON, H):
-        claim = []
+        del claim[:]
         for s in strips:
             if s[0] <= y <= s[1]:
                 claim.append(s)
@@ -1778,24 +1693,14 @@ def _draw_strips(v, cam):
                 prev_nxl = prev_nxr = None
             continue
         bridge = 2
-        # Occlusion reference = nearest claimant with a REAL span at
-        # this row.  The camera ray at a shared (curve-fold) row meets
-        # the nearest road surface first, so any other claimant may not
-        # paint outside that span.  Without the clamp, fold rows let far
-        # claimants spill asphalt onto the grass beside the near road
-        # (the pale wedges that crossed the screen), spread the
-        # start/finish checkerboard across the full screen width, and
-        # made the near-edge curbs read as interior marks inside the
-        # spilled road.
-        # The reference is NOT simply claim[-1]: on a sustained turn the
-        # closest quad turns edge-on and its span collapses at the fold
-        # rows.  The old code then switched the clamp off entirely for
-        # "degenerate near spans", which let the far wedges spill across
-        # the visible road again - the border spanning the road that
-        # survived multi-turns.  The road the eye sees at such a row is
-        # the nearest surface that is not edge-on, so walk back from the
-        # closest claimant until one has a positive span; that strip is
-        # both the clamp reference and the curb/dash anchor below.
+        # Occlusion reference = nearest claimant with a REAL span
+        # at this row; other claimants may not paint outside it.
+        # Without the clamp, fold rows let far claimants spill
+        # asphalt onto the grass beside the near road.
+        # The reference is NOT simply claim[-1]: the closest quad
+        # can turn edge-on at the fold rows.  Walk back until one
+        # claimant has a positive span - that strip is the clamp
+        # reference and the curb/dash anchor below.
         ci_n = len(claim) - 1
         while ci_n >= 0:
             cxl, cxr = _row_xs(claim[ci_n][2], y)
@@ -1821,17 +1726,13 @@ def _draw_strips(v, cam):
             if nnxr > W - 1:
                 nnxr = W - 1
             nn_ok = nnxr > nnxl
-        # Grass stripe: the reference alternates its two greens on the
-        # same world blocks that key asphalt and rumble (its segment
-        # loop alternates every two of the 73 segments), so green and
-        # gray switch together and the stripes scroll with the road.
-        # World-anchored keying is deliberate: camera-relative keying
-        # pins the bands to the screen, and then the high-contrast
-        # red/white curb stripes flip IN PLACE at the fixed boundary
-        # rows - horizontal lines marching across the screen.  Stripes
-        # that move with the asphalt read as motion, exactly like the
-        # reference.  The haze level of the nearest strip sets the
-        # fade of the stripe.
+        # Grass stripe: the reference alternates its two greens on
+        # the same world blocks that key asphalt and rumble, so
+        # the stripes scroll with the road.  World-anchored keying
+        # is deliberate: camera-relative keying pins the bands to
+        # the screen and the high-contrast curb stripes then flip
+        # in place at fixed boundary rows.  The nearest strip's
+        # haze level sets the fade of the stripe.
         if COL:
             gz = near[5]
             if gz < PC.NEAR8:
@@ -1847,7 +1748,7 @@ def _draw_strips(v, cam):
             grass_c = (PC.COLOR_GRASS_B if ((near[3] // blk) & 1)
                        else PC.COLOR_GRASS_A)
         display.drawFilledRectangle(0, y, W, 1, grass_c)
-        dashes = []
+        del dashes[:]
         road_c = None
         band_cells = False
         painted = False
@@ -1864,20 +1765,14 @@ def _draw_strips(v, cam):
                 continue
             if nn_ok and ci != ci_n:
                 if xr <= nnxl or xl >= nnxr:
-                    # DISJOINT from the near span: the ray at this row
-                    # met no nearer surface over this far asphalt, so it
-                    # is visible road ahead, not occluded grass.  Paint
-                    # its own span and close the seam with the crease
-                    # fill below - clamping a disjoint span away is what
-                    # reopened the green wedges across folded roads.
+                    # DISJOINT from the near span: visible road
+                    # ahead, not occluded grass - paint its own
+                    # span and close the seam with the crease fill.
                     crease_gap = True
                 else:
-                    # A far claimant that OVERLAPS the near road may not
-                    # spill past the near edges: at the covered columns
-                    # the camera ray met the near surface first, so the
-                    # asphalt beyond the near span is occluded grass.
-                    # This removes the spilled road that made the
-                    # near-edge curbs and dashes read as interior marks.
+                    # A far claimant OVERLAPPING the near road may
+                    # not spill past the near edges: beyond them
+                    # the camera ray met the near surface first.
                     if xl < nnxl:
                         xl = nnxl
                     if xr > nnxr:
@@ -1901,30 +1796,16 @@ def _draw_strips(v, cam):
                 chk_a = PC.COLOR_CHECK_A
                 chk_b = PC.COLOR_CHECK_B
                 lane_c = None
-            # Road for every claimant, the start/finish strips
-            # included.  The checkerboard is painted right here in
-            # the far -> near walk: every start/finish strip that
-            # covers this row lays its own cells keyed on the WORLD
-            # grid (column boundary chords, cell row within the strip).
-            # Keying the band on the single nearest claimant's
-            # clamped span flickered whole rows of the band in and
-            # out every time ownership rotated between the three
-            # line strips (every few ticks), and re-sized the cells
-            # from whichever strip owned the row - that read as the
-            # board flickering out and distorting depending on curve
-            # slope and where the kart sat across the road.  Columns
-            # are placed by the nine boundary chords of the road grid
-            # (the bnd field built at the strip), so they line up
-            # across adjacent strips AND hold true perspective when
-            # the camera runs off the centerline or heads at an angle
-            # to the road: equal fractions of the painted span match
-            # the world grid only while the depth line cuts the band
-            # straight - centered and aligned.  The vertical split
-            # rides with the strip so the pattern scrolls with the
-            # road, and the painter order still lets nearer asphalt
-            # cover farther checkers on curve crests.  Strips wrapped
-            # behind the camera (window field < 0) are skipped so a
-            # crossing cannot tile the screen.
+            # Road for every claimant, start/finish strips included:
+            # the checkerboard is painted in this far -> near walk,
+            # keyed on the WORLD grid (the bnd boundary chords built
+            # at the strip) so the cells keep their size and true
+            # perspective across strips and off-center cameras.
+            # Keying the band on one claimant's clamped span made
+            # whole rows flicker while ownership rotated between
+            # the three line strips.  Strips wrapped behind the
+            # camera (loop field < 0) are skipped so a crossing
+            # cannot tile the screen.
             display.drawFilledRectangle(xl, y, xr - xl, 1, road_c)
             painted = True
             if xl < pmin:
@@ -1940,12 +1821,10 @@ def _draw_strips(v, cam):
                 else:
                     r = 0
                 # Screen x of each world-grid boundary at this row:
-                # linear along its projected chord, exactly like the
-                # scanline interpolation the road polygon itself uses.
-                # A screen row is a constant-depth line, so the cell
-                # edges land on the true intersections of that depth
-                # line with the road's lateral grid - the perspective
-                # stays right when the camera is off center or yawed.
+                # linear along its projected chord, like the road
+                # polygon's scanline interpolation.  A screen row
+                # is a constant-depth line, so the cell edges land
+                # on the true grid intersections.
                 xs = [None] * 9
                 for k in range(9):
                     bd = bnd[k]
@@ -1965,11 +1844,9 @@ def _draw_strips(v, cam):
                     x0 = xs[k]
                     x1 = xs[k + 1]
                     if x0 is None or x1 is None:
-                        # The boundary's chord sits behind the near
-                        # plane at this row (camera right on the line
-                        # in a hairpin fold): fall back to the screen
-                        # fraction for that single cell so the band
-                        # never leaves a gap.
+                        # Chord behind the near plane at this row
+                        # (camera on the line in a hairpin fold):
+                        # fall back to the screen fraction.
                         x0 = xl + (((xr - xl) * k) >> 3)
                         x1 = xl + (((xr - xl) * (k + 1)) >> 3)
                     if x1 < x0:
@@ -1984,54 +1861,39 @@ def _draw_strips(v, cam):
                     display.drawFilledRectangle(x0, y, x1 - x0, 1, cc)
                 band_cells = True
             # Dash sources: every claimant's own centerline trace
-            # this row, collected in far -> near order together with
-            # its post-occlusion span, its sub parity and its fog
-            # color.  Whether the row carries ink - and from which
-            # trace - is decided once, after the walk, on the depth
-            # the row itself projects at (see the gate below).  The
-            # walk must not pick a single claimant here: on a curve
-            # the nearest strip's chord does not necessarily reach
-            # the row's own depth, which is what broke the far dashes.
+            # at this row, collected far -> near with its
+            # post-occlusion span, sub parity and fog color.
+            # Whether the row carries ink is decided once after
+            # the walk, on the depth the row itself projects at;
+            # the walk must not pick a single claimant - on a
+            # curve the nearest chord need not reach the row.
             if COL and tr is not None:
                 dashes.append((tr, xl, xr, a, lane_c))
         if painted and (not nn_ok or crease_gap) \
                 and not band_cells and pmax > pmin:
-            # Curve crease: either the near quad turned edge-on (nn_ok
-            # false) or a far ribbon sat disjoint beside the near span
-            # (crease_gap).  In both cases the walk painted separate
-            # spans side by side and the seams between them stayed
-            # green - triangles of grass slicing through the road
-            # silhouette, sometimes wide enough to hide the road on a
-            # fold.  The band the eye follows is the UNION of those
-            # spans, so close every seam inside it with the nearest
-            # claimant's asphalt: the crease reads as one continuous
-            # folded ribbon, as in the reference.  The start/finish
-            # band is excluded above - its checkerboard tiles own the
-            # row and must not be overpainted.
+            # Curve crease: the near quad turned edge-on or a far
+            # ribbon sat disjoint beside the near span, so the walk
+            # left green seams between separate spans.  The band
+            # the eye follows is their UNION - close every seam
+            # inside it with asphalt so the fold reads as one
+            # ribbon.  (start/finish band excluded: its tiles own
+            # the row).
             display.drawFilledRectangle(pmin, y, pmax - pmin + 1, 1,
                                         road_c)
         if painted:
-            # Row-to-row silhouette memory for the hole fill below:
-            # the union of the asphalt actually painted at this row,
-            # not the near strip's own edges.  On a fold row the near
-            # quad turns edge-on and its span is a sliver inside the
-            # visible band; the band the eye follows is the union of
-            # the clamped claimants, so the memory must be the union
-            # or the fill re-opens the wedge it was meant to close.
+            # Silhouette memory = union of the asphalt actually
+            # painted, not the near strip's own edges: on a fold
+            # row the near span is a sliver inside the band.
             prev_nxl = pmin
             prev_nxr = pmax + 1
         elif prev_nxl is not None and bridge > 0 \
                 and last_road is not None:
-            # Every claimant at this row projected edge-on (or clamped
-            # to an empty span): the walk above painted no asphalt and
-            # the row would read as a green hole cut through the road
-            # silhouette - the wedge the user sees slicing the folded
-            # road apart.  Carry the previous row's road straight down
-            # through the gap while the memory lasts, and skip every
-            # marking on the row: curbs and dashes with no asphalt
-            # under them read as red dots and white dashes floating on
-            # the grass.  The memory stays as it was so a second hole
-            # row continues the same fill instead of ending it short.
+            # All claimants projected edge-on: no asphalt was
+            # painted and the row would read as a green hole in
+            # the road.  Carry the previous row's road down the
+            # gap, and skip markings - curbs and dashes without
+            # asphalt read as floating dots.  The memory stays
+            # so a second hole row continues the same fill.
             display.drawFilledRectangle(prev_nxl, y,
                                         prev_nxr - prev_nxl, 1,
                                         last_road)
@@ -2046,37 +1908,23 @@ def _draw_strips(v, cam):
             # asphalt; there is no road color to remember for them.
             last_road = road_c
         na = near[3]
-        # Lane dashes and rumble curbs yield while this row carries
-        # start/finish cells: at the line the checkerboard replaces
-        # the markings the eye would otherwise see.  The yielding is
-        # keyed on what was actually painted this row - every band
-        # claimant laid its cells during the far -> near walk above -
-        # not on which strip happens to own the row, so the decision
-        # stays put while ownership rotates between the line strips
-        # every few ticks instead of flickering the markings at the
-        # line in and out with it.
+        # Lane dashes and curbs yield while this row carries
+        # start/finish cells.  Keyed on what was actually painted
+        # here, not on which strip owns the row, so the decision
+        # holds while ownership rotates every few ticks.
         band_hit = band_cells
-        # Lane-ink decision: the row projects at the camera depth
-        # z(y) = fch // (y - cy) - a fixed number for a fixed screen
-        # row, independent of which strip wins the row.  Pick the
-        # claimant whose chord covers that depth (the nearest such
-        # chord wins) and take the dash parity from ITS sub, not from
-        # the reference strip.  The old gate keyed ink on/off on the
-        # near sub's parity, so a single far strip owning a long run
-        # of rows with a%3==2 blanked the entire stretch of far lane
-        # at once; and the strict 0<=t<=256 interpolation required the
-        # row to lie inside the chosen chord's screen span - but chord
-        # endpoints are centerline depths along the camera heading
-        # while polygon corners add the lateral half-width, so on a
-        # curve the chord span and the strip span disagree and every
-        # far row fell outside and was dropped.  When no chord reaches
-        # the row - rows above every far chord endpoint - extrapolate
-        # from the nearest claimant's trace (clamp t) instead of
-        # dropping the row: the center line then converges at the
-        # vanishing point the way the asphalt edges do instead of
-        # breaking off a few rows short of the horizon, which was the
-        # "center line missing in the distance, especially in curves".
-        # A chord collapsed to one row (dy == 0) interpolates at t = 0.
+        # Lane-ink decision: the row projects at a fixed camera
+        # depth z(y) = fch // (y - cy).  Pick the nearest
+        # claimant whose chord covers that depth and take the
+        # dash parity from ITS sub, not the reference strip.
+        # Keying ink on the near sub's parity blanked long far
+        # stretches at once, and chord spans and strip spans
+        # disagree on curves (polygon corners add the lateral
+        # half width), so far rows fell outside and were dropped.
+        # When no chord reaches the row, extrapolate from the
+        # nearest trace (clamped t) instead of dropping it, so
+        # the center line converges at the vanishing point.
+        # A chord collapsed to one row (dy == 0) uses t = 0.
         dash = None
         dpar = na
         if dashes:
@@ -2093,38 +1941,23 @@ def _draw_strips(v, cam):
             dpar = dash[3]
         if not band_hit and dash is not None and pmax - pmin >= 3 \
                 and dpar % 3 != 2:
-            # A fold neck this narrow cannot carry lane ink: the center
-            # dash plus the two curb pixels would cover every asphalt
-            # pixel and the row would read as grass with a stray mark
-            # on it.  Real road width keeps its markings.
-            # A single center dash, not a pair flanking the center: the
-            # old pair sat at 45% of the half-width, right against the
-            # road edges, so the lane read as two vertical streaks
-            # hugging the borders instead of a dashed center line.
-            # Ink on/off follows the owner sub's parity in the 3-sub
-            # lattice (ink on 3k and 3k+1, gap on 3k+2), so the dash
-            # scrolls at its natural period; exactly one dash per row
-            # is painted, which keeps the lane reading as scrolling
-            # dashes instead of solid streaks.
-            # The dash's x rides the center-line TRACE of the owning
-            # strip, never the center of the clipped screen span: the
-            # near-plane clip is symmetric about the camera axis, so
-            # in a curve the span center sits at the screen center
-            # (the player's kart) while the road bends away -
-            # span-centered dashes drew a line pinned to the kart
-            # instead of to the road middle, which read as a
-            # completely wrong perspective in every curve.  The trace
-            # is the road's own centerline, so the dashes converge at
-            # the vanishing point like the asphalt edges do.  The ink
-            # may still never land outside the asphalt painted at this
-            # row: the source span is clamped into the painted bounds
-            # and the trace center is clamped into the painted span,
-            # so a fold row cannot drop white dashes onto the grass
-            # beside a clamped road.  The width gates must not flip a
-            # narrow row on and off either: a fold row with a
-            # two-pixel road still gets its single center dash rather
-            # than blanking, which was the blink storm behind v7's
-            # doubled pop counters.
+            # A fold neck this narrow cannot carry lane ink:
+            # the marks would cover every asphalt pixel.
+            # A single center dash, not a pair hugging the road
+            # edges.  Ink on/off follows the owner sub's parity
+            # in the 3-sub lattice (ink on 3k and 3k+1, gap on
+            # 3k+2), so the dash scrolls at its natural period;
+            # one dash per row reads as scrolling dashes.
+            # The dash's x rides the owning strip's centerline
+            # TRACE, never the clipped span's center: the near-
+            # plane clip is symmetric about the camera axis, so
+            # span-centered dashes pinned the line to the player
+            # kart while the road bent away.  The trace converges
+            # at the vanishing point like the asphalt edges.  Ink
+            # may never land outside the asphalt painted at this
+            # row (span and trace center are clamped into the
+            # painted bounds), and narrow rows still get their
+            # single center dash rather than blanking.
             tr, dxl, dxr, da, lane_c = dash
             xN, yN, wN = tr[0], tr[1], tr[2]
             xF, yF, wF = tr[3], tr[4], tr[5]
@@ -2150,15 +1983,9 @@ def _draw_strips(v, cam):
                     dw = cap
                 if dw < 1:
                     dw = 1
-                # Clamp the trace center INTO the span actually
-                # painted this row instead of requiring it inside the
-                # clamped claimant span: in a curve the far road's
-                # centerline leaves the near span while the asphalt
-                # stays wide enough to carry its markings, and the
-                # strict inside-test dropped the whole center line
-                # across the bend.  The clamp keeps the ink on the
-                # asphalt (dw//2 short of each painted edge) without
-                # ever blanking a row that has road under it.
+                # Clamp the trace center INTO the painted span:
+                # in a curve the far centerline leaves the near
+                # span while the asphalt stays wide enough.
                 lo = pmin + dw // 2
                 hi = pmax + 1 - dw + dw // 2
                 if cxc < lo:
@@ -2168,31 +1995,15 @@ def _draw_strips(v, cam):
                 display.drawFilledRectangle(
                     cxc - dw // 2, y, dw, 1, lane_c)
         if not band_hit:
-            # Rumble curbs belong to the nearest road surface:
-            # painted at the near claimant's own edges with its own
-            # parity color.  Painting them at the union extremes let a
-            # curve fold hand the extreme from one far claimant to
-            # another row by row, and that claimant's red/white
-            # stripes marched down the middle of the road as vertical
-            # noise, bleeding over the nearer asphalt.  Keyed on the
-            # strip the eye sees, the curb tracks the road it is
-            # attached to and fades with the same haze.
-            # An edge that projects past the screen border is not
-            # visible: painting its curb at the clamped border pinned
-            # a red/white stripe to the screen sides whenever the
-            # near road grew wider than the screen in a curve - the
-            # vertical lines down both sides the reference never has.
-            # Those edges are skipped.  The row-to-row continuity
-            # fills are gone as well: joined edge to edge they became
-            # long diagonal streaks along the silhouette, while the
-            # reference rumble is a row of individual marks.  The
-            # parity is one sub rather than the nine-sub asphalt
-            # block or the three-sub dash lattice: the near road
-            # projects many screen rows onto just a couple of subs,
-            # so both longer periods still banded the near field
-            # into one solid color down most of the screen.  One
-            # sub flips the color every row or two and reads as the
-            # short transverse marks of the reference rumble.
+            # Rumble curbs belong to the NEAREST road surface:
+            # painted at the near claimant's own edges with its
+            # own parity color, so they track the road the eye
+            # sees and fade with its haze.  Painting them at the
+            # union extremes let folds hand the extreme between
+            # far claimants - stripes marching down the middle of
+            # the road.  Edges projecting past the screen border
+            # are skipped (no stripes pinned to the sides).
+            # Parity is one sub: longer periods banded the field.
             nrxl, nrxr = _row_xs(near[2], y)
             nxl = nrxl
             nxr = nrxr
@@ -2201,13 +2012,10 @@ def _draw_strips(v, cam):
             if nxr > W - 1:
                 nxr = W - 1
             if nxr <= nxl or nxr - nxl <= 3:
-                # No curbs on a degenerate or neck-width span: the marks
-                # would cover the sliver entirely and the row would read
-                # as grass with stray dots on it.  And a near quad that
-                # turned edge-on used to wipe the bridge memory here on
-                # every fold - exactly where the hole fill is needed.
-                # The painted-union memory set above survives instead,
-                # so hole rows below can still be bridged.
+                # No curbs on degenerate or neck-width spans: the
+                # marks would cover the sliver entirely.  The
+                # painted-union memory survives here, so hole
+                # rows below can still be bridged.
                 continue
             if COL:
                 nlv = near[5]
@@ -2216,32 +2024,21 @@ def _draw_strips(v, cam):
                 elif nlv > PC.FOG_FAR8:
                     nlv = PC.FOG_FAR8
                 nlv = PC.FOG_LEVEL[nlv]
-                # Stripe period widens with the haze.  Near the
-                # camera one sub spans many rows and reads as the
-                # short transverse marks of the reference rumble;
-                # out at the horizon a sub barely covers a row, so
-                # the one-sub parity flipped color every row or two
-                # there - the dotted noise that blinked out with the
-                # scroll - while both colors faded into the sky and
-                # nothing of the edge survived.  Two subs mid range
-                # and four, eight far out keep each stripe longer
-                # than a row, and the fade goes to a dusty red and a
-                # warm pale instead of the sky so the edge reads
-                # red/white before the kart reaches it.
+                # Stripe period widens with the haze: one sub
+                # covers many rows near the camera (short
+                # transverse marks) but barely a row far out,
+                # where one-sub parity flipped color every row -
+                # dotted noise fading into the sky.  2/4/8 subs
+                # far out keep each stripe longer than a row.
                 sh = 0 if nlv < 2 else 1 if nlv < 4 \
                     else 2 if nlv < 6 else 3
-                # Subdivide each sub into two world-fixed stripes.
-                # One sub projected near the camera covers dozens of
-                # screen rows, so the one-sub parity painted the whole
-                # quad a single color: red ran the full height of a
-                # strip before flipping, the long solid streaks the user
-                # reports as wrong white/red barriers.  Half-sub stripes
-                # alternate red/white every few dozen pixels in the near
-                # field like the reference rumble, and halve the mid
-                # range runs too, while the stripe index na*2+p stays
-                # continuous across the strip border so the pattern
-                # scrolls with the road instead of shivering when the
-                # near owner rotates on a sustained turn.
+                # Subdivide each sub into two world-fixed stripes:
+                # one sub covers dozens of rows near the camera,
+                # so one-sub parity painted whole quads a single
+                # color.  Half-sub stripes alternate like the
+                # reference rumble, and the stripe index na*2+p
+                # stays continuous across the strip border so the
+                # pattern scrolls instead of shivering.
                 dy0 = near[1] - near[0]
                 if dy0 > 0:
                     p = ((y - near[0]) * 2) // dy0
@@ -2257,17 +2054,12 @@ def _draw_strips(v, cam):
                     rb = 1
                 elif rb > 3:
                     rb = 3
-                # On a fold row a disjoint far span can reach past one
-                # of the near edges, and the crease fill then carries
-                # asphalt out to that far extreme.  A curb painted at
-                # the near edge in that situation is an INTERIOR mark:
-                # the eye sees a red/white stripe floating in the
-                # middle of the road with plain gray ribbon out to the
-                # real silhouette edge beside it - the diagonal stripes
-                # cut across the road in every curve.  A near edge that
-                # sits strictly inside the painted union is not a
-                # visible edge at all, so that side's rumble is skipped
-                # and the curb only ever rides an edge the eye follows.
+                # On a fold row a disjoint far span can reach past
+                # a near edge and the crease fill carries asphalt
+                # out to that extreme: a curb at the near edge is
+                # then an INTERIOR mark, a stripe floating mid-
+                # road.  A near edge strictly inside the painted
+                # union is not a visible edge - skip that side.
                 if nrxl >= 0 and nrxl <= pmin:
                     display.drawFilledRectangle(nxl, y, rb, 1, nrum)
                 if nrxr <= W - 1 and nrxr >= pmax + 1:
@@ -2286,6 +2078,22 @@ def _draw_strips(v, cam):
                                     toprow - PC.HORIZON, PC.SKY_H)
 
 
+@micropython.native
+def _append_obj(o, kind, ref, cam, W, H, dl):
+    """Project a track-space object into the sprite queue with its
+    damped depth; off screen, drop the damping so re-entry starts
+    from the raw depth."""
+    wx, wy = _tp8(o['prog'], o['lat'])
+    r = _proj(wx, wy, cam)
+    if r is not None and -64 <= r[0] <= W + 64 \
+            and -64 <= r[1] <= H + 64:
+        zs = _damped_zc(o, 'zs', r[2])
+        dl.append((r[2], kind, ref, r[0], r[1], zs))
+    else:
+        o['zs'] = None
+
+
+@micropython.native
 def _draw_sprites(v, cam):
     """Every object in the world, drawn exactly once, far to near.
     The player's fixed screen slot is drawn last, after every other
@@ -2294,67 +2102,41 @@ def _draw_sprites(v, cam):
     W = PC.WIDTH
     H = PC.HEIGHT
     dl = []
-    # Every object carries its damped depth (zs) down into the draw
-    # pass: the raw view-space depth wobbles with the camera's heading
-    # oscillation, which re-shuffled the pixel scale of distant karts
-    # and roadside objects every other frame.  The damping kills the
-    # wobble so a scale/fade boundary is crossed once, smoothly.
+    # Every object carries its damped depth (zs) into the draw
+    # pass: the raw depth wobbles with the heading swing and
+    # re-shuffled the pixel scale of distant sprites every other
+    # frame.  Damping crosses each boundary once, smoothly.
     for j, d in enumerate(PC.DECOS):
         r = _proj(d[1] * 8, d[2] * 8, cam)
         if r is not None and -64 <= r[0] <= W + 64 \
                 and -64 <= r[1] <= H + 64:
-            # Damp per deco INDEX, not per asset ref: several decos
-            # share one sprite, and a ref-keyed slot mixed their
-            # depths - each tree then drew with the other's damped
-            # scale and jumped by dimensions when it approached.
+            # Damp per deco INDEX, not per asset ref: several
+            # decos share a sprite, and a ref-keyed slot mixed
+            # their depths (trees drew with the other's scale).
             zs = _damped_zc(_ZSD, j, r[2])
             dl.append((r[2], 0, d[0], r[0], r[1], zs))
         else:
-            # Off-screen objects must not keep a stale damped depth:
-            # a re-entry damped from it drew the first frame at the
-            # wrong size and then grew or shrank into place.  Clearing
-            # makes the re-entry start from the raw quantized depth -
-            # correct for the object's true distance.
+            # Off-screen objects drop the damped depth: re-entry
+            # damped from a stale value draws the first frame at
+            # the wrong size and then shrinks/grows into place.
             _ZSD[j] = None
     for b in v['boxes']:
         if b['item'] < 0:
-            # A spent box may respawn at another spot; drop its old
-            # damped depth so the respawn does not size from it.
+            # Spent box: drop the damped depth so a respawn at
+            # a new spot does not size itself from the old one.
             b['zs'] = None
             continue
-        wx, wy = _tp8(b['prog'], b['lat'])
-        r = _proj(wx, wy, cam)
-        if r is not None and -64 <= r[0] <= W + 64 \
-                and -64 <= r[1] <= H + 64:
-            zs = _damped_zc(b, 'zs', r[2])
-            dl.append((r[2], 1, b['item'], r[0], r[1], zs))
-        else:
-            b['zs'] = None
+        _append_obj(b, 1, b["item"], cam, W, H, dl)
     for b in v['bananas']:
-        wx, wy = _tp8(b['prog'], b['lat'])
-        r = _proj(wx, wy, cam)
-        if r is not None and -64 <= r[0] <= W + 64 \
-                and -64 <= r[1] <= H + 64:
-            zs = _damped_zc(b, 'zs', r[2])
-            dl.append((r[2], 2, PC.ITEM_BANANA, r[0], r[1], zs))
-        else:
-            b['zs'] = None
+        _append_obj(b, 2, PC.ITEM_BANANA, cam, W, H, dl)
     for p in v['pokeys']:
-        wx, wy = _tp8(p['prog'], p['lat'])
-        r = _proj(wx, wy, cam)
-        if r is not None and -64 <= r[0] <= W + 64 \
-                and -64 <= r[1] <= H + 64:
-            zs = _damped_zc(p, 'zs', r[2])
-            dl.append((r[2], 3, PC.ITEM_POKEY, r[0], r[1], zs))
-        else:
-            p['zs'] = None
+        _append_obj(p, 3, PC.ITEM_POKEY, cam, W, H, dl)
     for i in range(len(v['karts'])):
         k = v['karts'][i]
-        # Karts go through the hysteresis gate: the raw depth swing
-        # crossed the near plane and the screen margins back and forth
-        # within a tick or two, and the plain projection gate flicked
-        # them out and in with it - the sprite-scale damping fixed the
-        # pixel grid but could not reach these inclusion pops.
+        # Karts go through the hysteresis gate: the raw depth
+        # swing crossed the near plane and the margins within a
+        # tick or two and the plain gate flicked them in and
+        # out - inclusion pops damping cannot reach.
         g = _kart_gate(k, k['x'] >> 13, k['y'] >> 13, cam, W, H)
         if g is not None:
             dl.append((g[0], 4, i, g[1], g[2], k['zs']))
@@ -2364,35 +2146,28 @@ def _draw_sprites(v, cam):
         if kind == 4:
             k = v['karts'][ref]
             if k['ai'] is False:
-                # The player rides in a fixed screen slot - the camera
-                # sits directly behind him, so neither his depth nor
-                # his scale oscillate frame to frame.  He is drawn
-                # last, after every other sprite: a rival squeezing
-                # through the corridor between camera and player used
-                # to paint right over the slot, and the player looked
-                # as if he had stopped rendering.
+                # The player rides a fixed screen slot: the
+                # camera sits right behind him, so his depth
+                # and scale never oscillate.  Drawn LAST - a
+                # rival in the camera-player corridor used to
+                # paint right over him.
                 me = k
                 continue
-            # zs arrives 4-unit quantized AND depth-damped from the
-            # collection pass (see _damped_zc): the heading swing is
-            # gone, so the scale and fade boundary is crossed once,
-            # smoothly, instead of flickered across every other frame.
+            # zs arrives 4-unit quantized AND damped from the
+            # collection pass: the heading swing is gone, so
+            # scale and fade boundaries cross once, smoothly.
             sc = _scale_for(zs, PC.SCALE_K2_KART, PC.KART_W8)
             if sc > PC.KART_RACE_SCALE:
-                # A rival never looks bigger than the player's own
-                # slot kart: below the camera's depth the projection
-                # ran up to the 3x clamp, and a 90-pixel rival at the
-                # bottom edge dwarfed the 40-pixel hero right at the
-                # start of the race.
+                # A rival never looks bigger than the player's
+                # slot kart: below the camera's depth the
+                # projection ran to the 3x clamp and a 90-px
+                # rival dwarfed the 40-px hero at race start.
                 sc = PC.KART_RACE_SCALE
             f = 8
             if zs > PC.FOG_FAR8 - 250:
-                # fade out instead of popping: distant karts shrink
-                # smoothly as they run into the fog cutoff.  The
-                # window used to be 300 units, which started the
-                # shrink so early that opponents were tiny long
-                # before they reached the fog; 250 keeps them at full
-                # size longer.
+                # Fade out instead of popping: distant karts
+                # shrink smoothly into the fog cutoff.  The old
+                # 300-unit window started the shrink too early.
                 f = ((PC.FOG_FAR8 - zs) * 8) // 250
                 if f < 1:
                     f = 1
@@ -2401,13 +2176,11 @@ def _draw_sprites(v, cam):
             w = (sp.width * sc) >> 16
             h = (sp.height * sc) >> 16
             if IS_THUMBY_COLOR and (w < 2 or h < 2):
-                # Below two pixels the scaled blit samples the sprite's
-                # first column - the magenta key - and draws nothing:
-                # the kart just blinked out where the fade meant to
-                # shrink it to a dot.  Paint that dot by hand in the
-                # kart's own body color, blended toward the horizon fog
-                # as the fade runs down, so distant karts melt into the
-                # sky instead of vanishing outright.
+                # Below two pixels the scaled blit samples the
+                # magenta key and draws nothing - the kart
+                # blinked out where the fade meant a dot.  Paint
+                # the dot by hand in the kart's body color,
+                # blended toward the horizon fog as f runs down.
                 t = 8 - f
                 c = KART_DOT[k['i']]
                 cr = c >> 11
@@ -2433,10 +2206,9 @@ def _draw_sprites(v, cam):
                 sp = ITEMS[ref]
                 k2 = PC.SCALE_K2_ITEM
                 w8 = PC.ITEM_W8
-            # The damped, 4-unit-quantized depth from the collection
-            # pass drives the scale: roadside objects no longer
-            # re-shuffle their pixel width every frame, so trees and
-            # lamps scroll steadily instead of shimmering.
+            # The damped, 4-unit-quantized depth drives the
+            # scale: roadside objects scroll steadily instead
+            # of shimmering (no per-frame width re-shuffle).
             sc = _scale_for(zs, k2, w8)
             w = (sp.width * sc) >> 16
             h = (sp.height * sc) >> 16
@@ -2488,6 +2260,7 @@ _BIG_DIGITS = {
 }
 
 
+@micropython.native
 def _big_char(ch, x, y, scale, col):
     # 5-row x 7-column bitmaps, top row first, bit 6 = leftmost column
     rows = _BIG_DIGITS.get(ch)
@@ -2502,6 +2275,7 @@ def _big_char(ch, x, y, scale, col):
                                             scale, scale, col)
 
 
+@micropython.native
 def _big_text(s, cx, cy, scale, col):
     w = len(s) * (7 * scale + scale) - scale
     x = cx - w // 2
@@ -2510,6 +2284,7 @@ def _big_text(s, cx, cy, scale, col):
         x += 8 * scale
 
 
+@micropython.native
 def _draw_drift_smoke(v, sx, sy):
     """Tire smoke trailing the drifting player kart: two small puffs
     swapped side to side as the frame counter ticks, so the trail
@@ -2525,6 +2300,7 @@ def _draw_drift_smoke(v, sx, sy):
     display.drawFilledRectangle(sx + 12 + (f & 1), sy - 3, 4, 3, c2)
 
 
+@micropython.native
 def _draw_kart_sprite(k, v, x, y, scale):
     """One kart sprite (its bottom edge at x, y) with its effect
     overlays: the star aura around it, the boost flame under it, the
@@ -2532,16 +2308,11 @@ def _draw_kart_sprite(k, v, x, y, scale):
     sp = KARTS[k['i']]
     w = (sp.width * scale) >> 16
     h = (sp.height * scale) >> 16
-    # The star aura stays on constantly: blinking it frame to frame
-    # just read as flicker, and the reference keeps its aura lit too
-    # - but only from 8 pixels up: on a tiny distant kart the aura was
-    # a solid yellow block bigger than the kart, which read as a
-    # flickering blob on the horizon.
-    # The aura is an OUTLINE, never a solid fill: a solid block behind
-    # the kart painted an opaque yellow rectangle over the road and
-    # over the rivals behind, and its color bled through the sprite's
-    # transparent key pixels so the kart looked like it was drawn on
-    # a yellow background tile.
+    # The star aura stays lit (blinking read as flicker) and
+    # only from 8 px up: on a tiny distant kart it was a blob
+    # bigger than the sprite.  It is an OUTLINE, never a solid
+    # fill - a block painted over the road and bled through the
+    # sprite's transparent key pixels.
     if k['star'] > 0 and w >= 8:
         if IS_THUMBY_COLOR:
             display.drawRectangle(x - 2, y - 2, w + 4, h + 4,
@@ -2577,6 +2348,7 @@ def _draw_kart_sprite(k, v, x, y, scale):
         display.drawFilledRectangle(fx, y + h + 1, fw, fh, col)
 
 
+@micropython.native
 def _draw_hud(v):
     p = v['karts'][0]
     n = len(v['karts'])
@@ -2623,6 +2395,7 @@ def _draw_hud(v):
         _draw_minimap_thumby(v)
 
 
+@micropython.native
 def _draw_minimap_color(v):
     x0, y0 = 90, 104
     pw, ph = 34, 18
@@ -2651,6 +2424,7 @@ def _draw_minimap_color(v):
                                         PC.COLOR_SELECT)
 
 
+@micropython.native
 def _draw_minimap_thumby(v):
     x0, y0 = 50, 23
     pw, ph = 18, 10
@@ -2676,11 +2450,12 @@ def _draw_minimap_thumby(v):
                                         PC.COLOR_MINI)
 
 
+@micropython.native
 def _race_draw(v, update=True):
-    """Draw one race frame. `update=False` skips the trailing blit so a
-    caller that overlays its own panel can push the composed frame
-    exactly once - pushing twice would alternate panel and bare race on
-    every tick (the title panel flickering in and out)."""
+    """Draw one race frame. `update=False` skips the trailing
+    blit so a caller that overlays its own panel can push the
+    composed frame exactly once (two pushes would alternate
+    panel and bare race on every tick)."""
     cam = _camera(v)
     _draw_sky(v)
     _draw_strips(v, cam)
@@ -2747,14 +2522,11 @@ def _race_start(player_kart, attract):
         karts.append(_make_kart(designs[i],
                                  not attract and i == 0, slot))
     if attract:
-        # The attract demo runs as a race already in progress: the
-        # field is rolling and spread over the opening of the lap
-        # instead of standing on the grid behind the start line.  A
-        # grid-packed all-CPU field throttles itself to a crawl and
-        # the camera then crosses a subsegment only every couple of
-        # dozen frames; each crossing re-shuffles the strip painter's
-        # order and the whole scene flips in place, which looked like
-        # the attract mode throwing errors across the title screen.
+        # The attract demo starts mid-lap, not on the grid: a
+        # grid-packed all-CPU field throttles itself to a crawl
+        # and the camera then crosses a subsegment only every
+        # couple of dozen frames - each crossing re-shuffles
+        # the strip order and flips the whole scene in place.
         for i, k in enumerate(karts):
             k['prog'] = (36 + 54 * i) * 8
             k['total'] = k['prog']
@@ -2784,6 +2556,7 @@ def _race_start(player_kart, attract):
     }
 
 
+@micropython.native
 def _race_step(v, dt, fx):
     """One simulation step: input or AI, physics, laps and items.
     Shared by the race loop and the title's attract mode."""
@@ -2801,10 +2574,9 @@ def _race_step(v, dt, fx):
             _use_item(p, v, fx)
     for k in karts:
         if not k['ai']:
-            # The player steers its own nose in world space once the
-            # race is live; the title's attract demo keeps the player
-            # kart on the rail (it is parked anyway, and a free kart
-            # would wander off the camera's course).
+            # The player steers its own nose in world space once
+            # the race is live; the attract keeps the parked
+            # player kart on the rail.
             k['free'] = not v['attract']
         if k['finish']:
             si, thr = 0, 0      # finished karts coast to a stop
@@ -2824,11 +2596,10 @@ def _race_step(v, dt, fx):
                 thr = 65536
             elif BUTTONS[KEY_DOWN].pressed():
                 thr = -65536
-            # Drift / mini-turbo (color target; RB is the drift key):
-            # hold RB with steering applied above a fifth of the top
-            # speed to power-slide.  Releasing the key cashes the
-            # charge in as a boost scaled by how long the slide was
-            # held - the reference racer's drift mechanic.
+            # Drift / mini-turbo (color target; RB is the drift
+            # key): hold RB with steering above a fifth of top
+            # speed to power-slide; releasing cashes the slide
+            # time in as a boost - the reference's mechanic.
             if IS_THUMBY_COLOR and not v['attract']:
                 held = buttonRB.pressed()
                 if k['drift'] == 1:
@@ -2862,13 +2633,11 @@ def _race_step(v, dt, fx):
     for k in karts:
         if k['finish']:
             continue
-        # Crossing the start line forward (the karts never reverse).
-        # The wrapped step must be a plausible one-tick advance: the
-        # free player's projection can hop across the line by
-        # hundreds of units (hairpin slide, grass-wall snap) and those
-        # hops used to be credited as crossings - free laps that
-        # ended the race after a single real lap and handed the
-        # player the win with the field marked DNF.
+        # Crossing the start line forward (the karts never
+        # reverse): the wrapped step must be a plausible
+        # one-tick advance.  The free player's projection can
+        # hop the line by hundreds of units (hairpin slide,
+        # grass snap) and such hops used to be credited as laps.
         step = ((k['prog'] - k['prevprog'] + (PC.L8 >> 1))
                 % PC.L8) - (PC.L8 >> 1)
         if (k['prevprog'] > k['prog']
@@ -2888,31 +2657,40 @@ def _race_step(v, dt, fx):
         k['prevprog'] = k['prog']
     _kart_collisions(v, fx)
     _items_update(v, dt, fx)
-    # positions: finished by time, the rest by progress.  Finished
-    # karts must sort AHEAD of the ones still running - the old key
-    # began with (finish > 0) in ascending order, which put every
-    # still-running kart ahead of anyone who had already taken the
-    # flag, so a last-place player was displayed 1st/8 as soon as a
-    # rival finished.  The forfeit mark (10**9) is not a real finish:
-    # that kart ranks with the field by progress.
-    order = sorted(karts,
-                   key=lambda k: (
-                       0 if 0 < k['finish'] <= 10 ** 8 else 1,
-                       k['finish'] if 0 < k['finish'] <= 10 ** 8
-                       else 0,
-                       -k['total']))
+    # positions: finished by time, the rest by progress -
+    # finishers must sort AHEAD of the running field.  The old
+    # key began with (finish > 0) ascending, so a finished rival
+    # jumped ahead of a still-running last-place player.  The
+    # forfeit mark (10**9) is not a finish: rank by progress.
+    order = karts[:]
+    for j in range(1, len(order)):
+        k = order[j]
+        kf = k['finish']
+        kfin = 0 if 0 < kf <= 10 ** 8 else 1
+        kt = kf if kfin == 0 else 0
+        ktt = -k['total']
+        w = j - 1
+        while w >= 0:
+            o = order[w]
+            of = o['finish']
+            po = 0 if 0 < of <= 10 ** 8 else 1
+            ot = of if po == 0 else 0
+            if po > kfin or (po == kfin and (ot > kt or (ot == kt
+                    and -o['total'] > ktt))):
+                order[w + 1] = order[w]
+                w -= 1
+            else:
+                break
+        order[w + 1] = k
     for i, k in enumerate(order):
         k['pos'] = i + 1
     v['player_pos'] = p['pos']
     if v['attract']:
-        # follow the leader and keep the field packed (a laggard a
-        # lap behind is teleported a lap ahead).  The camera only
-        # switches kart when the pack leader pulls clear of the
-        # current one by LEAD_MARGIN8: two karts running side by
-        # side would otherwise trade the lead every tick, the camera
-        # would snap between their different positions and headings,
-        # the whole scene would reproject, and the attract mode would
-        # flip across the entire screen every frame.
+        # Follow the leader and keep the field packed: a laggard
+        # a lap behind is teleported a lap ahead.  The camera
+        # switches only when the pack leader pulls clear by
+        # LEAD_MARGIN8 - side-by-side karts trading the lead
+        # every tick would reproject the scene and flip it.
         lead = v['cam_idx']
         lt = karts[lead]['total']
         for i in range(1, len(karts)):
@@ -2936,6 +2714,7 @@ def _race_step(v, dt, fx):
                 k['total'] -= 4194304
 
 
+@micropython.native
 def race(player_kart):
     """One race. Returns (standings, player_pos, forfeit)."""
     global first_race
@@ -3084,6 +2863,7 @@ def _draw_help():
         display.drawText(ln, center_x(ln), y, PC.COLOR_DIM)
 
 
+@micropython.native
 def title():
     """Attract mode: a live CPU race running behind the panel - the
     camera follows the leader and the field stays packed. Returns
@@ -3129,6 +2909,7 @@ def title():
             return 1
 
 
+@micropython.native
 def _stat_bar(x, y, w, val, col, bg):
     display.drawFilledRectangle(x, y, w, 3, bg)
     n = int(val * w + 0.5)
@@ -3136,6 +2917,7 @@ def _stat_bar(x, y, w, val, col, bg):
         display.drawFilledRectangle(x, y, n, 3, col)
 
 
+@micropython.native
 def select_kart():
     """Returns the picked kart index, or None to bail to the title."""
     display.setFPS(PC.FPS_MENU)
@@ -3230,6 +3012,7 @@ def select_kart():
             return None
 
 
+@micropython.native
 def result(standings, player_pos, forfeit):
     """Shows the final table. Returns True for a rematch, False for
     the title."""
@@ -3318,9 +3101,6 @@ class SettingsMenu:
     def update_menu(self):
         self.settings_items = self.get_menu_items()
 
-    def get_pressed_key(self):
-        return get_pressed_key()
-
     def handle_special_action(self, i):
         return None
 
@@ -3347,6 +3127,7 @@ class SettingsMenu:
             sleep(0.3)
             inputJustPressed()
 
+    @micropython.native
     def run(self):
         display.setFPS(PC.FPS_MENU)
         while True:
@@ -3464,3 +3245,4 @@ def main():
 
 
 main()
+

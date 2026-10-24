@@ -250,9 +250,9 @@ class Driver:
             self.set_scene('result')
             return orig_result(standings, pos, forfeit)
 
-        def draw_probe(v):
+        def draw_probe(v, *args, **kw):
             self.v = v
-            return orig_draw(v)
+            return orig_draw(v, *args, **kw)
 
         def run_probe(menu):
             self.menu = menu
@@ -584,6 +584,14 @@ for name in SNAP_FILES:
             snapshots[name] = f.read()
     else:
         snapshots[name] = None
+
+# Deterministic verification: pin the RNG so runs are comparable -
+# item spawns (randint(1,100)) and AI jitter make race outcomes
+# luck-dependent without this.
+import random
+_sd = os.environ.get('SELFPLAY_SEED')
+if _sd is not None:
+    random.seed(_sd)
 
 t0 = time.time()
 print(f'[selfplay] running script ({len(EVENTS)} events)...', flush=True)
