@@ -556,5 +556,28 @@ else:
         PC.FOG_LEVEL[_z] = _lv
     del _FOG_BOUNDS
 
+    # --- Ground/sky textures (ThumbyColor / PC only; Thumby stays flat) ----
+    # The sky is a scrolled panorama strip; the ground is two tileable
+    # RGB565 tiles sampled in the flat-world ground plane (same
+    # Mode-7-style scanline lookup as SevEngine, in track space).
+    PC.TEX_SKY_W = const(256)   # sky strip width (power of 2: u wraps)
+    PC.TEX_SKY_H = const(34)    # = HORIZON: the strip covers the sky rows
+    PC.TEX_G = const(64)        # ground tile edge (power of 2)
+    PC.TEX_K = const(16)        # Q8 track units per texel (128-unit tiles)
+    # Bottom-weighted texture lines. Near the camera depth advances
+    # ~1 Q8 per screen row, so the plain grid truncates one tile row
+    # across ~20 rows and smears those lines down the screen. Below the
+    # screen midline sample along-track 8x finer; road and grass share
+    # tu so both stay on the gained grid. Color/PC only.
+    PC.TEX_NEAR_Y = const(64)   # screen row where the near gain starts
+    PC.TEX_NEAR_MULT = const(8) # along-track texture frequency gain
+    # Fog weight per haze level: blend texels toward SKY_H with this
+    # many 256ths of the sky color (level 7 = fully sky, fast path).
+    PC.FOGW = tuple(const(l * 256 // 7) for l in range(8))
+    # SKY_H broken into its RGB565 channels for the per-pixel blend.
+    PC.SKY_CR = const(PC.SKY_H >> 11)
+    PC.SKY_CG = const((PC.SKY_H >> 5) & 63)
+    PC.SKY_CB = const(PC.SKY_H & 31)
+
     # Transparent pixel in the .COL.bin sprites (from the asset tool)
     PC.KEY_MAGIC = const(0xF81F)

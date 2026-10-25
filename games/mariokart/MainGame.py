@@ -54,6 +54,7 @@ from thumbyHardware import reset
 from random import randint
 from time import sleep
 from array import array
+from struct import unpack
 from gc import collect, mem_free
 import json
 
@@ -84,6 +85,94 @@ DECOS = [
     _sprite("assets/streetlamp_14_34.COL.bin",
             "assets/streetlamp_7_17.BIT.bin",
             "assets/streetlamp_7_17.SHD.bin", 7, 17)]
+
+# --- Ground/sky textures (ThumbyColor / PC only) -----------------------------
+# SevEngine v1.2 (MIT) uses texture maps for the sky and the ground plane;
+# the panorama skybox from that project is reused here (assets/skybox_src.jpg)
+# and converted to a scrolled RGB565 strip, plus two procedural tileable
+# ground tiles (tool/mariokart_textures.py). The strip renderer samples
+# them like SevEngine's Mode-7 scanlines: every screen row below the
+# horizon is a ground line of constant depth, so the along-track texture
+# u is fixed for the whole row and only the lateral v changes per pixel.
+# The 1-bit Thumby never loads these files (the deploy tool filters .COL
+# out of its asset subset) and keeps painting flat colors.
+def _load_tex(path):
+    """Read a single-frame RGB565 .COL.bin into RAM (header + pixels)."""
+    try:
+        with open(path, 'rb') as f:
+            w, h, frames, flags = unpack('<HHHH', f.read(8))
+            buf = bytearray(w * h * 2)
+            f.readinto(buf)
+        return buf
+    except OSError:
+        print(f'texture missing: {path}')
+        return None
+
+
+TEX_SKY = TEX_ROAD = TEX_GRASS = None
+if IS_THUMBY_COLOR:
+    collect()
+    TEX_SKY = _load_tex("assets/sky_256_34.COL.bin")
+    TEX_ROAD = _load_tex("assets/road_64_64.COL.bin")
+    TEX_GRASS = _load_tex("assets/grass_64_64.COL.bin")
+    print(f"textures loaded, free after: {mem_free()}")
+
+
+@micropython.viper
+def _paint_sky(fb, tex, tw: int, rows: int, u0: int):
+    """Copy the scrolled sky panorama into the sky rows: one texel
+    column per screen column (1:1 texels), 128 px wide screen."""
+    fbp = ptr16(fb)
+    tp = ptr16(tex)
+    mask = tw - 1
+    y = 0
+    while y < rows:
+        trow = y * tw
+        frow = y * 128
+        u = u0
+        x = 0
+        while x < 128:
+            fbp[frow + x] = tp[trow + (u & mask)]
+            u += 1
+            x += 1
+        y += 1
+
+
+@micropython.viper
+def _tex_row(fb, tex, y: int, tu: int, anchor: int, vmul: int,
+             x0: int, x1: int, fogw: int, dark: int,
+             scr: int, scg: int, scb: int):
+    """Paint one screen row of a tiled ground texture in [x0, x1).
+    `tu` is the row's fixed along-track texel; `anchor` is the screen
+    x that maps to texel v=0 (the road's left edge for asphalt, the
+    centerline trace for grass) and `vmul` scales the lateral distance
+    to texels (v = (x - anchor) * vmul >> 8). `dark` shades each RGB
+    field to 7/8 for the odd world stripe, matching the subtle A/B
+    band contrast of the flat palette (grass B is ~0.85 of A, road B
+    ~0.93), and `fogw` blends each channel toward SKY_H by
+    fogw/256ths."""
+    fbp = ptr16(fb)
+    tp = ptr16(tex)
+    frow = y * 128
+    # wrap the along-track texel into the tile (64 rows) so any
+    # station, positive or negative, lands on real texels
+    trow = (tu & 63) * 64
+    inv = 256 - fogw
+    x = x0
+    while x < x1:
+        c = tp[trow + ((((x - anchor) * vmul) >> 8) & 63)]
+        r = c >> 11
+        g = (c >> 5) & 63
+        b = c & 31
+        if dark:
+            r = (r * 7) >> 3
+            g = (g * 7) >> 3
+            b = (b * 7) >> 3
+        rv = ((r * inv) + (scr * fogw)) >> 8
+        gv = (((g * inv) + (scg * fogw)) >> 8) & 63
+        bv = ((b * inv) + (scb * fogw)) >> 8
+        fbp[frow + x] = (rv << 11) | (gv << 5) | bv
+        x += 1
 
 # --- Distance-rendering helpers ---------------------------------------------
 # The camera's heading swing moves the raw view depth by tens of units
@@ -1234,24 +1323,13 @@ def _scale_for(zc, k2, w8):
 
 @micropython.native
 def _draw_sky(v):
-    """The sky above the horizon. Color: five bands, the sun and two
-    parallax hill layers that scroll with the camera's heading - they
-    sweep across the sky when the road turns and stay put on the
-    straights, the far layer at a quarter of the near layer's speed;
-    the 128 px patterns wrap with the screen width.
+    """The sky above the horizon. Color: a scrolled sky panorama
+    (SevEngine's skybox, texture-mapped) that sweeps with the camera's
+    heading and stays put on the straights - the baked-in mountains and
+    clouds are the parallax. If the texture is missing the flat bands,
+    sun and hill layers fall back.
     1-bit: a dotted ridge along the horizon."""
     if IS_THUMBY_COLOR:
-        display.drawFilledRectangle(0, 0, PC.WIDTH, 8, PC.SKY1)
-        display.drawFilledRectangle(0, 8, PC.WIDTH, 8, PC.SKY2)
-        display.drawFilledRectangle(0, 16, PC.WIDTH, 8, PC.SKY3)
-        display.drawFilledRectangle(0, 24, PC.WIDTH, 8, PC.SKY4)
-        # Horizon haze band from row 32 down to the horizon; its
-        # height rides HORIZON so the band stays sky when the
-        # horizon is raised.
-        display.drawFilledRectangle(0, 32, PC.WIDTH,
-                                    PC.HORIZON - 32, PC.SKY_H)
-        display.drawFilledRectangle(96, 8, 8, 1, PC.SUN)
-        display.drawFilledRectangle(100, 6, 4, 4, PC.SUN)
         ck = v['karts'][v['cam_idx']]
         # Camera heading in Q10 (full circle 1024).  A free kart
         # supplies its own nose angle; an on-rail kart interpolates
@@ -1290,22 +1368,42 @@ def _draw_sky(v):
             v['skyoff'] = (v['skyoff'] + d) & 16383
         v['sangprev'] = sang
         v['camprev'] = v['cam_idx']
-        off = (-v['skyoff'] >> 6) & 127
-        for row, runs in PC.HILL_FAR_RUNS:
-            for x0, x1 in runs:
-                w = x1 - x0 + 1
-                x = x0 - off
-                display.drawFilledRectangle(x, row, w, 1, PC.HILL_FAR)
-                display.drawFilledRectangle(x + 128, row, w, 1,
-                                            PC.HILL_FAR)
-        off = (-v['skyoff'] >> 4) & 127
-        for row, runs in PC.HILL_NEAR_RUNS:
-            for x0, x1 in runs:
-                w = x1 - x0 + 1
-                x = x0 - off
-                display.drawFilledRectangle(x, row, w, 1, PC.HILL_NEAR)
-                display.drawFilledRectangle(x + 128, row, w, 1,
-                                            PC.HILL_NEAR)
+        if TEX_SKY is not None:
+            # Scroll the panorama with the heading accumulator, the same
+            # direction the hill layers used (the mountains and clouds
+            # baked into the texture are the parallax now).
+            u0 = ((-v['skyoff'] * PC.TEX_SKY_W) >> 10) & (PC.TEX_SKY_W - 1)
+            _paint_sky(display.buffer, TEX_SKY, PC.TEX_SKY_W,
+                       PC.TEX_SKY_H, u0)
+        else:
+            display.drawFilledRectangle(0, 0, PC.WIDTH, 8, PC.SKY1)
+            display.drawFilledRectangle(0, 8, PC.WIDTH, 8, PC.SKY2)
+            display.drawFilledRectangle(0, 16, PC.WIDTH, 8, PC.SKY3)
+            display.drawFilledRectangle(0, 24, PC.WIDTH, 8, PC.SKY4)
+            # Horizon haze band from row 32 down to the horizon; its
+            # height rides HORIZON so the band stays sky when the
+            # horizon is raised.
+            display.drawFilledRectangle(0, 32, PC.WIDTH,
+                                        PC.HORIZON - 32, PC.SKY_H)
+            display.drawFilledRectangle(96, 8, 8, 1, PC.SUN)
+            display.drawFilledRectangle(100, 6, 4, 4, PC.SUN)
+            off = (-v['skyoff'] >> 6) & 127
+            for row, runs in PC.HILL_FAR_RUNS:
+                for x0, x1 in runs:
+                    w = x1 - x0 + 1
+                    x = x0 - off
+                    display.drawFilledRectangle(x, row, w, 1, PC.HILL_FAR)
+                    display.drawFilledRectangle(x + 128, row, w, 1,
+                                                PC.HILL_FAR)
+            off = (-v['skyoff'] >> 4) & 127
+            for row, runs in PC.HILL_NEAR_RUNS:
+                for x0, x1 in runs:
+                    w = x1 - x0 + 1
+                    x = x0 - off
+                    display.drawFilledRectangle(x, row, w, 1,
+                                                PC.HILL_NEAR)
+                    display.drawFilledRectangle(x + 128, row, w, 1,
+                                                PC.HILL_NEAR)
     else:
         display.fill(PC.COLOR_BG)
         for x in range(0, PC.WIDTH, 2):
@@ -1587,6 +1685,11 @@ def _draw_strips(v, cam):
     p = v['karts'][v['cam_idx']]
     s0 = _sub_of_prog8(p['prog'])
     n = PC.SUB_N
+    # Ground texture station: the camera rides the tangent CAM_BEHIND8
+    # behind the followed kart, so every ground line on screen carries
+    # this Q8 station as its along-track texture u (SevEngine-style
+    # Mode-7 scanline lookup, in track space).
+    cam_prog8 = p['prog'] - PC.CAM_BEHIND8
     strips = []
     # a few subsegments behind the camera kart as well: the near
     # plane clipping trims whatever projects behind the camera, and
@@ -1693,6 +1796,25 @@ def _draw_strips(v, cam):
                 prev_nxl = prev_nxr = None
             continue
         bridge = 2
+        # Textured ground row math (color target): a screen row is a
+        # ground line at one fixed depth, so the along-track texture
+        # coordinate is constant across the row and only the lateral
+        # coordinate v changes per pixel (SevEngine's scanline lookup).
+        tu = None
+        vmul = 0
+        if COL and (TEX_GRASS is not None or TEX_ROAD is not None) \
+                and y > cy:
+            z_y = fch // (y - cy)
+            s8 = cam_prog8 + z_y
+            # Bottom-weighted texture lines: the plain 16-texel grid
+            # truncates to one tile row across ~20 rows near the bottom
+            # and stretches those lines down the screen. Sample 8x
+            # finer along-track below the screen midline; road and
+            # grass use this same tu so the shared grid is gained
+            # evenly.
+            tu = (s8 * PC.TEX_K * (PC.TEX_NEAR_MULT
+                                   if y >= PC.TEX_NEAR_Y else 1)) >> 8
+            vmul = (z_y * 8 * PC.TEX_K) // PC.FOV_F
         # Occlusion reference = nearest claimant with a REAL span
         # at this row; other claimants may not paint outside it.
         # Without the clamp, fold rows let far claimants spill
@@ -1740,14 +1862,40 @@ def _draw_strips(v, cam):
             elif gz > PC.FOG_FAR8:
                 gz = PC.FOG_FAR8
             lg = PC.FOG_LEVEL[gz]
-            if ((near[3] // blk) & 1) == 0:
+            gpar = (near[3] // blk) & 1
+            if gpar == 0:
                 grass_c = PC.FOGT_GRASS_A[lg]
             else:
                 grass_c = PC.FOGT_GRASS_B[lg]
+            fogw = PC.FOGW[lg]
+            if TEX_GRASS is not None and fogw < 256 and tu is not None:
+                # Grass beside the road: the lateral v is anchored to
+                # the centerline TRACE (same chord the lane dashes ride),
+                # so the field scrolls with the world grid, not the
+                # clipped span.
+                trn = near[6]
+                if trn is not None:
+                    dy = trn[4] - trn[1]
+                    if dy == 0:
+                        t = 0
+                    else:
+                        t = ((y - trn[1]) * 256) // dy
+                        if t < 0:
+                            t = 0
+                        elif t > 256:
+                            t = 256
+                    cxc = trn[0] + (((trn[3] - trn[0]) * t) >> 8)
+                else:
+                    cxc = W // 2
+                _tex_row(display.buffer, TEX_GRASS, y, tu, cxc, vmul,
+                         0, W, fogw, gpar,
+                         PC.SKY_CR, PC.SKY_CG, PC.SKY_CB)
+            else:
+                display.drawFilledRectangle(0, y, W, 1, grass_c)
         else:
             grass_c = (PC.COLOR_GRASS_B if ((near[3] // blk) & 1)
                        else PC.COLOR_GRASS_A)
-        display.drawFilledRectangle(0, y, W, 1, grass_c)
+            display.drawFilledRectangle(0, y, W, 1, grass_c)
         del dashes[:]
         road_c = None
         band_cells = False
@@ -1806,7 +1954,19 @@ def _draw_strips(v, cam):
             # the three line strips.  Strips wrapped behind the
             # camera (loop field < 0) are skipped so a crossing
             # cannot tile the screen.
-            display.drawFilledRectangle(xl, y, xr - xl, 1, road_c)
+            if COL and TEX_ROAD is not None and tu is not None \
+                    and PC.FOGW[lev] < 256:
+                # Textured asphalt: v spans the projected road width
+                # (linear along the chord = perspective correct), u is
+                # the row's track station shared with the grass, so the
+                # road and the fields scroll on the same world grid.
+                wspan = xr - xl
+                vmul2 = (PC.TEX_G * 256) // wspan
+                _tex_row(display.buffer, TEX_ROAD, y, tu, xl, vmul2,
+                         xl, xr, PC.FOGW[lev], 0 if alt else 1,
+                         PC.SKY_CR, PC.SKY_CG, PC.SKY_CB)
+            else:
+                display.drawFilledRectangle(xl, y, xr - xl, 1, road_c)
             painted = True
             if xl < pmin:
                 pmin = xl
@@ -1878,8 +2038,16 @@ def _draw_strips(v, cam):
             # inside it with asphalt so the fold reads as one
             # ribbon.  (start/finish band excluded: its tiles own
             # the row).
-            display.drawFilledRectangle(pmin, y, pmax - pmin + 1, 1,
-                                        road_c)
+            if COL and TEX_ROAD is not None and tu is not None \
+                    and PC.FOGW[lev] < 256:
+                wspan = pmax - pmin + 1
+                vmul2 = (PC.TEX_G * 256) // wspan
+                _tex_row(display.buffer, TEX_ROAD, y, tu, pmin, vmul2,
+                         pmin, pmax + 1, PC.FOGW[lev], 0 if alt else 1,
+                         PC.SKY_CR, PC.SKY_CG, PC.SKY_CB)
+            else:
+                display.drawFilledRectangle(pmin, y, pmax - pmin + 1, 1,
+                                            road_c)
         if painted:
             # Silhouette memory = union of the asphalt actually
             # painted, not the near strip's own edges: on a fold

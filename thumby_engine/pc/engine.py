@@ -20,6 +20,12 @@ _fps_correction_factor = None
 _fps_correction_loaded = False
 _SETTINGS_FILE = ".pc_wrapper_settings.json"
 
+def _correction_key():
+    """Settings key for the active emulation mode (set by bootstrap())."""
+    mode = os.environ.get('THUMBY_EMULATION_MODE', 'color')
+    return 'fps_correction_thumby' if mode == 'thumby' else 'fps_correction'
+
+
 def _load_fps_correction():
     """Load FPS correction factor from settings file"""
     global _fps_correction_factor, _fps_correction_loaded
@@ -28,13 +34,15 @@ def _load_fps_correction():
         return
 
     if os.path.exists(_SETTINGS_FILE):
+        key = _correction_key()
         try:
             with open(_SETTINGS_FILE, 'r') as f:
                 settings = json.load(f)
-                if 'fps_correction' in settings:
-                    _fps_correction_factor = settings['fps_correction']
+                if key in settings:
+                    _fps_correction_factor = settings[key]
                     _fps_correction_loaded = True  # Only set after successful load
-                    print(f"[Engine] Loaded FPS correction factor: {_fps_correction_factor:.4f}")
+                    print(f"[Engine] Loaded FPS correction factor "
+                          f"({key}): {_fps_correction_factor:.4f}")
         except Exception as e:
             print(f"[Engine] Failed to load FPS correction: {e}")
 

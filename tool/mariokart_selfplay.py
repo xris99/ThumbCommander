@@ -45,6 +45,7 @@ Usage:
 """
 
 import os
+import struct
 import sys
 import time
 from math import atan2, pi
@@ -100,6 +101,59 @@ RUMBLE_A = 0xE1E7
 RUMBLE_B = 0xF7BE
 LANE = 0xEF5B
 LINE = 0xFFFF
+
+
+def _load_col_vals(path):
+    """Unique RGB565 texels of a single-frame .COL.bin."""
+    try:
+        with open(path, 'rb') as f:
+            w, h = struct.unpack('<HH', f.read(4))
+            f.read(4)
+            raw = f.read(w * h * 2)
+        return {raw[i] | (raw[i + 1] << 8) for i in range(0, len(raw), 2)}
+    except OSError:
+        return set()
+
+
+# The ThumbyColor race paints textured ground (asphalt/grass tiles)
+# when the .COL textures are present; build the color family the game
+# can produce from them: texels, their 7/8-shaded odd-stripe form and
+# every fog blend toward SKY_H (mirrors the game's per-pixel blend). The flat
+# palette stays in the sets, so the probes work either way.
+SKY_H_C = 0x5C54
+FOGW = [l * 256 // 7 for l in range(8)]
+
+
+def _fog_blend(c, s, w):
+    cr, cg, cb = c >> 11, (c >> 5) & 63, c & 31
+    sr, sg, sb = s >> 11, (s >> 5) & 63, s & 31
+    rv = (cr * (256 - w) + sr * w) >> 8
+    gv = ((cg * (256 - w) + sg * w) >> 8) & 63
+    bv = (cb * (256 - w) + sb * w) >> 8
+    return (rv << 11) | (gv << 5) | bv
+
+
+TAXELS = set()
+for _name in ('road_64_64', 'grass_64_64'):
+    TAXELS |= _load_col_vals(os.path.join(GAME_DIR, 'assets',
+                                          _name + '.COL.bin'))
+
+
+def _shade78(t):
+    """Each RGB field scaled to 7/8 (the game's odd-stripe shading)."""
+    r, g, b = t >> 11, (t >> 5) & 63, t & 31
+    return ((r * 7 >> 3) << 11) | ((g * 7 >> 3) << 5) | (b * 7 >> 3)
+
+
+GROUND_FAMILY = set()
+for _t in TAXELS:
+    GROUND_FAMILY.add(_t)
+    GROUND_FAMILY.add(_shade78(_t))
+for _w in FOGW:
+    for _c in tuple(GROUND_FAMILY):
+        GROUND_FAMILY.add(_fog_blend(_c, SKY_H_C, _w))
+if TAXELS:
+    GROUND_FAMILY.add(SKY_H_C)
 
 
 def px(x, y):
@@ -399,7 +453,8 @@ class Driver:
                             c = px(x, y)
                             if c not in (GRASS, GRASS_B, ROAD, ROAD_B,
                                          RUMBLE_A, RUMBLE_B, LANE,
-                                         CHECK_A, CHECK_B, SEL):
+                                         CHECK_A, CHECK_B, SEL) \
+                                    and c not in GROUND_FAMILY:
                                 anchor += 1
                     if anchor < 40:
                         raise RuntimeError(f'race: no player kart '
@@ -420,6 +475,7 @@ class Driver:
                     # game builds those from PC, so read them live)
                     roadset = {ROAD, ROAD_B, RUMBLE_A, RUMBLE_B, LANE,
                                CHECK_A, CHECK_B}
+                    roadset.update(GROUND_FAMILY)
                     if self.mg is not None:
                         for name in ('FOGT_ROAD_A', 'FOGT_ROAD_B',
                                      'FOGT_RUMBLE_A', 'FOGT_RUMBLE_B',
