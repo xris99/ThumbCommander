@@ -71,9 +71,9 @@ def _default_scale():
 def _device_render_ms():
     try:
         return max(0.0, float(os.environ.get('THUMBY_DEVICE_RENDER_MS',
-                                            '10')))
+                                            '100')))
     except ValueError:
-        return 10.0
+        return 100.0
 
 
 _DEVICE_RENDER_MS = _device_render_ms()
@@ -378,6 +378,14 @@ class Grayscale:
             while engine.time_to_next_tick() > 0:
                 pass
             engine.tick()
+        else:
+            # Scenes that never call setFPS (the title attract loop)
+            # schedule no engine tick, so the tick-based keyboard poll
+            # above would never run and the keyboard would appear frozen.
+            # The device's buttons are IRQ-driven - live state without
+            # ticks - so mirror that here: sample once per frame.
+            if engine.update_button_state is not None:
+                engine.update_button_state()
         self.lastUpdateEnd = utime.ticks_ms()
 
     # --- GraphicsClass (direct ports of the hardware viper routines) ----

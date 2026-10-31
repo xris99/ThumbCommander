@@ -1728,7 +1728,7 @@ def _draw_strips(v, cam):
             ybot = y_near
         if ytop > ybot:
             continue
-        tr = _lane_trace(a, b, cam) if COL else None
+        tr = _lane_trace(a, b, cam)
         # Start/finish band: nine boundary chords of the WORLD
         # road grid (k=0 left edge, k=8 right edge) anchored to
         # lateral offsets like the lane dashes, so the checkerboard
@@ -1943,7 +1943,7 @@ def _draw_strips(v, cam):
                 road_c = PC.COLOR_ROAD
                 chk_a = PC.COLOR_CHECK_A
                 chk_b = PC.COLOR_CHECK_B
-                lane_c = None
+                lane_c = PC.COLOR_CENTER
             # Road for every claimant, start/finish strips included:
             # the checkerboard is painted in this far -> near walk,
             # keyed on the WORLD grid (the bnd boundary chords built
@@ -2027,7 +2027,7 @@ def _draw_strips(v, cam):
             # the walk, on the depth the row itself projects at;
             # the walk must not pick a single claimant - on a
             # curve the nearest chord need not reach the row.
-            if COL and tr is not None:
+            if tr is not None:
                 dashes.append((tr, xl, xr, a, lane_c))
         if painted and (not nn_ok or crease_gap) \
                 and not band_cells and pmax > pmin:
@@ -3058,7 +3058,13 @@ def title():
             display.drawText(keylabel(KEY_BACK) + ': OPTS', 72, 112,
                              PC.COLOR_DIM)
         else:
-            display.drawFilledRectangle(10, 14, 52, 15, PC.COLOR_BG)
+            # Logo card: a dark-gray panel inside a 1-pixel white
+            # frame. A black fill on the 4-level panel read as an
+            # accidental overlay melting into the black attract road
+            # below it; the frame and gray break that merge while
+            # still covering the attract scene behind the logo.
+            display.drawRectangle(9, 13, 54, 17, PC.WHITE)
+            display.drawFilledRectangle(10, 14, 52, 15, PC.DARKGRAY)
             display.drawText('MARIO', 21, 15, PC.WHITE)
             display.drawText('KARTS', 21, 22, PC.WHITE)
             if (t // 15) % 2 == 0:
