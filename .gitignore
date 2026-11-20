@@ -7,6 +7,8 @@ __pycache__/
 *.so
 *.egg
 *.egg-info/
+*.wc
+*.wcs
 dist/
 build/
 
@@ -26,3 +28,6 @@ WAYPOINT_SYSTEM.md
 
 # Pre-refactor monolith, kept for reference
 legacy/
+games/wingcommander/wc_save.json
+games/wingcommander/wc_settings.json
+games/wingcommander/assets/

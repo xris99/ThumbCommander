@@ -70,6 +70,7 @@ Usage:
     python3 tool/deploy.py                        # stage+compile all platforms
     python3 tool/deploy.py --game mariocards      # the MarioCards game
     python3 tool/deploy.py --game mariokart       # the MarioKarts game
+    python3 tool/deploy.py thumbycolor --game wingcommander
     python3 tool/deploy.py thumbycolor            # one platform
     python3 tool/deploy.py thumby --no-compile    # plain .py (debug only)
     python3 tool/deploy.py thumbycolor --remote 192.168.1.42
@@ -141,6 +142,20 @@ GAMES = {
                             'icon.bmp'],
         },
     },
+    # Wing Commander: ThumbyColor only (128x128 colour, the RAM of the
+    # RP2350). Its assets are not in the repo - tool/wc1_convert.py
+    # builds them from the player's own copy of the game.
+    'wingcommander': {
+        'device_name': 'WingCommander',
+        'platforms': ['thumbycolor'],
+        'entry': {'thumbycolor': 'main.py'},
+        'modules': {
+            'common': [GAME_ENTRY, 'MainGame.py', 'world.py', 'ai.py',
+                       'flight.py', 'talk.py', 'campaign.py', 'ui.py',
+                       'wcdata.py', 'wcgfx.py', 'wcmath.py'],
+            'thumbycolor': ['manifest.txt', 'icon.bmp'],
+        },
+    },
 }
 
 # --- Per-platform engine manifests --------------------------------------------
@@ -183,8 +198,10 @@ def asset_files_for(platform, names):
         return [f for f in names
                 if f.endswith(('.BIT.bin', '.SHD.bin', '_campaign.json'))
                 or f.startswith('font')]
+    # .wc / .wcs: the converted Wing Commander data (tool/wc1_convert.py)
     return [f for f in names
-            if f.endswith(('.COL.bin', '.ima', '_campaign.json'))
+            if f.endswith(('.COL.bin', '.ima', '_campaign.json', '.wc',
+                           '.wcs'))
             or f.startswith('font')]
 
 # mpy-cross -march per target. The native/viper emitter requires an
@@ -416,6 +433,10 @@ def main():
     game = GAMES[args.game]
 
     for platform in platforms:
+        if platform not in game.get('platforms', ('thumby', 'thumbycolor')):
+            print(f'=== {platform}/{args.game}: not available on this '
+                  f'target, skipped ===')
+            continue
         print(f'=== {platform}/{args.game} ===')
         check_manifest(platform, args.game)
 

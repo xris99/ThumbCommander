@@ -154,6 +154,18 @@ mpy-cross version it used.
    the firmware can only start `.py` files, and everything else
    should be compiled to `.mpy`.
 
+## Wing Commander
+
+`games/wingcommander/` is a ThumbyColor port of the original *Wing
+Commander* built on this engine: the real missions, campaign,
+conversations, ships and cockpits, with the flight model and pilot AI
+ported from [neuromancer/wc1-re](https://github.com/neuromancer/wc1-re).
+It ships without game data - `tool/wc1_convert.py` builds the assets
+from your own copy of the game. Setup, controls and what is and is not
+faithful to the original: [games/wingcommander/README.md](games/wingcommander/README.md).
+That game is GPL-3.0 (it is derived from wc1-re); the engine and the
+other games are unaffected.
+
 ## Reuse
 
 Feel free to reuse the engine and the PC emulator to develop your own

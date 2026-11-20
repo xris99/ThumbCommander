@@ -1,0 +1,19 @@
+Wing Commander for the ThumbyColor (games/wingcommander, tool/wc1_convert.py,
+tool/wc1/, tool/wc1_selfplay.py, tool/wc1_check.py)
+
+The flight model, damage rules, pilot AI, mission and campaign logic and the
+file format readers in these files are a port of, and therefore a derivative
+work of, the Wing Commander source reconstruction
+
+    https://github.com/neuromancer/wc1-re
+
+which is licensed under the GNU General Public License, version 3. These
+files are distributed under the same license (GPL-3.0); see
+https://www.gnu.org/licenses/gpl-3.0.txt for the full text. The rest of this
+repository (thumby_engine and the other games) is not affected and keeps its
+own terms.
+
+No game data is included. Wing Commander is (c) 1990 Origin Systems, Inc. /
+Electronic Arts. The asset pack under assets/ is generated on your own
+machine from your own copy of the game by tool/wc1_convert.py, is excluded
+from version control (.gitignore) and must not be redistributed.
