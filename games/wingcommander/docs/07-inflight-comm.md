@@ -87,7 +87,8 @@ with probability 1/2500 per frame:
 the camera is outside; otherwise `real_vid_transmit` shows the
 message. It stays for `(min(5, len / 2) + 5) * (message speed + 1)`
 flight frames (`MeasureMessageWidth`; the option "message speed" is
-0-2).
+0-2). A flight frame is a game turn: count turns, not pictures
+(4.4.1). The port shows its messages for 25 turns.
 
 ## 7.3 Who says what, when
 

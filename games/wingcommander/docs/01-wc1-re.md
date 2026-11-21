@@ -118,9 +118,14 @@ Understanding the layering shows which parts are reusable ideas:
 
 - The game draws into an 8-bit 320x200 buffer and calls `DIBslam` /
   `DIBslamReal` to show it; the port converts through the palette.
-  Scene code is paced by that flip (it waits for vertical blank) and by
-  a frame timer whose unit is 1/60 s (`SetMultimediaTimerCallback`:
-  `period * 1000 / 60` ms).
+  Every flip ends in `ThrottleFrameAndDrawFps` (`src/dib.c`), which
+  sleeps until a frame deadline: 62 ms for menus, conversations and
+  scenes (`fCinematicFrameRate` = 16), 50 ms in flight
+  (`fSpaceFlightFrameRate` = 20, changed in the game between 8 and 32
+  by `ReportSpaceFlightMaxFps`). The game does one step per flip and
+  scales nothing by elapsed time, so these two numbers are the speed
+  of everything. Besides that there is a timer whose unit is 1/60 s
+  (`SetMultimediaTimerCallback`: `period * 1000 / 60` ms).
 - All data access goes through `FetchDiskPacketRetrying(logicalFile,
   section, flags)`. The logical file number comes from `INSTALL.DAT`
   (chapter 2). Seeing `FetchDiskPacketRetrying(6, face, 0)` therefore

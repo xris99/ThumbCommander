@@ -23,6 +23,39 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GAME_DIR = os.path.join(REPO_ROOT, 'games', 'wingcommander')
 
 
+def guard_lite(W):
+    """world.Lite (bolts, missiles, explosions, ...) owns only the
+    fields named in world.LITE and reads the rest as class defaults, to
+    save RAM on the device. Two things must hold for that to be safe:
+    the defaults equal what a full Obj starts with, and nothing ever
+    writes another field through a Lite object (its clear() would not
+    reset it). The first is checked here; the second by making such a
+    write raise for the rest of this run."""
+    full = W.Obj(0)
+    lite = W.Lite(W.NSHIP)
+    for name, value in vars(full).items():
+        if name == 'i':
+            continue
+        got = getattr(lite, name)
+        if isinstance(value, list):
+            got = list(got)
+        if got != value:
+            raise AssertionError('world.Lite.%s is %r, Obj has %r'
+                                 % (name, got, value))
+    allowed = set(W.LITE) | {'i', 'm'}
+    missing = allowed - set(vars(lite))
+    if missing:
+        raise AssertionError('Lite.clear() does not set %s' % sorted(missing))
+
+    def guarded(self, name, value):
+        if name not in allowed:
+            raise AttributeError(
+                'write to %s on a Lite object: add it to world.LITE and '
+                'Lite.clear()' % name)
+        object.__setattr__(self, name, value)
+    W.Lite.__setattr__ = guarded
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--campaign', type=int, default=-1)
@@ -46,6 +79,7 @@ def main():
     import wcmath as M
     import world as W
 
+    guard_lite(W)
     T = D.Types()
     A = D.Ai()
     pal = bytearray(D.load('pal.wc'))

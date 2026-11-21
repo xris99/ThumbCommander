@@ -134,6 +134,7 @@ class SpriteSet:
         head = f.read(8)
         self.n = head[4]
         self.res = head[5]
+        self.largest = head[6] | (head[7] << 8)
         self.table = f.read(self.n * 8)
         f.close()
         SpriteSet._uid += 1
@@ -150,20 +151,37 @@ class SpriteSet:
         f.close()
 
 
+# Frame pools of a flight: (slots, bytes per slot), smallest first. The
+# converter keeps every ship frame within the last size (MAX_SHIP_PIXELS
+# in tool/wc1_convert.py) - change both together.
+#   tiny   bolts, missiles, sparks, debris
+#   small  fighters, explosions
+#   big    capital ships
+POOLS = ((10, 640), (7, 2112), (2, 3600))
+MAX_FRAME = POOLS[-1][1]
+CK_SIZE = 20 + 128 * 96             # one ck<N>.wc
+
+
 class FrameCache:
     """Fixed pools of frame buffers (no allocation while flying).
 
     A slot holds the pixels of one (sprite set, frame); the least
-    recently used slot of the matching pool is reused on a miss.
+    recently used slot of the smallest pool that fits is reused on a
+    miss. Create it once, early, while the heap is still in one piece:
+    these are the largest blocks the game ever asks for.
     """
 
-    def __init__(self, small_n, small_size, big_n, big_size):
-        n = small_n + big_n
-        self.small_n = small_n
-        self.small_size = small_size
-        self.big_size = big_size
-        self.buf = [bytearray(small_size) for _ in range(small_n)] + \
-                   [bytearray(big_size) for _ in range(big_n)]
+    def __init__(self, pools=POOLS):
+        self.buf = []
+        self.lo = []                    # first slot of each pool
+        self.size = []
+        for count, size in pools:
+            self.lo.append(len(self.buf))
+            self.size.append(size)
+            for _ in range(count):
+                self.buf.append(bytearray(size))
+        n = len(self.buf)
+        self.lo.append(n)
         self.view = [memoryview(b) for b in self.buf]
         self.key = [-1] * n
         self.age = [0] * n
@@ -172,6 +190,13 @@ class FrameCache:
         self.hx = array('h', [0] * n)
         self.hy = array('h', [0] * n)
         self.res = bytearray(n)
+        self.clock = 0
+
+    def reset(self):
+        """Forget every frame (a new flight numbers its sets afresh)."""
+        for i in range(len(self.key)):
+            self.key[i] = -1
+            self.age[i] = 0
         self.clock = 0
 
     @micropython.native
@@ -193,16 +218,14 @@ class FrameCache:
         size = w * h
         if off == 0 or size == 0:
             return -1
-        if size <= self.small_size:
-            lo = 0
-            hi = self.small_n
-        elif size <= self.big_size:
-            lo = self.small_n
-            hi = n
-        else:
+        sizes = self.size
+        pool = 0
+        while pool < len(sizes) and size > sizes[pool]:
+            pool += 1
+        if pool == len(sizes):
             return -1
-        if lo == hi:
-            return -1
+        lo = self.lo[pool]
+        hi = self.lo[pool + 1]
         best = lo
         i = lo
         while i < hi:

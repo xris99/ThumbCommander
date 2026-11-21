@@ -143,7 +143,6 @@ class Obj:
         self.plant = 0
         self.pilot_hp = 4
         self.guns_lost = 0
-        self.heat = 0
         # intelligence
         self.target = -1
         self.mtype = MT_NONE
@@ -166,8 +165,6 @@ class Obj:
         self.fdx = self.fdy = self.fdz = 0      # formation offset, units
         self.spx = self.spy = self.spz = 0      # mission spot, 24.8
         self.nav = -1
-        self.attacker = -1
-        self.pointing = 1
         self.lastcol = -1
         self.alert = 0                          # collision alert turns
         self.msg = -1
@@ -176,7 +173,91 @@ class Obj:
         self.rad = 0
         self.sx = self.sy = 0
         self.dist = 0
-        self.vz_view = 0
+
+
+# Fields a Lite object resets (besides i and m). tool/wc1_check.py runs
+# every mission with a guard that fails on a write to anything else.
+LITE = ('cls', 'typ', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'owner', 'counter',
+        'radius', 'mass', 'scale', 'grace', 'side', 'speed', 'maxspd',
+        'acc', 'fuel', 'target', 'tactic', 'cooldown', 'vis', 'rad', 'sx',
+        'sy', 'dist', 'special', 'lastcol', 'dmg', 'abtimer', 'energy',
+        'turns')
+
+
+class Lite:
+    """Slots NSHIP..NOBJ-1: bolts, missiles, explosions, debris, rocks
+    and mines.
+
+    An instance costs RAM per attribute it owns (about 1 KB for a full
+    Obj, and there are 34 of these). So a Lite object owns only the
+    fields such objects change; everything else is a class attribute
+    with the value Obj.clear() gives it and is only ever read. Writing
+    one of those through an instance would work, but the value would
+    survive clear() - add the name to LITE and to clear() instead.
+    """
+    weapons = ()
+    sh = shmax = (0, 0)
+    ar = (0, 0, 0, 0)
+    rp = ry = rr = 0
+    gp = gy = gr = 0
+    iondmg = 0
+    plant = 0
+    pilot_hp = 4
+    guns_lost = 0
+    mtype = MT_NONE
+    objective = -1
+    man = -1
+    seq = 0
+    tot = 0
+    level = 0
+    rating = -1
+    stress = 0
+    event = -1
+    turn_reg = 1
+    turn_int = 1
+    mship = -1
+    mtarget = -1
+    leader = -1
+    fdx = fdy = fdz = 0
+    spx = spy = spz = 0
+    nav = -1
+    alert = 0
+    msg = -1
+
+    def __init__(self, index):
+        self.i = index
+        self.m = [M.ONE, 0, 0, 0, M.ONE, 0, 0, 0, M.ONE]
+        self.clear()
+
+    def clear(self):
+        self.cls = C_NULL
+        self.typ = 0
+        self.x = self.y = self.z = 0
+        self.vx = self.vy = self.vz = 0
+        self.owner = -1
+        self.counter = 0
+        self.radius = 0
+        self.mass = 0
+        self.scale = 0
+        self.grace = 0
+        self.side = 2
+        self.speed = 0
+        self.maxspd = 0
+        self.acc = 0
+        self.fuel = 0
+        self.target = -1
+        self.tactic = -1
+        self.cooldown = 0
+        self.vis = False
+        self.rad = 0
+        self.sx = self.sy = 0
+        self.dist = 0
+        self.special = SM_NONE
+        self.lastcol = -1
+        self.dmg = 0
+        self.abtimer = 0
+        self.energy = 100
+        self.turns = 0
 
 
 class World:
@@ -185,7 +266,8 @@ class World:
         self.ai = ai
         self.mis = mission
         self.camp = camp                 # campaign state (campaign.State)
-        self.o = [Obj(i) for i in range(NOBJ)]
+        self.o = [Obj(i) for i in range(NSHIP)] + \
+                 [Lite(i) for i in range(NSHIP, NOBJ)]
         self.tick = 0
         self.result = R_FLYING
         self.nav = -1                    # current action sphere
@@ -1223,7 +1305,6 @@ class World:
                     else:
                         s = (self.T.f[D.T_MAX_VEL][ob.typ] + 20) * 0x200
                         ob.fuel -= 200
-                        ob.heat = 3
                         boost = True
                 elif sp == SM_SUPER_BRAKE:
                     ob.abtimer -= 1
@@ -1370,7 +1451,6 @@ class World:
 
     def bolt_hit(self, bolt, t):
         if t.cls >= C_MISSILE:
-            t.attacker = bolt.owner
             t.cooldown += 4
             dmg = bolt.acc - bolt.counter // 2
             self.inflict_damage(bolt.i, t.i, dmg, bolt.vx, bolt.vy, bolt.vz)

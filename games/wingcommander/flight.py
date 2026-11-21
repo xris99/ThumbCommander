@@ -18,6 +18,7 @@ from thumby_engine.platform import (display, buttonA, buttonB, buttonU,
 from array import array
 from random import randint
 from gc import collect
+from time import ticks_ms, ticks_diff, ticks_add
 import ui
 from math import acos
 import wcmath as M
@@ -25,6 +26,23 @@ import wcgfx as G
 import wcdata as D
 import world as W
 import ai
+
+# Game time. One game turn (World.update) is a tenth of a second: the
+# original's numbers are per turn and read "times ten per second" - its
+# cockpit shows speed * 10 as KPS (wc1-re src/cockpt.c), and the ships'
+# turn rates times ten are the degrees per second of the manual. The
+# 1990 game ran a turn per frame at whatever the PC managed; Kilrathi
+# Saga caps the flight at 20 frames a second and lets the player move
+# that cap between 8 and 32 (src/dib.c ReportSpaceFlightMaxFps). Here a
+# turn lasts TURN_MS[option 'speed'] by the clock, and frames drawn
+# between two turns show the view a fraction of a turn further on.
+TURN_MS = (100, 80, 67, 50)
+SPEED_NAMES = (b'original', b'1.25x', b'1.5x', b'2x')
+# Picture-rate cap in flight. 25, not 30: the firmware rounds the wait
+# to whole ms (33) but ticks on the exact period (33.33 ms), and at 30
+# the ThumbyColor flickered black under load (device test). 25 = 40 ms.
+PICTURES = 25
+PACE = True             # False: a turn every frame (the test tools)
 
 PIC_Y = 16              # top row of the 128x96 picture
 FX = 64                 # focal length in pixels, horizontal
@@ -56,7 +74,10 @@ def tdiv(a, b):
 
 class Flight:
     def __init__(self, types, tables, fonts, pal, state, mission, opts,
-                 sfx=False):
+                 sfx=False, cache=None, ckbuf=None):
+        # cache and ckbuf are the two large buffers of a flight. The game
+        # allocates them once at start-up (MainGame) and hands them in;
+        # a caller that passes nothing gets fresh ones.
         self.T = types
         self.font = fonts[0]            # small
         self.pal = pal
@@ -69,7 +90,11 @@ class Flight:
         self.sets = {}
         self.ship_names = {}
         self.msg_lines = ()
-        self.cache = D.FrameCache(10, 2112, 3, 8000)
+        if cache is None:
+            cache = D.FrameCache()
+        cache.reset()
+        self.cache = cache
+        self.ckbuf = ckbuf
         self.p = [0] * 12               # blit parameters
         self.order = []
         # canonical view frames of the 62 directions (init.c
@@ -104,6 +129,25 @@ class Flight:
         self.msg_time = 0
         self.b_combo = False
         self.b_held = 0
+        # pacing: when the next turn is due, whether this frame ran one,
+        # and the view between turns (camera, eye, fraction f / 256)
+        sp = opts.get('speed', 0)
+        self.turn_ms = TURN_MS[sp if 0 <= sp < len(TURN_MS) else 0]
+        self.due = ticks_ms()
+        self.t0 = self.due              # for rates()
+        self.pictures = 0
+        self.turned = True
+        self.fr = 256
+        self.bk = 0                     # 256 - fr: how far to step back
+        self.cam = [0] * 9
+        self.ex = self.ey = self.ez = 0
+        self.set_view(256)
+        # frame times, for the 'WC rate' line
+        self.t_last = self.due
+        self.slow = 0                   # frames over 50 ms
+        self.worst = 0                  # longest frame, ms
+        # button events seen since the last turn
+        self.l_b = self.l_up = self.l_dn = self.l_a = False
         self.locked = False
         self.auto_blink = 0
 
@@ -114,9 +158,15 @@ class Flight:
         ship = self.w.o[0].typ
         name = 'ck%d.wc' % ship
         if self.opts.get('cockpit', 1) and D.exists(name):
-            d = D.load(name)
-            self.ck = bytes(d[4:20])
-            self.cockpit = memoryview(d)[20:]
+            if self.ckbuf is None:
+                self.ckbuf = bytearray(D.CK_SIZE)
+            d = self.ckbuf
+            f = open(D.A + name, 'rb')
+            n = f.readinto(d)
+            f.close()
+            if n == len(d):
+                self.ck = bytes(d[4:20])
+                self.cockpit = memoryview(d)[20:]
         if self.cockpit is not None:
             k = self.ck
             self.vx0 = k[0]; self.vy0 = PIC_Y + k[1]
@@ -183,20 +233,53 @@ class Flight:
             ang += 90
         return frame, T.dir_flip[idx + table * 62], ang % 360
 
-    def draw_object(self, ob, eye):
+    def set_view(self, f):
+        """Show the world f/256 of the way from the turn before the last
+        one to the last one (f = 256: the last turn itself).
+
+        Nothing is guessed: a turn moves every object by its velocity
+        after changing it (World.move) and turns the player by its rates
+        (rotate_object), so stepping back (256 - f)/256 of that velocity
+        and those rates lands exactly between two states the game really
+        had. A guess ahead jumps back whenever a rate or a course
+        changes; this cannot. The price is that a turn is fully on
+        screen one turn later."""
+        p = self.w.o[0]
+        cam = self.cam
+        m = p.m
+        for i in range(9):
+            cam[i] = m[i]
+        self.fr = f
+        g = 256 - f
+        self.bk = g
+        if g > 0:
+            if p.rp or p.ry or p.rr:
+                M.unturn256(cam, p.rp * g, p.ry * g, p.rr * g)
+            self.ex = p.x - ((p.vx * g) >> 8)
+            self.ey = p.y - ((p.vy * g) >> 8)
+            self.ez = p.z - ((p.vz * g) >> 8)
+        else:
+            self.ex = p.x
+            self.ey = p.y
+            self.ez = p.z
+
+    def draw_object(self, ob):
         """Project one object and draw it; fills ob.vis / sx / sy."""
         ob.vis = False
-        em = eye.m
-        dx = (ob.x - eye.x) >> 8
-        dy = (ob.y - eye.y) >> 8
-        dz = (ob.z - eye.z) >> 8
+        em = self.cam
+        g = self.bk
+        dx = (ob.x - ((ob.vx * g) >> 8) - self.ex) >> 8
+        dy = (ob.y - ((ob.vy * g) >> 8) - self.ey) >> 8
+        dz = (ob.z - ((ob.vz * g) >> 8) - self.ez) >> 8
         if dx > 40000 or dx < -40000 or dz > 40000 or dz < -40000:
             return
         vx, vy, vz = M.to_frame(em, dx, dy, dz)
         if vz < 60:
             return
         dist = M.mag(dx, dy, dz)
-        if vz * 256 < dist * 0x94:
+        # outside the view cone: skip, unless the object is big enough
+        # to reach into the picture from there (a carrier alongside)
+        if vz * 256 < dist * 0x94 and ob.radius * 3 < dist:
             return
         sx = self.cx + FX * vx // vz
         sy = self.cy - FY * vy // vz
@@ -228,8 +311,11 @@ class Flight:
             frame = (self.w.tick >> 2) % 3
         else:
             return
-        if sx < self.vx0 - 100 or sx > self.vx1 + 100 or \
-                sy < self.vy0 - 100 or sy > self.vy1 + 100:
+        # far off screen (the margin grows with the object's projected
+        # size, so a big ship is not dropped while its hull still shows)
+        mg = 100 + FX * ob.radius // vz
+        if sx < self.vx0 - mg or sx > self.vx1 + mg or \
+                sy < self.vy0 - mg or sy > self.vy1 + mg:
             return
         ob.vis = self.vx0 <= sx < self.vx1 and self.vy0 <= sy < self.vy1
         dd = dist - ob.radius
@@ -294,11 +380,10 @@ class Flight:
 
     def draw_space(self):
         w = self.w
-        eye = w.o[0]
         fb = self.fb
         G.fill_rows(fb, self.vy0, self.vy1, 0)
         # stars
-        m = eye.m
+        m = self.cam
         st = self.stars
         cx = self.cx; cy = self.cy
         x0 = self.vx0; x1 = self.vx1; y0 = self.vy0; y1 = self.vy1
@@ -316,7 +401,7 @@ class Flight:
         order = self.order
         del order[:]
         o = w.o
-        ex = eye.x; ez = eye.z; ey = eye.y
+        ex = self.ex; ez = self.ez; ey = self.ey
         for i in range(1, W.NOBJ):
             ob = o[i]
             if ob.cls != W.C_NULL:
@@ -327,7 +412,7 @@ class Flight:
         order.sort()
         k = len(order) - 1
         while k >= 0:
-            self.draw_object(o[order[k][1]], eye)
+            self.draw_object(o[order[k][1]])
             k -= 1
 
     # --- instruments -----------------------------------------------------------
@@ -347,7 +432,7 @@ class Flight:
     def draw_radar(self, cx, cy, rx, ry):
         w = self.w
         p = w.o[0]
-        m = p.m
+        m = self.cam
         o = w.o
         for i in range(1, W.NOBJ):
             ob = o[i]
@@ -370,7 +455,7 @@ class Flight:
             y = cy - (ly * ang * ry) // (pl * 180)
             if c == W.C_MISSILE:
                 col = YELLOW
-            elif i == p.target and (w.tick & 4):
+            elif i == p.target and (w.tick & 2):
                 col = WHITE
             elif ob.side == W.SIDE_KILRATHI:
                 col = RED
@@ -407,8 +492,8 @@ class Flight:
         # destination marker: a small cross where the nav point lies
         if w.dest < len(w.mis.objectives):
             x, y, z = w.objective_pos(w.dest)
-            lx, ly, lz = M.to_frame(p.m, (x - p.x) >> 8, (y - p.y) >> 8,
-                                    (z - p.z) >> 8)
+            lx, ly, lz = M.to_frame(self.cam, (x - self.ex) >> 8,
+                                    (y - self.ey) >> 8, (z - self.ez) >> 8)
             if lz > 0:
                 sx = cx + FX * lx // lz
                 sy = cy - FY * ly // lz
@@ -472,14 +557,15 @@ class Flight:
             display.drawFilledRectangle(0, 0, 128, PIC_Y, 0)
         if self.msg is None and w.messages:
             self.msg = w.messages.pop(0)
-            self.msg_time = 50
+            self.msg_time = 25              # turns
             self.msg_lines = font.wrap(self.msg[0], 126)[:2]
         if self.msg is not None:
             yy = 1
             for ln in self.msg_lines:
                 font.draw(fb, ln, 1, yy, self.msg[1])
                 yy += 7
-            self.msg_time -= 1
+            if self.turned:
+                self.msg_time -= 1
             if self.msg_time <= 0:
                 self.msg = None
         elif w.dest < len(w.mis.objectives):
@@ -567,6 +653,19 @@ class Flight:
         for i in range(W.NOBJ):
             self.w.o[i].vis = False
 
+    def latch(self):
+        """Note the button events of this frame. Turns come less often
+        than frames, and a tap that begins and ends between two turns
+        must not be lost; controls() uses up what is noted here."""
+        if buttonB.pressed():
+            self.l_b = True
+            if buttonU.justPressed():
+                self.l_up = True
+            if buttonD.justPressed():
+                self.l_dn = True
+        if buttonA.pressed():
+            self.l_a = True
+
     def controls(self):
         """Player input for one turn (HandleSpaceFlightControls)."""
         w = self.w
@@ -581,15 +680,16 @@ class Flight:
         want_p = 0
         want_y = 0
         want_r = 0
-        if b:
+        if b or self.l_b:
             self.b_held += 1
             # B is the shift key: B + d-pad
-            if buttonU.justPressed():
+            if self.l_up:
                 self.next_target()
                 self.b_combo = True
-            if buttonD.justPressed():
+            if self.l_dn:
                 self.do_autopilot()
                 self.b_combo = True
+        if b:
             if lf:
                 want_r = f[D.T_ROLL][t]
                 self.b_combo = True
@@ -611,6 +711,8 @@ class Flight:
                 want_y = f[D.T_YAW][t]
             if rt:
                 want_y = -f[D.T_YAW][t]
+        fire = self.l_a or buttonA.pressed()
+        self.l_b = self.l_up = self.l_dn = self.l_a = False
         # the stick moves the rates a third of the way each turn
         p.rp += self._ease(p.rp, want_p)
         p.ry += self._ease(p.ry, want_y)
@@ -625,9 +727,8 @@ class Flight:
             w.celerate(p, 0x100)
         elif lb:
             w.celerate(p, -0x100)
-        if buttonA.pressed():
-            if w.fire_guns(p):
-                pass
+        if fire:
+            w.fire_guns(p)
         self.auto_target()
 
     def _ease(self, cur, want):
@@ -643,23 +744,55 @@ class Flight:
 
     # --- loop -----------------------------------------------------------------------
     def frame(self):
-        """One turn: input, simulation, picture. Returns the flight
-        result (0 while flying)."""
+        """One picture, and a game turn whenever one is due by the clock
+        (see TURN_MS). Returns the flight result (0 while flying).
+
+        If a frame takes longer than a turn, every frame runs one turn
+        and the game slows down; it never runs two turns to catch up.
+        """
         w = self.w
-        self.controls()
-        w.update()
-        if w.tick % 8 == 0:
-            w.check_sphere()
-        if w.sfx:
-            if self.sfx:
-                audio_play_id(w.sfx[-1])
-            del w.sfx[:]
-        if w.shake == 3 and rumble and self.opts.get('rumble', 1):
-            rumble(40)
+        self.latch()
+        ms = self.turn_ms
+        now = ticks_ms()
+        dt = ticks_diff(now, self.t_last)
+        self.t_last = now
+        if 50 < dt < 1000:              # (longer: the flight computer)
+            self.slow += 1
+            if dt > self.worst:
+                self.worst = dt
+        late = ticks_diff(now, self.due) if PACE else 0
+        if late >= 0:
+            if late > ms:               # a pause or a slow frame: start anew
+                self.due = ticks_add(self.due, late)
+                late = 0
+            self.due = ticks_add(self.due, ms)
+            self.turned = True
+            self.controls()
+            w.update()
+            if w.tick % 8 == 0:
+                w.check_sphere()
+            if w.sfx:
+                if self.sfx:
+                    audio_play_id(w.sfx[-1])
+                del w.sfx[:]
+            if w.shake == 3 and rumble and self.opts.get('rumble', 1):
+                rumble(40)
+            if w.tick % 64 == 0:
+                collect()
+        else:
+            self.turned = False
+            late += ms                  # time since the last turn was due
+        self.set_view(min(256, late * 256 // ms) if PACE else 256)
         self.draw()
-        if w.tick % 64 == 0:
-            collect()
+        self.pictures += 1
         return w.result
+
+    def rates(self):
+        """(pictures, turns) per second since the flight began, x10.
+        Time spent in the flight computer counts, so read it after a
+        flight without long pauses."""
+        ms = max(1, ticks_diff(ticks_ms(), self.t0))
+        return self.pictures * 10000 // ms, self.w.tick * 10000 // ms
 
     # --- pause menu ------------------------------------------------------------------
     def pause(self):

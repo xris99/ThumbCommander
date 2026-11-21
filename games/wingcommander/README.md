@@ -145,13 +145,41 @@ Both run headless on the PC emulation and need the converted assets.
 
 ## Status
 
-Developed and tested on the PC emulation only. Every module compiles
-with mpy-cross 1.27 for `armv7emsp`, but the game has **not yet been
-run on a real ThumbyColor**: frame rate and free RAM on the device are
-unmeasured. The flight loop is written to allocate little (fixed
-sprite buffers, files opened only on a cache miss), and one game turn
-is one frame at 20 fps - if the device is slower, the game slows down
-with it rather than skipping turns.
+Developed on the PC emulation and confirmed on a real ThumbyColor:
+menus, briefing, flight, landing and a second sortie run, with about
+63 KB of heap free while flying. RAM is the tight resource; how the
+game stays inside it is described in
+[docs/12-memory.md](docs/12-memory.md). The clock-based game speed
+(see "Game speed") has been tested on the PC only; the rates the
+device reaches have not been measured yet - they are in the `WC rate`
+line printed after a flight.
+
+The game prints `WC mem <step> <free bytes>` lines to the serial
+console at start-up and around each flight. If it runs out of memory,
+those lines show where.
+
+Data converted before this rework has capital ships that are too
+large for the new frame cache: run `tool/wc1_convert.py` again and
+copy the `assets` folder to the device. The game shows a notice at
+start if it finds old data.
+
+## Game speed
+
+The simulation runs by the clock, not by the frame rate: ten game
+turns per second, the rate the original's own units are written for
+(its speed display and the manual's turn rates both assume it).
+Pictures are drawn as often as the device manages, up to 25 per
+second, each showing the world part of the way between the last two
+turns, so motion is smooth without guessing ahead. Device and PC
+therefore fly at the same speed.
+
+Options -> Speed selects `original` (10 turns per second), `1.25x`,
+`1.5x` or `2x` (20, the default cap of Kilrathi Saga on Windows).
+After each flight the log shows what was reached:
+`WC rate pictures/s 24.4 turns/s 9.8 slow 7 worst 100ms sound 1`
+(`slow`: frames over 50 ms, `worst`: the longest one, `sound`: sound
+effects on). If the device cannot keep up,
+the game slows down rather than skipping turns.
 
 ## License
 

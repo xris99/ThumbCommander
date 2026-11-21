@@ -64,6 +64,7 @@ def main():
     plat.display.setFPS = lambda fps: None
 
     import flight
+    flight.PACE = False                    # a game turn every frame
     import campaign
     import wcmath as M
     import world as W

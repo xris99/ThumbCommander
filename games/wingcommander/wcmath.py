@@ -52,6 +52,38 @@ def _rot(m, a, b, deg):
         i += 1
 
 
+@micropython.native
+def _rot256(m, a, b, d):
+    # _rot for an angle in 1/256 degree (sine interpolated between table
+    # entries): the camera between two game turns
+    d %= 92160
+    i = d >> 8
+    f = d & 255
+    s = SIN[i]
+    s += ((SIN[(i + 1) % 360] - s) * f) >> 8
+    i = (i + 90) % 360
+    c = SIN[i]
+    c += ((SIN[(i + 1) % 360] - c) * f) >> 8
+    i = 0
+    while i < 3:
+        x = m[a + i]
+        y = m[b + i]
+        m[a + i] = (x * c - y * s) >> 14
+        m[b + i] = (x * s + y * c) >> 14
+        i += 1
+
+
+def unturn256(m, p, y, r):
+    """Undo a pitch, yaw, roll (1/256 degree) done in rotate_object's
+    order: roll back first, then yaw, then pitch."""
+    if r:
+        _rot256(m, R, U, -r)
+    if y:
+        _rot256(m, F, R, -y)
+    if p:
+        _rot256(m, U, F, -p)
+
+
 def pitch(m, deg):
     """alter_pitch: positive raises the nose."""
     _rot(m, U, F, deg)

@@ -10,18 +10,21 @@ the goal, an FM music interpreter running in the background.
 
 ## 0. First: put the game on a device
 
-Nothing so far has run on hardware. Everything below adds RAM and CPU
-load, so the baseline comes first.
+The game runs on a ThumbyColor after a rework for RAM (chapter 12
+has the measured budget: 63 KB free in flight, 88 KB in the menus).
+How fast it runs is still open. Everything below adds RAM and CPU
+load, so that part of the baseline comes first.
 
 - Deploy (`tool/deploy.py thumbycolor --game wingcommander`) and fly
   mission 1.
-- Record: `mem_free()` printed at flight start; frames per second in
-  a dogfight with six ships (count frames over ten seconds); whether
-  the 20 fps target holds; load time of a mission.
+- Record: the `WC mem` lines of the log (12.5); the `WC rate` line
+  printed after a flight (4.4.1) for a dogfight with six ships -
+  turns per second must reach the chosen rate (10 at "original"),
+  pictures per second say how much is left; load time of a mission.
 - Run the three audio measurements of 10.9.
 
 Done when these numbers are written into `../README.md` under
-"Status". If the frame rate is below about 15, optimise the flight
+"Status". If the picture rate is below about 15, optimise the flight
 loop before adding features (candidates: `flight.draw_object` sprite
 loads, `world.collide`, the AI's per-turn collision prediction).
 
@@ -133,12 +136,11 @@ a port of a named wc1-re function.
 
 | Risk | Why it matters | How to retire it |
 |------|----------------|------------------|
-| Frame rate on the device is unknown | every feature assumes headroom | step 0 |
-| Free RAM in flight is unknown | heads need about 15 KB, music about 60 KB | step 0; load heads only outside flight (they are only used there) |
+| Frame rate on the device is unmeasured | every feature assumes headroom | step 0 |
+| Free RAM is short | 63 KB free in flight, 88 KB in the menus (measured); heads need about 15 KB, music about 40 KB in its small variant | chapter 12.7 goes through each planned feature; 12.6 lists the levers |
 | viper FM may be too slow | decides the whole audio design | 10.9 before writing the synth; fallbacks in 10.10 |
 | Core 1 stalls during flash writes or collection | audible gaps | 10.9 (c); write files only in menus |
 | Flash budget | 16 MB shared; assets today 3 MB; all scene art at screen scale is about 2 MB more uncompressed | convert only frames that are used; halve animation frame counts |
-| `mpy-cross` output never ran on real MicroPython | viper type rules differ slightly from the PC emulation | step 0 will show it immediately |
 | Descriptions of art not looked at | several "what the frames show" entries in 2.4 are inferred from code | export and view before converting |
 
 ## Conventions for whoever continues

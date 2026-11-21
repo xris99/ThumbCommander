@@ -77,7 +77,7 @@ ship records that exist *there*.
 
 | | |
 |---|---|
-| Game turn | 1/20 s. One turn per displayed frame (`display.setFPS(20)`); a slow device slows the game instead of skipping turns |
+| Game turn | 1/10 s by the clock (`flight.TURN_MS`, option "Speed"), independent of the picture rate - see 4.4.1 |
 | Position | integers with 8 fractional bits (24.8), three per object |
 | Axes | left-handed: x right, y up, z forward |
 | Orientation | a 3x3 matrix of ints with 14 fractional bits; rows = right, up, forward |
@@ -88,6 +88,67 @@ ship records that exist *there*.
 
 `Obj` carries every per-object property; names follow the original
 arrays (`aeShipMissionType` -> `mtype`, `acShipRating` -> `rating`).
+Only the ten ship slots are full `Obj` instances. Slots 10-43 are
+`Lite` objects that own just the fields a bolt or an explosion
+changes and read the rest as class defaults - a RAM measure with one
+rule attached (12.3).
+
+### 4.4.1 Time: turns by the clock, pictures in between
+
+The original has no time scaling: every number in the simulation
+(speed, turn rate, gun delay, the pilots' intervals) is "per turn",
+and a turn is a displayed frame. How long a turn lasts was the
+machine's business in 1990 and is a setting in Kilrathi Saga (20
+frames per second, adjustable 8-32, chapter 1.4). The game's own
+units say what was meant [src]:
+
+- the speed display multiplies the per-turn speed by ten to show
+  km/s (`src/cockpt.c`: `speed = ((anShipSpeed[0] >> 8) * 10)`);
+- the turn rates in the ship table, times ten, are the degrees per
+  second printed in the manual (Hornet: 8, 9, 8 per turn; 80, 90, 80
+  dps).
+
+So the nominal rate is **10 turns per second**. At 20 a Hornet turns
+180 degrees in a second and a Dralthi crosses gun range in half a
+second - that is the "too fast" of the first device test.
+
+The port separates the two rates (`flight.Flight.frame`):
+
+| | |
+|---|---|
+| Turn | every `turn_ms` = `TURN_MS[speed]` = 100, 80, 67 or 50 ms (option "Speed": original, 1.25x, 1.5x, 2x; 2x is Kilrathi Saga's default). `controls()` and `World.update()` run only then |
+| Picture | every frame the engine allows, up to 25 per second (`flight.PICTURES`, `display.setFPS` in `MainGame.fly`); device and PC use the same code, so both fly at the same speed. Not 30: the firmware's `time_to_next_tick()` rounds the period to whole ms while `tick()` compares with the exact period (33.33 ms), and at 30 the ThumbyColor flickered black under load - firing, enemies, long flights - at both speeds; at 25 (40 ms) it does not, with sound on or off (device test). Keep the cap at a whole number of ms |
+| Between turns | `set_view(f)`, f = 0..256 = the part of a turn that has passed since the last one. The picture shows the world that far *between the last two turns*: the camera matrix `cam` is the player's matrix turned back by `rates * (256 - f) / 256` (`wcmath.unturn256`, roll then yaw then pitch, sine interpolated to 1/256 degree), the eye and every object are moved back by `velocity * (256 - f) / 256`. This is exact, not a guess: `World.move` changes a velocity first and then adds it to the position, and `rotate_object` turns by the rates the player has after the turn. Nothing in the world is changed by it |
+| Buttons | presses are collected every frame (`latch`) and used at the next turn, so a tap between two turns is not lost |
+| Slow device | a turn that is more than one turn late is not caught up: the game slows down, it never jumps |
+| Counters | everything that counts time counts turns (`w.tick`, message time, blink). Do not count pictures |
+
+`flight.PACE = False` gives the old behaviour, a turn per call of
+`frame()`; the test tools set it so that their results do not depend
+on the speed of the PC. After a flight the log has one line,
+`WC rate pictures/s 24.4 turns/s 9.8 slow 7 worst 100ms sound 0`; if the second number is below
+the chosen rate, the device does not manage a turn in `turn_ms`.
+
+Why back and not ahead: the first version carried the view *forward*
+by the current rates and velocities. Every change of a rate (the stick
+eases in and out over three turns) or of a course (an enemy curving)
+made the next real turn land behind the guess, and objects jumped
+forward and back by a pixel or more - visible on the PC as a stutter
+while turning. Stepping back between two real states cannot overshoot.
+Measured over the same sortie with irregular frame times: screen
+reversals of 2 pixels or more went from 222 to 13 (the rest are real
+changes of direction by the test pilot), and a steady turn has none.
+The cost is that a turn is completely on screen one turn (100 ms)
+after it was computed; it starts to show at once.
+
+Culling for big objects: an object is skipped when its centre is
+outside the view cone *and* it is small for its distance
+(`radius * 3 < dist`), and the off-screen margin grows with its
+projected size (`100 + FX * radius / vz`). Before, a carrier alongside
+vanished while its hull still filled half the picture.
+
+The `WC rate` line also gives `slow` (frames over 50 ms) and `worst`
+(the longest frame in ms, flight computer pauses not counted).
 
 ## 4.5 One game turn (World.update = Update_3Space)
 
@@ -161,8 +222,7 @@ A fighter's turn:
 1. **Avoid collisions** (`prevent_collision`): if something is on the
    flight path within a distance scaled by closing speed, steer away.
    This runs every turn in the port (the original runs it at the
-   pilot's interval), which was needed to stop AI ships from ramming
-   at the port's 20 Hz step.
+   pilot's interval), which was needed to stop AI ships from ramming.
 2. **Follow the mission type**: `patrol` (fly the nav route, engage
    what is found), `wingman` (hold formation with the leader, obey
    radio orders, break to attack), `defend` / `strike` (go to the

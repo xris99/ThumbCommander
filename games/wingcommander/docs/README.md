@@ -13,7 +13,7 @@ Read `../README.md` first for what the game is and how to run it. Then:
 | 1 | [01-wc1-re.md](01-wc1-re.md) | What wc1-re is, how its source is organised, how to read and run it as the reference |
 | 2 | [02-original-data.md](02-original-data.md) | Every original file format the port touches, and which file holds what |
 | 3 | [03-converter-and-assets.md](03-converter-and-assets.md) | The converter pipeline, the converted file formats, how to add a new asset type |
-| 4 | [04-game-dynamics.md](04-game-dynamics.md) | Game flow, the 20 Hz simulation, AI, damage, scoring - with the wc1-re function behind each part |
+| 4 | [04-game-dynamics.md](04-game-dynamics.md) | Game flow, the simulation and its time base (10 turns per second), AI, damage, scoring - with the wc1-re function behind each part |
 | 5 | [05-conversations-and-talking-heads.md](05-conversations-and-talking-heads.md) | The conversation director, lip sync and eye animation, how to extract and draw the heads |
 | 6 | [06-cutscenes.md](06-cutscenes.md) | The scripted "Meanwhile..." animations (a bytecode) and the hard-coded scenes |
 | 7 | [07-inflight-comm.md](07-inflight-comm.md) | Radio messages, who says what when, the VDU portraits |
@@ -21,6 +21,7 @@ Read `../README.md` first for what the game is and how to run it. Then:
 | 9 | [09-sound-effects.md](09-sound-effects.md) | The original sound-effect records and which game event plays which |
 | 10 | [10-thumby-music-interpreter.md](10-thumby-music-interpreter.md) | Design for an FM music player on the ThumbyColor's second core |
 | 11 | [11-roadmap.md](11-roadmap.md) | Work packages in order, each with a definition of done |
+| 12 | [12-memory.md](12-memory.md) | The RAM budget on the device, the rules that keep the game inside it, how to read the memory log |
 
 ## Status at handover
 
@@ -35,8 +36,8 @@ Read `../README.md` first for what the game is and how to run it. Then:
 | Radio | four orders and a landing request with made-up lines; original table is converted (`comm.wc`) but unused (chapter 7) |
 | Music | none - format, driver and game rules documented (chapters 8, 10) |
 | Sound effects | five synthesised placeholders; original records documented (chapter 9) |
-| Real hardware | **never run on a device.** Frame rate and free RAM are unknown |
-| Real MicroPython | modules compile with `mpy-cross` 1.27 (`-march=armv7emsp`); never executed outside the CPython emulation |
+| Real hardware | runs on a ThumbyColor: menus, briefing, flight, landing, a second sortie. 63 KB of heap free while flying (chapter 12). **Frame rate has not been measured** |
+| Real MicroPython | confirmed by the same run |
 
 ## How sure each statement is
 
@@ -83,7 +84,7 @@ out of the DOS binaries, this project did not.
 | | |
 |---|---|
 | CPU | RP2350, two Cortex-M33 cores; the game raises the clock to 300 MHz (`engine.freq`) |
-| RAM | 520 KB total; MicroPython heap is what is left after the firmware - `mem_free()` is printed at flight start, read it on a device before planning buffers |
+| RAM | 520 KB total, of which 231 KB of MicroPython heap are free when the game starts (measured). The game's code takes about 80 KB of that, its fixed buffers 42 KB - see chapter 12 before planning any buffer |
 | Flash | 16 MB, shared by firmware, all games and their assets (this game's assets: about 3 MB) |
 | Screen | 128 x 128, RGB565, `display.buffer` is a `bytearray` |
 | Sound | one PWM output (GPIO 23); the engine plays one IMA-ADPCM stream from a viper loop on core 1 |

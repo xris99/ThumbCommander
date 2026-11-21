@@ -38,8 +38,9 @@ alpha**, then matched to the nearest palette entry (weights 2:4:3 for
 R:G:B). Nearest-neighbour scaling to 40 % destroys thin features
 (cockpit struts, eyes). Flight sprites are stored 1.25 times finer
 than screen scale (`SHIP_RES = 80`, in 64ths) because the renderer
-zooms them; effects that would exceed 1,400 pixels per frame are
-stored coarser.
+zooms them; effects that would exceed 1,400 pixels per frame and
+ships that would exceed 3,600 are stored coarser (the set's `res`
+says how much).
 
 `gfx.scale_frame` pads a frame so its hot spot falls on a whole output
 pixel, and returns the scaled hot spot. Sprites that must line up with
@@ -80,9 +81,11 @@ pixels      8-bit palette indices, row major, 0 = transparent
 Limits: a frame is at most 255 x 255 and the hot spot must fit an
 `i8`. `wcdata.SpriteSet` keeps only the frame table in RAM and opens
 the file when a frame is needed. `wcdata.FrameCache` holds decoded
-frames in fixed pools (10 buffers of 2,112 bytes, 3 of 8,000) so the
-flight loop never allocates; a frame larger than 8,000 bytes cannot be
-shown through the cache.
+frames in three fixed pools (`wcdata.POOLS`: 10 buffers of 640 bytes,
+7 of 2,112, 2 of 3,600) so the flight loop never allocates. A frame
+larger than 3,600 bytes cannot be shown, so the converter stores
+capital ships coarser until every view fits (`MAX_SHIP_PIXELS`); see
+chapter 12.
 
 Index 0 doubles as "transparent", so the palette matcher never
 returns 0 for an opaque pixel.

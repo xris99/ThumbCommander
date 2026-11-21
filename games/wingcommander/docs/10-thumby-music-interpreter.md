@@ -286,9 +286,12 @@ Decisions for the port:
 
 Memory on the device [guess, from sizes]: waveform and exponent
 tables 9 KB, timbre bank 3.8 KB, two song buffers 45 KB, voice and
-channel state under 2 KB - about 60 KB. Check against `mem_free()`
-in flight before committing; one song buffer of 14 KB during flight
-plus a 23 KB one only in menus is the fallback.
+channel state under 2 KB - about 60 KB, plus the player's own code.
+**That does not fit:** a flight leaves 63 KB free (measured, chapter
+12). Build the small variant from the start - song buffers of 14 KB
+(the largest in-flight song is 13.3 KB), the 22 KB title track only
+in the menus - which comes to about 40 KB with code and is still
+tight; 12.7 has the numbers and the levers.
 
 ## 10.7 The PC side
 

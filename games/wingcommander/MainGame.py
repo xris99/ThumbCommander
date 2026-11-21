@@ -24,14 +24,39 @@ from thumby_engine.platform import (display, IS_THUMBY_COLOR, buttonA,
 from thumbyHardware import reset
 from gc import collect, mem_free
 import json
+import sys
 
 if IS_THUMBY_COLOR:
     from engine import freq
     freq(300_000_000)
 
-import ui
 import wcdata as D
+
+
+def mem(tag):
+    """Collect, then report the free heap. The lines tell where the RAM
+    goes when the game runs out of it on a device."""
+    collect()
+    print('WC mem', tag, mem_free())
+
+
+# Memory plan. The heap of the ThumbyColor is small (about 190 KB once
+# the engine is up) and MicroPython's allocator does not move blocks,
+# so a large block must be claimed before the heap is cut up:
+#   1. the frame cache and the cockpit buffer, the largest blocks the
+#      game ever needs, right here, once, for the whole session;
+#   2. then all the code a flight needs, in one go;
+#   3. everything else comes and goes in small pieces.
+mem('start')
+CACHE = D.FrameCache()
+CKBUF = bytearray(D.CK_SIZE)
+mem('buffers')
+
+import ui
 import wcgfx as G
+import flight                   # with world, ai, wcmath
+import world as W
+mem('code')
 
 OPT_FILE = 'wc_settings.json'
 SHIP_NAMES = (b'Hornet', b'Rapier', b'Scimitar', b'Raptor')
@@ -40,8 +65,34 @@ SFX = ('sfx_laser.ima', 'sfx_missile.ima', 'sfx_hit.ima', 'sfx_boom.ima',
        'sfx_pop.ima')
 
 
+def gc_pace():
+    """Collect whenever half of the free heap has been used up again,
+    instead of only when it is full: garbage then never spreads over
+    the whole heap, and what stays free stays in larger pieces."""
+    try:
+        from gc import threshold
+        threshold(max(4096, mem_free() // 2))
+    except (ImportError, AttributeError):
+        pass                        # the PC emulation has no such call
+
+
+def assets_stale():
+    """True if a ship frame is larger than the biggest frame buffer:
+    data written by an older tool/wc1_convert.py."""
+    for i in range(32):
+        try:
+            f = open(D.A + 'sh%02d.wcs' % i, 'rb')
+        except OSError:
+            continue
+        head = f.read(8)
+        f.close()
+        if len(head) == 8 and (head[6] | (head[7] << 8)) > D.MAX_FRAME:
+            return True
+    return False
+
+
 def load_opts():
-    opts = {'cockpit': 1, 'invert': 0, 'sound': 1, 'rumble': 1}
+    opts = {'cockpit': 1, 'invert': 0, 'sound': 1, 'rumble': 1, 'speed': 0}
     try:
         with open(OPT_FILE, 'r') as f:
             opts.update(json.load(f))
@@ -76,6 +127,19 @@ def no_data():
             return
 
 
+def ui_notice(lines):
+    display.setFPS(15)
+    while True:
+        display.fill(0)
+        y = 4
+        for ln in lines:
+            display.drawText(ln.decode(), 0, y, 0xFFFF)
+            y += 10
+        display.update()
+        if buttonA.justPressed():
+            return
+
+
 class Game:
     def __init__(self):
         self.opts = load_opts()
@@ -95,7 +159,7 @@ class Game:
         self.st = None
         self.camp = None
         display.setFPS(20)
-        print('WC: ready, free memory', mem_free())
+        mem('ready')
 
     # --- title and main menu ----------------------------------------------------
     def title(self):
@@ -155,15 +219,20 @@ class Game:
         o = self.opts
         sel = 0
         while True:
+            sp = o.get('speed', 0) % len(flight.TURN_MS)
             sel = ui.menu(b'OPTIONS', [
                 b'Cockpit: ' + (b'on' if o['cockpit'] else b'off'),
                 b'Stick: ' + (b'inverted' if o['invert'] else b'normal'),
                 b'Sound: ' + (b'on' if o['sound'] else b'off'),
-                b'Rumble: ' + (b'on' if o['rumble'] else b'off')], sel,
+                b'Rumble: ' + (b'on' if o['rumble'] else b'off'),
+                b'Speed: ' + flight.SPEED_NAMES[sp]], sel,
                 hint=b'UP ON STICK = NOSE DOWN (NORMAL)')
             if sel < 0:
                 save_opts(o)
                 return
+            if sel == 4:
+                o['speed'] = (sp + 1) % len(flight.TURN_MS)
+                continue
             key = ('cockpit', 'invert', 'sound', 'rumble')[sel]
             o[key] = 0 if o[key] else 1
 
@@ -205,18 +274,26 @@ class Game:
             elif sel == 4:
                 self.options()
 
-    def rec_room(self, mis):
+    def talk(self, title, mis, which, picture, out=None, map_draw=None):
+        """One conversation of this mission's packet. The packet (up to
+        some 15 KB) and the talk module are only held while it runs."""
         import talk
         st = self.st
         pk = D.briefing_packet(st.campaign, st.series, st.mission)
+        t = talk.Talk(self.ai, st, out, map_draw=map_draw, picture=picture)
+        t.run(title, pk, which, mis.series_name)
+        del t, pk, talk
+        sys.modules.pop('talk', None)
+        collect()
+
+    def rec_room(self, mis):
         k = 0
         while True:
             k = ui.menu(b'REC ROOM', [b'The bartender', b'Left table',
                                       b'Right table'], k)
             if k < 0:
                 return
-            t = talk.Talk(self.ai, st, picture='bar_128_61.COL.bin')
-            t.run(b'REC ROOM', pk, 2 + k, mis.series_name)
+            self.talk(b'REC ROOM', mis, 2 + k, 'bar_128_61.COL.bin')
 
     def kill_board(self):
         st = self.st
@@ -260,25 +337,19 @@ class Game:
     # --- one mission -------------------------------------------------------------------
     def mission(self, mis):
         import campaign
-        import talk
-        import world as W
         st = self.st
-        pk = D.briefing_packet(st.campaign, st.series, st.mission)
 
         def flight_plan(y0, h):
             ui.draw_map(mis, y0, h)
 
-        t = talk.Talk(self.ai, st, map_draw=flight_plan,
-                      picture='brief_128_61.COL.bin')
-        t.run(b'BRIEFING', pk, 0, mis.series_name)
+        self.talk(b'BRIEFING', mis, 0, 'brief_128_61.COL.bin',
+                  map_draw=flight_plan)
         k = ui.menu(b'LAUNCH?', [b'Launch', b'Flight plan', b'Back'])
         while k == 1:
             self.show_plan(mis)
             k = ui.menu(b'LAUNCH?', [b'Launch', b'Flight plan', b'Back'])
         if k != 0:
             return
-        del t
-        collect()
         world, result = self.fly(mis)
         out = campaign.Outcome()
         out.result = result
@@ -300,9 +371,7 @@ class Game:
                 b'You punched out and were picked up by a rescue '
                 b'shuttle. Your fighter is lost.'], ui.AMBER)
         else:
-            t = talk.Talk(self.ai, st, out,
-                          picture='debrief_128_61.COL.bin')
-            t.run(b'DEBRIEFING', pk, 1, mis.series_name)
+            self.talk(b'DEBRIEFING', mis, 1, 'debrief_128_61.COL.bin', out)
         self.summary(out, mis)
         campaign.apply_awards(st, out)
         st.save()
@@ -321,14 +390,16 @@ class Game:
         ui.wait_key()
 
     def fly(self, mis):
-        import flight
-        import world as W
+        mem('launch')
         fl = flight.Flight(self.T, self.ai, (ui.small, ui.text), self.pal,
                            self.st, mis, self.opts,
-                           self.sfx and self.opts.get('sound', 1))
-        collect()
-        print('WC: flight ready, free memory', mem_free())
-        display.setFPS(20)
+                           self.sfx and self.opts.get('sound', 1),
+                           CACHE, CKBUF)
+        mem('flight')
+        gc_pace()
+        # pictures as fast as the device manages, up to flight.PICTURES (25) a second; game
+        # turns come by the clock (flight.TURN_MS), not by the frame
+        display.setFPS(flight.PICTURES)
         ui.wait_release()
         result = 0
         while result == 0:
@@ -338,6 +409,11 @@ class Game:
                 result = fl.pause()
                 ui.wait_release()
         w = fl.w
+        pr, tr = fl.rates()
+        print('WC rate pictures/s %d.%d turns/s %d.%d slow %d worst %dms'
+              ' sound %d' % (pr // 10, pr % 10, tr // 10, tr % 10,
+                             fl.slow, fl.worst, 1 if fl.sfx else 0))
+        display.setFPS(20)
         if result == W.R_DEAD:
             for i in range(24):
                 G.fill_rows(display.buffer, 0, 128,
@@ -351,7 +427,7 @@ class Game:
             audio_stop()
         save_opts(self.opts)
         del fl
-        collect()
+        mem('landed')
         return w, result
 
     def summary(self, out, mis):
@@ -398,6 +474,11 @@ def main():
             D.exists('ai.wc') and D.exists('mod0.wc')):
         no_data()
         return
+    if assets_stale():
+        ui_notice((b'GAME DATA IS OLD', b'', b'Large ships will be',
+                   b'invisible. Run', b' tool/', b' wc1_convert.py',
+                   b'again and deploy', b'the assets folder.', b'',
+                   b'A: go on'))
     game = Game()
     game.title()
     while True:

@@ -62,6 +62,9 @@ DEFAULT_OUT = os.path.join(REPO_ROOT, 'games', 'wingcommander', 'assets')
 
 # Stored sprite resolution relative to the 128x96 screen, x64.
 SHIP_RES = 80           # 1.25x - fighters and capital ships
+# A ship frame must fit the game's largest frame buffer (wcdata.POOLS):
+# capital ships that would be bigger are stored coarser.
+MAX_SHIP_PIXELS = 3600
 MAX_FX_PIXELS = 1400    # per frame; larger effect frames are stored coarser
 
 # ship type -> data file (INSTALL.DAT logical file = type + 23)
@@ -317,15 +320,19 @@ class Converter:
                     frames.append(shape.decode_frame(data, 0)
                                   if len(data) >= 8 else None)
             frames = (frames + [None] * 37)[:37]
-            scaled = self.scaled_set(frames, SHIP_RES)
+            for res in range(SHIP_RES, 31, -2):
+                scaled = self.scaled_set(frames, res)
+                biggest = max((f[0].size for f in scaled if f), default=0)
+                if biggest <= MAX_SHIP_PIXELS:
+                    break
             name = 'sh%02d' % ship_type
             size = gfx.write_sprite_set(self.path(name + '.wcs'), scaled,
-                                        SHIP_RES)
+                                        res)
             self.total += size
             self.save_preview(name, scaled)
-            self.log('  ship %2d %-13s %2d views %7d bytes'
+            self.log('  ship %2d %-13s %2d views res %2d %7d bytes'
                      % (ship_type, tables.TYPES[ship_type][1],
-                        sum(f is not None for f in scaled), size))
+                        sum(f is not None for f in scaled), res, size))
 
     def convert_missiles(self):
         frames = shape.decode_all(self.packet(MISSILE_FILE).section(0))

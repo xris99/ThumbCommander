@@ -149,7 +149,7 @@ if no E ran and goals are set:
 ```
 
 So `D[16] LT3 D[17] LT3 ...` is a frame-by-frame animation holding
-each frame for three extra refreshes, `B0 D[1,2] AX-2 G0` scrolls a
+each frame for three extra frames, `B0 D[1,2] AX-2 G0` scrolls a
 two-tile background two pixels per frame forever, and `QX-80` in
 another object ends the scene when that object has scrolled to
 x = -80. Objects draw in table order every frame, so layer-0
@@ -209,11 +209,11 @@ only frames that scripts reference will reduce it.
 
 - one `Obj`-like record per animation object in preallocated arrays;
 - the interpreter loop above, driven by time: the original advances
-  one step per display refresh (60-70 Hz; inferred from the code,
-  compare the speed with wc1-re running before fixing the factor). At 20 fps run three script
-  steps per drawn frame (draw only on the last), or pre-divide
-  holds and multiply deltas by three in the converter. The second is
-  cheaper and keeps motion smooth;
+  one step per displayed frame, 16 frames per second (62 ms, chapter
+  1.4) [src]. Run one script step every 62 ms by `time.ticks_ms()`
+  and draw after each step; with the engine at 20 or 30 fps that
+  needs no change to holds or deltas. If drawing a scene takes longer
+  than 62 ms, do the steps that are due and draw once;
 - subtitles through the existing font code, below the picture;
 - A or B skips, as in the original.
 
@@ -289,7 +289,8 @@ four comments by the ship's damage level
 4. **Select frames.** Screen-scale storage without compression
    [data]: SCRAMBLE.VGA 181 KB (148 frames), PILOTANM.VGA 104 KB,
    BRIEFING.VGA 297 KB, RECROOM.VGA 98 KB, TITLE.VGA 349 KB. Halving
-   animation frame counts is invisible at 20 fps and saves most of it.
+   animation frame counts (each frame held twice as long) is hard
+   to see on a 128-pixel screen and saves most of it.
 
 ### Hooks in the port
 
@@ -316,6 +317,6 @@ asset file is missing.
   few strings to pictures in the converter.
 - **Scaled sprite draws** (`DrawSpriteScaled` with rotation):
   `wcgfx.blit_rs` covers them.
-- **Timing.** Scene code counts display refreshes and 1/60 s timer
-  ticks (1.4 in chapter 1). Convert everything to milliseconds in the
-  converter.
+- **Timing.** Scene code counts frames of 62 ms and 1/60 s timer
+  ticks (1.4 in chapter 1). Keep the frame counts as they are and run
+  the steps by the clock.

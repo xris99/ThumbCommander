@@ -214,12 +214,12 @@ Two consequences of this exact code, worth copying rather than
 - an `R` in the middle (518 strings) sends the cursor back to the
   start, so the part before it loops for as long as the line lasts.
 
-**Time base.** The loop is paced by the screen refresh (it waits for
-vertical blank each pass), so one tick is two refreshes: about 1/35 s
-on VGA's 70 Hz, 1/30 s at 60 Hz. This is read off the code's
-structure, not measured against a running game. `duration` is in 1/60 s
+**Time base.** The loop does one pass per displayed frame, and frames
+outside flight are held to 16 per second (62 ms,
+`ThrottleFrameAndDrawFps`, chapter 1.4) [src]. A tick is two passes,
+so about 125 ms. `duration` is in 1/60 s
 (`SetMultimediaTimerCallback`). On the ThumbyColor, drive both from
-`time.ticks_ms()`: one tick = 30 ms, `duration * 1000 // 60` ms after
+`time.ticks_ms()`: one tick = 125 ms, `duration * 1000 // 60` ms after
 the line. With no speech, the mouth finishes long before a reader
 does, so also wait for a button, as `talk.py` does now.
 
