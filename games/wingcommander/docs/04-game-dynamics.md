@@ -150,6 +150,32 @@ vanished while its hull still filled half the picture.
 The `WC rate` line also gives `slow` (frames over 50 ms) and `worst`
 (the longest frame in ms, flight computer pauses not counted).
 
+### 4.4.2 Space dust and stars (`sky.py`)
+
+Ported behaviour of `update_star_field` and `start_dust` (wc1-re
+`src/spc.c`) and the dust limits of `src/geom.c` [src]; the specks are
+drawn as plain pixels, not the original's sprites.
+
+- **Dust**: 15 specks standing still in space. Once per turn, a speck
+  that is behind the ship, outside the view, nearer than the ship's
+  radius or further than 1400 units is placed ahead again with chance
+  2/8: forward distance `2 * (rand(0, v) + radius) + rand(0, 350)` with
+  `v` = ten turns of forward speed (`rand(0, 40) + radius` when flying
+  backwards), sideways and up by ten turns of the ship's sideways motion
+  plus up to half the distance at random. The ship flies through them.
+  Each is drawn as a line from where it was half a turn ago to where it
+  is (so the streak grows with speed), brighter and 2 x 2 when near.
+- **Stars**: 26 directions (no parallax). A star that leaves the view is
+  put back, in the same turn, just beyond the edge the view turns
+  towards - between the edge and one turn's rotation past it - at a
+  random angle inside the view on the other axis, and left alone until
+  it has come in (given up after 12 turns). The original uses 45 degrees
+  and a 1-in-8 chance per turn; with that the field emptied while
+  turning at this screen size (measured: 25 stars straight ahead, 5 to 9
+  while turning; now 17 to 21).
+- **Cost**: `sky.mpy` is 5.2 KB (about 6 KB of RAM in flight); per
+  picture two projections per speck and one per star.
+
 ## 4.5 One game turn (World.update = Update_3Space)
 
 ```

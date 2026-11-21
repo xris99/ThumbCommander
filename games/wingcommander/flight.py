@@ -26,6 +26,7 @@ import wcgfx as G
 import wcdata as D
 import world as W
 import ai
+import sky
 
 # Game time. One game turn (World.update) is a tenth of a second: the
 # original's numbers are per turn and read "times ten per second" - its
@@ -114,17 +115,12 @@ class Flight:
             M.pitch(tmp, pt)
             for k in range(6):
                 self.dirv[idx * 6 + k] = min(32767, tmp[k])
-        # stars: fixed unit directions
-        self.stars = array('h', [0] * (40 * 3))
-        for i in range(40):
-            a = randint(0, 359)
-            e = randint(-80, 80)
-            c = M.icos(e)
-            self.stars[i * 3] = (M.isin(a) * c) >> 15
-            self.stars[i * 3 + 1] = M.isin(e) >> 1
-            self.stars[i * 3 + 2] = (M.icos(a) * c) >> 15
         self.cockpit = None
         self.load_cockpit()
+        # stars and space dust (sky.py); needs the view set by the cockpit
+        self.sky = sky.Sky(self.w.o[0], FX, FY,
+                           (self.vx0, self.vy0, self.vx1, self.vy1,
+                            self.cx, self.cy))
         self.msg = None
         self.msg_time = 0
         self.b_combo = False
@@ -382,21 +378,11 @@ class Flight:
         w = self.w
         fb = self.fb
         G.fill_rows(fb, self.vy0, self.vy1, 0)
-        # stars
-        m = self.cam
-        st = self.stars
-        cx = self.cx; cy = self.cy
-        x0 = self.vx0; x1 = self.vx1; y0 = self.vy0; y1 = self.vy1
-        px = display.setPixel
-        for i in range(0, 120, 3):
-            x = st[i]; y = st[i + 1]; z = st[i + 2]
-            vz = (x * m[6] + y * m[7] + z * m[8]) >> 14
-            if vz < 2000:
-                continue
-            sx = cx + FX * ((x * m[0] + y * m[1] + z * m[2]) >> 14) // vz
-            sy = cy - FY * ((x * m[3] + y * m[4] + z * m[5]) >> 14) // vz
-            if x0 <= sx < x1 and y0 <= sy < y1:
-                px(sx, sy, GREY if i % 2 else DGREY)
+        # stars, then the dust; ships are drawn over both
+        sk = self.sky
+        p = w.o[0]
+        sk.draw(fb, display, self.cam, self.ex, self.ey, self.ez, p, True)
+        sk.draw(fb, display, self.cam, self.ex, self.ey, self.ez, p, False)
         # far to near
         order = self.order
         del order[:]
@@ -769,6 +755,7 @@ class Flight:
             self.turned = True
             self.controls()
             w.update()
+            self.sky.turn(w.o[0])
             if w.tick % 8 == 0:
                 w.check_sphere()
             if w.sfx:

@@ -117,6 +117,7 @@ campaign.py   series tree, scoring, promotions, saved game
 wcdata.py     loaders for the converted files
 wcgfx.py      pixel loops (viper): rotated / scaled sprites, text
 wcmath.py     integer 3-D math in the original's conventions
+sky.py        space dust and stars of a flight
 ui.py         menus, text pages, nav map
 tool/wc1_convert.py, tool/wc1/   the converter (PC only)
 tool/wc1_inspect.py              looks inside the original files (PC only)
@@ -162,6 +163,13 @@ Data converted before this rework has capital ships that are too
 large for the new frame cache: run `tool/wc1_convert.py` again and
 copy the `assets` folder to the device. The game shows a notice at
 start if it finds old data.
+
+## Space dust and stars
+
+Dust specks stand in space and stream past as streaks that lengthen
+with speed; stars that leave the view while turning come back at the
+edge the view turns towards. Rules from the original (see
+docs/04-game-dynamics.md, 4.4.2).
 
 ## Game speed
 
