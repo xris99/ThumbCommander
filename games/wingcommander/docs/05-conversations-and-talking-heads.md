@@ -1,8 +1,12 @@
 # 5. Conversations and talking heads
 
-State today: `talk.py` plays every conversation correctly as *text*
-(branches, tokens, colours, the nav map). This chapter documents what
-the original shows on top of that, and how to build it.
+State today: `talk.py` plays every conversation with branches,
+tokens, colours and the nav map, **and shows the talking heads of
+shots 20-30**: character switch and close-up backdrop on the talker,
+head, mouth and eye patches, lip sync and eye animation driven by
+time (`load_face`, `long_talk`, `close_talk`). The room shots and
+podium lip sync (shots 0-5, 10-11, 12-17) remain text-only; what is
+open is listed in 5.8.
 
 Source: `SceneDirector` and the shot functions in wc1-re
 `src/screens.c`; `LoadFace`, `LongTalk`, `CloseTalk`, `CloseLook`,
@@ -155,7 +159,10 @@ debriefing, three bar (plus two more briefing frames for characters
 
 The port's static pictures (`brief_128_61`, `debrief_128_61`,
 `bar_128_61`) are frame 0 of BRIEFING.VGA 0 / 6 and RECROOM.VGA 0 -
-the *room*, not the close-up backdrops above. New files are needed.
+the *room*, not the close-up backdrops above. Those arrived as
+`bdrop.wc` ('WBD1'): 128 x 62 indexed frames keyed by scene kind *
+16 + conversation character, star-field frames flagged, read one
+seek at a time (`wcdata.Backdrops`, 3.2).
 
 ## 5.5 Lip sync and eye animation
 
@@ -250,24 +257,39 @@ Patches cut from the *composited and scaled* picture line up exactly
 and can be opaque rectangles (no transparency test when drawing). The
 head keeps index 0 = transparent so the backdrop shows around it.
 
-Proposed file `head<NN>.wc` [guess]:
+Built as proposed (3.2), with one deviation: the head is not cropped
+to its bounding box. The converter keeps the whole 128 x 62 picture
+with index 0 transparent - the original draws the head at (0, 0)
+anyway, and the backdrop shows around it. The patches are cut from
+the composited and scaled picture exactly as planned. File
+`head<NN>.wc` (`wc1_convert.py:656-663`):
 
 ```
 4s  'WCH1'
-u8  head x, y, w, h          position and size inside the 128x62 picture
-u8  mouth x, y, w, h
-u8  eye x, y, w, h
-head pixels                  w*h palette indices, 0 = transparent
-10 mouth patches             w*h each, opaque
-10 eye patches               w*h each, opaque
+u8  reserved, u8 reserved, u8 w, u8 h     (128, 62)
+u8  mouth x0, y0, w, h
+u8  eye x0, y0, w, h
+base                           w*h indices, 0 = transparent
+10 mouth patches               mouth w*h each, opaque
+10 eye patches                 eye w*h each, opaque
 ```
+
+A few of the original ten shapes are fully transparent (face 0
+mouth shape 6 and eye shape 20, face 10 both, and similar [data]);
+their patch is stored as all zeros and the index-0-transparent
+`wcgfx.blit_indexed` draws nothing there, which is exactly the
+original's result. `tool/wc1_heads.py` prints the zero patches it
+finds.
 
 Measured for WC1 at screen scale: a head's bounding box is about
 70 x 60 pixels, a mouth patch about 22 x 21, an eye patch about
 33 x 14; **11 to 16 KB per face, about 150 KB for all eleven**
-[data, computed from frame sizes; the composite method may add a
-little]. One face fits RAM comfortably (about 15 KB); load it on a
-face change, as `LoadFace` does, and free the previous one.
+[data, computed from frame sizes]. The composite method added
+little: the eleven WC1 faces measure 13,382 to 16,582 bytes each,
+157 KB together [data, the built files]. One face fits RAM
+comfortably (about 15 KB); `load_face` drops the previous head and
+loads the new one on a face change (talk.py:462-480, cmpgn.c:258-
+274).
 
 Backdrops: seven 128 x 62 pictures as `.COL.bin` (16 KB each) or as
 palette indices (8 KB each). Indices are better here: the head is
@@ -279,32 +301,43 @@ version; the original animates PLANETS.VGA stars
 
 ## 5.7 Runtime plan (talk.py)
 
-1. In `Talk.run`, where the shot is decoded: for 20-32 call a new
-   `load_face(shot - 20, character)` when the face or character
-   changed; keep `speaker` logic for the name line.
-2. Parse the mouth and face strings into two preallocated
-   `bytearray`s of (frame, ticks) pairs. The longest lists in WC1 are
-   73 mouth commands and 13 face commands [data]; the original's
-   buffers hold about 80. Ticks can exceed 255 (`$100` is common, and
-   larger values occur), so store them as 16 bits.
-3. Replace the static wait in `Talk.say` with a loop: step both
-   cursors by elapsed time, redraw only the mouth and eye rectangles
-   that changed (blit the patch; when the frame is -1 blit the patch
-   region from the head itself - keep the head in RAM for that), call
-   `display.update()`.
-4. Draw order on a face change: backdrop, head, then patches. The text
-   area below does not change during the animation.
-5. Missing files must not break the game: no `head<NN>.wc` -> today's
-   text-only path.
+1. Implemented (talk.py:384-387): `Talk.run` calls `load_face(kind -
+   20)` when shot 20-32 changes the face; the `speaker` logic for the
+   name line stayed at talk.py:393-404.
+2. Implemented: `parse_mouth` (talk.py:35-71) and `parse_face`
+   (talk.py:74-112) build bytearrays of 4-byte (frame, ticks) pairs
+   closed by a -1 sentinel; ticks are 16 bits because `$100` is
+   common and larger values occur. The longest lists in WC1 are 73
+   mouth commands and 13 face commands [data].
+3. Implemented: `long_talk` (talk.py:560-645) steps both cursors by
+   elapsed time - one pass per 62 ms (`STEP_MS`, talk.py:29) - and
+   `close_talk` (talk.py:482-543) redraws the whole composite each
+   pass: backdrop, head, eye patch, mouth patch, overlay. Redrawing
+   only the changed rectangles was the first plan; full blits cost
+   the same because the patches are rectangles cut from the head,
+   and the original redraws every pass as well (`nFrameSkip` is 1,
+   init.c:202).
+4. Implemented: `close_talk` draws backdrop, head, patches, overlay
+   in that order; the text below row 77 is untouched during the
+   animation.
+5. Implemented: a missing `head<NN>.wc` falls back to the text-only
+   path (talk.py:471-476), a missing `bdrop.wc` leaves the backdrop
+   black (talk.py:452-460).
 
 Screen layout: the picture area is rows 16-111 (96 rows). A 128 x 62
 conversation picture leaves 34 rows for text inside the picture area,
 as today.
 
-Test: extend `tool/wc1_selfplay.py` to take a screenshot inside a
-briefing and check that the head rectangle is not empty; add a
-converter preview sheet (`--preview`) that shows each face with all
-ten mouths - errors in origins are obvious there at a glance.
+Test: `tool/wc1_heads.py` checks every `head<NN>.wc` and `bdrop.wc` -
+header, patch rectangles, file size, transparent border, visible
+patch content - and prints the zero patches it finds.
+`tool/wc1_selfplay.py` hooks `load_face`, screenshots every face
+it shows and asserts rows 16-77 of the picture are not black; after
+the sortie it plays one scripted cutscene through `scene.show` (scene
+2 variant 1, five subtitle records) and asserts the same for the
+picture and for the subtitle rows. `--preview` writes a sheet per
+face: the base plus all ten mouth and eye states
+(`wc1_convert.py:751-763`) - origin errors are obvious there.
 
 ## 5.8 Open points
 

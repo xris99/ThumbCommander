@@ -22,6 +22,15 @@ games/wingcommander/assets/:
   brf<C>.wc          briefing / debriefing / bar scripts and text
   comm.wc            in-flight radio messages
   *_128_NN.COL.bin   full pictures in the engine's RGB565 format
+  head<NN>.wc        one talking-head face: base, ten mouths, ten eyes
+  bdrop.wc           conversation backdrops keyed by scene and character
+  ovl.wcs            the conversation overlay frames
+  meanwhile_128_62.COL.bin the cutscene caption word
+  mid<NN>.wc         one cutscene: frames, recompiled scripts, records
+  scr<NN>.wcs        SCRAMBLE.VGA sections for the hard-coded launch scenes
+  cksc<N>.wcs        cockpit scramble shapes for player ship N (PCSHIP.V0N)
+  ckint/ckbg/ckslide<N>.wcs  cockpit interior, backdrop and eject slide
+  pil<NN>.wcs        the pilot's death face and the ejection seat
   sfx_*.ima          cockpit sound effects (synthesised, not Origin data)
 
 Campaign 0 is Wing Commander, 1 and 2 are the Secret Missions (only
@@ -54,7 +63,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np                                      # noqa: E402
 
-from wc1 import gfx, shape, tables, mission as wcmission  # noqa: E402
+from wc1 import (gfx, shape, tables, refscene,
+                 mission as wcmission)                             # noqa: E402
 from wc1.packet import PacketFile, PacketError          # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,6 +113,96 @@ OBJECTIVE_BYTES = 16 * 64
 SHIP_BYTES = 32 * 42
 MISSION_AUX = 40
 MISSION_STRIDE = 24 + NAV_BYTES + OBJECTIVE_BYTES + SHIP_BYTES + MISSION_AUX
+
+# Talking heads and cutscenes. The conversation window is 320x129 in the
+# original (the talking-head picture, wc1-re src/screens.c) and 128x62 on
+# the device; cutscene object positions are kept in 8.7 fixed point (one
+# unit per device pixel) so that x = 320 still fits an i16 - the 8.8 first
+# planned in docs/06 would overflow it.
+HEAD_MAGIC = b'WCH1'
+BACKDROP_MAGIC = b'WBD1'
+SCENE_MAGIC = b'WCG1'
+PIC_W, PIC_H = 128, 62
+
+# scene type -> conversation backdrop shape (wc1-re src/cmpgn.c:215-257,
+# the three shapes LoadFace picks per conversation, plus the two rooms
+# the hard-coded scenes add: the Colonel's office (Office, cmpgn.c:565)
+# and the medal room (AwardCampaignMedal, screens.c:301-302). Scene
+# type 3, the funeral, has no backdrop: CloseTalk clears the picture
+# and draws the constellation instead (cmpgn.c:440-442).
+BACKDROP_SHAPES = [
+    (0, 'BRIEFING.VGA', 0),   # the briefing room
+    (1, 'BRIEFING.VGA', 6),   # the debriefing room
+    (2, 'RECROOM.VGA', 1),    # the rec room / the bar
+    (4, 'BRIEFING.VGA', 7),   # the Colonel's office
+    (5, 'BRIEFING.VGA', 10),  # the medal room
+]
+
+# (type, character, frame) for every character the original gives a
+# backdrop; the bdrop.wc entry key is type * 16 + character. The frame
+# numbers are the nConversationBackdropFrame picks of LoadFace
+# (cmpgn.c:215-257), the same for every room; the office and the medal
+# room cover every character the ceremony packets can name.
+BACKDROP_KEYS = [
+    (0, 0, 4), (0, 1, 5), (0, 2, 0), (0, 3, 1), (0, 4, 2),
+    (0, 8, 1), (0, 9, 2),
+    (1, 10, 0), (1, 11, 1), (1, 12, 0), (1, 13, 1),
+    (2, 2, 0), (2, 3, 1), (2, 4, 2),
+    (4, 0, 4), (4, 1, 5), (4, 2, 0), (4, 3, 1), (4, 4, 2),
+    (4, 8, 1), (4, 9, 2),
+    (4, 10, 0), (4, 11, 1), (4, 12, 0), (4, 13, 1),
+    (5, 0, 4), (5, 1, 5), (5, 2, 0), (5, 3, 1), (5, 4, 2),
+    (5, 8, 1), (5, 9, 2),
+    (5, 10, 0), (5, 11, 1), (5, 12, 0), (5, 13, 1),
+]
+
+# Hard-coded cutscene sprites (docs/06 6.2). Archive -> section, taken
+# from the FetchDiskPacketRetrying calls of the hard-coded sequences in
+# wc1-re src/cutscene.c and src/launch.c. The files use the same .wcs
+# layout as the flight sprites (tool/wc1/gfx.py write_sprite_set).
+SCRAMBLE_SECTIONS = {
+    0: 'hangar walk',        # cutscene.c:300-301
+    1: 'deck background',    # cutscene.c:466-473
+    2: 'scramble canopy',    # cutscene.c:648-649
+    3: 'ship body',          # cutscene.c:650-651
+    4: 'deck crew',          # cutscene.c:652
+    5: 'landing scroll',     # cutscene.c:850-851
+    6: 'landing canopy',     # cutscene.c:853-854
+    7: 'launch door',        # launch.c:118-119
+    8: "Tiger's Claw",       # launch.c:192-193
+    9: 'damage decal',       # cutscene.c:848-849
+}
+
+# PCSHIP.V0N section -> cockpit piece used by the hard-coded scenes
+CK_CUTSCENE_SECTIONS = {
+    8: 'cksc',       # scramble cockpit shapes, cutscene.c:643-644
+    0: 'ckint',      # cockpit interior, eject.c:117-118
+    3: 'ckbg',       # cockpit space backdrop, screens.c:1711-1712
+    5: 'ckslide',    # ejection cockpit slide, eject.c:119-120
+}
+
+# PILOTANM.VGA sections used by death_sequence / ejection_sequence
+# (screens.c:1710, eject.c:50). Section 2 is the ejected pilot of the
+# 3-D chase (eject.c:97-99, :169).
+PILOTANM_SECTIONS = {0: 'death face', 1: 'ejection seat',
+                     2: 'ejected pilot'}
+
+# BRIEFING.VGA sections drawn by the room scenes the conversation
+# director dispatches (docs/05 5.2, docs/06 6.2). Every fetch cited is
+# FetchDiskPacketRetrying(4, section, 0) on logical file 4.
+BRIEFING_SECTIONS = {
+    0: 'briefing room',      # screens.c:193-194 backdrop halves
+    1: 'briefing animation', # screens.c:195-196 pilots walking in
+    2: 'podium',             # screens.c:1484-1485, 776-777 colonel
+    3: 'briefing closeup',   # screens.c:197-198 seated colonel
+    4: 'briefing bodies',    # screens.c:199-200, 1523-1528
+    5: 'briefing portraits', # screens.c:201-202, 1514-1522
+    6: 'debriefing room',    # cmpgn.c:527-528 backdrop pieces
+    7: 'office',             # cmpgn.c:564-565 the Colonel's office
+    8: 'medal room',         # screens.c:224-228, 300-301 medals
+    9: 'funeral',            # cutscene.c:1163-1165 casket and guards
+    10: 'medal backdrop',    # screens.c:301-302 the room behind
+}
 
 
 class Converter:
@@ -521,6 +621,622 @@ class Converter:
         if os.path.exists(old):
             os.remove(old)
 
+    # --- talking heads and cutscenes (docs/05, docs/06) ---------------
+
+    def _paste(self, canvas, img, px, py):
+        """Paste scaled indexed pixels onto an indexed canvas with the
+        image's top-left at (px, py) - possibly negative, clipped to the
+        canvas. Index 0 keeps whatever is underneath, exactly like the
+        original sprite blitter."""
+        ch, cw = canvas.shape
+        ih, iw = img.shape
+        # canvas row y shows source row y - py, so valid rows are
+        # py <= y < ih + py (and likewise for columns)
+        ys, ye = max(0, py), min(ch, ih + py)
+        xs, xe = max(0, px), min(cw, iw + px)
+        if ye <= ys or xe <= xs:
+            return
+        src = img[ys - py:ye - py, xs - px:xe - px]
+        old = canvas[ys:ye, xs:xe]
+        canvas[ys:ye, xs:xe] = np.where(src == 0, old, src)
+
+    def _bake_stars(self, canvas, stars, rng):
+        """The bar backdrop is transparent in its upper half: the
+        starfield behind the window. Bake a fixed sprinkle of star
+        sprites (PLANETS.VGA section 0) onto those pixels so the device
+        sees the same sky; rows 0..36 map to original rows 0..76."""
+        overlay = np.zeros(canvas.shape, dtype=np.uint8)
+        for _ in range(24):
+            fr = stars[rng.randint(0, len(stars))] if stars else None
+            if fr is None:
+                continue
+            img, hx, hy = fr
+            self._paste(overlay, img, rng.randint(2, 125) - hx,
+                        rng.randint(2, 37) - hy)
+        return np.where(canvas == 0, overlay, canvas)
+
+    def _backdrop_canvas(self, frame):
+        """One conversation backdrop frame -> 128x62 indexed pixels."""
+        canvas = np.zeros((129, 320, 4), dtype=np.float32)
+        rgba = gfx.frame_to_rgba(frame, self.palette)
+        h, w = rgba.shape[:2]
+        canvas[:min(h, 129), :min(w, 320)] = rgba[:129, :320]
+        return gfx.quantize(gfx.resample(canvas, PIC_W, PIC_H),
+                            self.palette, threshold=0.5)
+
+    def convert_backdrops(self):
+        """bdrop.wc: the conversation backdrops. The scene type picks the
+        room, the character picks the frame (wc1-re src/cmpgn.c:215-257).
+
+            4s  'WBD1'
+            u8  entry count
+            per entry: u8 key, u8 flags          key = type*16 + character
+                                                  flags bit0: stars baked
+            bodies in table order: 128x62 indexed pixels, index 0 keeps
+            the previous picture
+        """
+        shapes = {}
+        for kind, filename, section in BACKDROP_SHAPES:
+            shapes[kind] = shape.decode_all(
+                self.packet(filename).section(section))
+        stars = []
+        if self.has('PLANETS.VGA'):
+            star_frames = shape.decode_all(
+                self.packet('PLANETS.VGA').section(0))
+            stars = self.scaled_set(star_frames[32:38], 64)
+        rng = np.random.RandomState(1990)
+        table = bytearray()
+        bodies = []
+        for kind, char, index in sorted(BACKDROP_KEYS):
+            frames = shapes[kind]
+            frame = frames[index] if index < len(frames) else None
+            if frame is None:
+                self.log('  backdrop type %d char %d: frame %d missing'
+                         % (kind, char, index))
+                continue
+            img = self._backdrop_canvas(frame)
+            flags = 0
+            if kind == 2:
+                img = self._bake_stars(img, stars, rng)
+                flags = 1
+            table += struct.pack('<BB', kind * 16 + char, flags)
+            bodies.append(img)
+        out = bytearray(BACKDROP_MAGIC)
+        out.append(len(bodies))
+        out += table
+        for img in bodies:
+            out += img.tobytes()
+        size = self.write('bdrop.wc', bytes(out))
+        self.log('  backdrops: %d frames, %d bytes' % (len(bodies), size))
+        self.save_preview('bdrop', [(b, 0, 0) for b in bodies])
+
+    def convert_heads(self):
+        """head<NN>.wc: one talking-head face. Face f < 11 is TALKING.VGA
+        section f; faces 11 and 12 (Doomsday, Jazz) are TALKING1.VGA
+        sections 0 and 1 (wc1-re src/cmpgn.c LoadFace). A face section
+        holds 0 = the 320x129 head, 1..10 = mouths drawn at
+        mouthX/mouthY when mouthFrame == i, 11..20 = eyes at
+        faceX/faceY when faceFrame == i. Each patch stores the head
+        composited with one frame, so the device pastes it over the
+        base picture and gets the original's full-draw result.
+
+            4s  'WCH1'
+            u8  reserved, u8 reserved, u8 w, u8 h        (128, 62)
+            u8  mouth x0, y0, w, h
+            u8  eye x0, y0, w, h
+            base: w*h indexed pixels
+            ten mouth patches of mouth w * h bytes
+            ten eye patches of eye w * h bytes
+        """
+        sx, sy = gfx.SCREEN_SX, gfx.SCREEN_SY
+        pk = self.packet('TALKING.VGA')
+        faces = [(f, pk.section(f)) for f in range(11)]
+        if self.has('TALKING1.VGA'):
+            pk2 = self.packet('TALKING1.VGA')
+            faces += [(11, pk2.section(0)), (12, pk2.section(1))]
+        for face, data in faces:
+            frames = shape.decode_all(data) if data else []
+            if not frames or frames[0] is None:
+                self.log('  head %d: no face frame, skipped' % face)
+                continue
+            if face < 11:
+                fx, fy, mx, my = tables.TALKING_HEAD_ORIGINS[face]
+            else:
+                fx, fy, mx, my = tables.SM2_HEAD_ORIGINS[face]
+
+            base = np.zeros((PIC_H, PIC_W), dtype=np.uint8)
+            scaled = gfx.scale_frame(frames[0], self.palette, sx, sy)
+            if scaled is None:
+                self.log('  head %d: head frame empty, skipped' % face)
+                continue
+            self._paste(base, scaled[0], -scaled[1], -scaled[2])
+
+            def patches(items, ox, oy):
+                spots = []
+                for fr in items:
+                    sc = gfx.scale_frame(fr, self.palette, sx, sy)
+                    if sc is None:
+                        spots.append(None)
+                        continue
+                    img, hx, hy = sc
+                    px = int(round(ox * sx)) - hx
+                    py = int(round(oy * sy)) - hy
+                    ys, ye = max(0, py), min(PIC_H, img.shape[0] + py)
+                    xs, xe = max(0, px), min(PIC_W, img.shape[1] + px)
+                    if ye <= ys or xe <= xs:
+                        spots.append(None)      # wholly off the canvas
+                        continue
+                    spots.append((img, px, py, xs, xe, ys, ye))
+                live = [s for s in spots if s]
+                if not live:
+                    return (0, 0, 0, 0), [np.zeros((0, 0), np.uint8)
+                                          for _ in items]
+                x0 = min(s[3] for s in live)
+                x1 = max(s[4] for s in live)
+                y0 = min(s[5] for s in live)
+                y1 = max(s[6] for s in live)
+                tiles = []
+                for s in spots:
+                    if s is None:
+                        tiles.append(np.zeros((y1 - y0, x1 - x0),
+                                              dtype=np.uint8))
+                        continue
+                    img, px, py = s[0], s[1], s[2]
+                    tile = base.copy()
+                    self._paste(tile, img, px, py)
+                    tiles.append(tile[y0:y1, x0:x1])
+                return (int(x0), int(y0), int(x1 - x0), int(y1 - y0)), tiles
+
+            def pad(tiles):
+                """TALKING1.VGA sections hold only 20 frames, so the
+                last eye patch of faces 11/12 has no source; the format
+                always stores ten of each and the device draws nothing
+                for a zero patch."""
+                if len(tiles) < 10:
+                    shape = tiles[-1].shape if tiles else (0, 0)
+                    tiles = tiles + [np.zeros(shape, dtype=np.uint8)
+                                     for _ in range(10 - len(tiles))]
+                return tiles
+
+            m_rect, m_tiles = patches(frames[1:11], mx, my)
+            e_rect, e_tiles = patches(frames[11:21], fx, fy)
+            m_tiles = pad(m_tiles)
+            e_tiles = pad(e_tiles)
+
+            out = bytearray(HEAD_MAGIC)
+            out += bytes([0, 0, PIC_W, PIC_H])
+            out += bytes(m_rect)
+            out += bytes(e_rect)
+            out += base.tobytes()
+            for tile in m_tiles:
+                out += tile.tobytes()
+            for tile in e_tiles:
+                out += tile.tobytes()
+            size = self.write('head%02d.wc' % face, bytes(out))
+            self.log('  head %2d: mouth %s eye %s, %d bytes'
+                     % (face, m_rect, e_rect, size))
+            if self.preview:
+                states = [base]
+                for i in range(10):
+                    comp = base.copy()
+                    if e_tiles[i].size:
+                        self._paste(comp, e_tiles[i], e_rect[0],
+                                    e_rect[1])
+                    if m_tiles[i].size:
+                        self._paste(comp, m_tiles[i], m_rect[0],
+                                    m_rect[1])
+                    states.append(comp)
+                self.save_preview('head%02d' % face,
+                                  [(s, 0, 0) for s in states])
+
+    def convert_overlay(self):
+        """ovl.wcs: the conversation overlay frames (TALKING.VGA section
+        11), drawn over the whole picture when the scene sets the flag."""
+        pk = self.packet('TALKING.VGA')
+        if len(pk) <= 11:
+            self.log('  overlay: TALKING.VGA has no section 11, skipped')
+            return
+        scaled = self.scaled_set(shape.decode_all(pk.section(11)), 64)
+        size = gfx.write_sprite_set(self.path('ovl.wcs'), scaled, 64)
+        self.total += size
+        self.save_preview('ovl', scaled)
+
+    def convert_intro_word(self):
+        """meanwhile_128_62.COL.bin: "Meanwhile..." set in the intro font
+        (TITLE.VGA section 1; glyph index ord(c) - 65 for upper and
+        lower case alike, '.' is index 58, advance width + 2), centred
+        as the original centres a subtitle line. The cutscene shows it
+        in the conversation window before the animation starts."""
+        pk = self.packet('TITLE.VGA')
+        glyphs = shape.decode_all(pk.section(1)) if len(pk) > 1 else []
+
+        def glyph_index(ch):
+            return 58 if ch == '.' else ord(ch) - 65
+
+        def glyph(ch):
+            i = glyph_index(ch)
+            return glyphs[i] if i < len(glyphs) else None
+
+        word = 'Meanwhile...'
+        widths = [g.width if g is not None else 8 for g in
+                  (glyph(ch) for ch in word)]
+        x = (320 - sum(w + 2 for w in widths)) // 2
+        canvas = np.zeros((129, 320, 4), dtype=np.float32)
+        for ch, w in zip(word, widths):
+            fr = glyph(ch)
+            if fr is None:
+                x += w + 2
+                continue
+            rgba = gfx.frame_to_rgba(fr, self.palette)
+            px = x - fr.left
+            py = 56 - fr.top
+            rh, rw = rgba.shape[:2]
+            ys, ye = max(0, py), min(129, rh + py)
+            xs, xe = max(0, px), min(320, rw + px)
+            if ye > ys and xe > xs:
+                canvas[ys:ye, xs:xe] = rgba[ys - py:ye - py,
+                                            xs - px:xe - px]
+            x += w + 2
+        small = gfx.resample(canvas, PIC_W, PIC_H)
+        rgb = np.clip(small[..., :3], 0, 255)      # over black already
+        path = self.path('meanwhile_128_62.COL.bin')
+        gfx.write_col_bin(path, rgb)
+        size = os.path.getsize(path)
+        self.total += size
+        self.log('  meanwhile word: %d bytes' % size)
+        self.save_preview('meanwhile',
+                          [(gfx.quantize(small, self.palette, threshold=0.5),
+                            0, 0)])
+
+    def _compile_script(self, script, layer, start):
+        """Re-emit one object's bytecode stream as device instructions,
+        4-byte '<BBh' records. The original commands survive verbatim -
+        X/Y values stay in the original pixel space, so the device
+        integrates positions, deltas and goals exactly like the
+        original does (logic.c:2431-2450) and only the draw site scales
+        to device pixels. The 'D' / 'E' groups become runs of 'D' (draw)
+        instructions closed by 'N' / 'E': the group's first DRAW takes
+        the place the 'D' opcode had, so re-entering the repeat cursor
+        re-runs exactly the original group. A trailing 'K' stands for
+        the terminating NUL byte - the cursor parks on it and re-reads
+        it every turn, just like the original parks on the zero byte.
+
+        Opcode operands: 'A'/'L'/'Q' carry a property byte and an i16
+        value; 'B' carries its label number; 'G'/'J' the label to find;
+        'R' the object set and index to copy; 'W' the global wait in
+        frames. Anything else (X/P/S) does not occur in the cutscene
+        data and is refused.
+        """
+        out = []
+        pending = []
+        labels = []
+        pos = 0
+        end = len(script)
+        while pos < end and script[pos] != 0:
+            op = script[pos]
+            pos += 1
+            if op in (0x41, 0x4C, 0x51):                   # A L Q
+                prop = script[pos]; pos += 1
+                value = struct.unpack_from('<h', script, pos)[0]
+                pos += 2
+                # X/Y values pass through raw: the device integrates
+                # positions, deltas and goals in the original pixel
+                # space exactly like the original (logic.c:2431-2450)
+                out.append((chr(op), prop, value))
+            elif op == 0x42:                                # B label
+                value = struct.unpack_from('<h', script, pos)[0]
+                pos += 2
+                labels.append((value, start + len(out)))
+                out.append(('B', 0, value))
+            elif op == 0x44:                                # D group
+                slot = start + len(out)
+                frame = script[pos]; pos += 1
+                i = 0
+                while frame != 0xFF:
+                    out.append(('D', frame & 0xFF,
+                                i * 128 if layer == 0 else 0))
+                    i += 1
+                    frame = script[pos]; pos += 1
+                out.append(('N', 0, slot))
+            elif op == 0x45:                                # E group
+                slot = start + len(out)
+                frame = script[pos]; pos += 1
+                i = 0
+                while frame != 0xFF:
+                    out.append(('D', frame & 0xFF, i * 128))
+                    i += 1
+                    frame = script[pos]; pos += 1
+                out.append(('E', 0, slot))
+            elif op in (0x47, 0x4A):                        # G / J
+                value = struct.unpack_from('<h', script, pos)[0]
+                pos += 2
+                pending.append((value, start + len(out)))
+                out.append((chr(op), 0, 0))
+            elif op == 0x52:                                # R copy
+                o_set = script[pos]; pos += 1
+                o_index = script[pos]; pos += 1
+                out.append(('R', o_set, o_index))
+            elif op == 0x57:                                # W wait
+                value = struct.unpack_from('<h', script, pos)[0]
+                pos += 2
+                out.append(('W', 0, value))
+            else:
+                raise ValueError('no device instruction for opcode %r'
+                                 % chr(op))
+        # The original FindSceneAnimationCommand scans from the script
+        # start for the first 'B' whose value matches; labels were
+        # emitted in that same order here, so the first hit is the same
+        # label, and the jump lands on the command after its operand.
+        for value, where in pending:
+            hit = next((i for num, i in labels if num == value), None)
+            if hit is None:
+                raise ValueError('label %d not found' % value)
+            op, _b1, _h = out[where - start]
+            out[where - start] = (op, 0, hit + 1)
+        out.append(('K', 0, 0))
+        return out
+
+    def _midgame_variant(self, name, pk, variant, pri_used):
+        """Run one MIDGAME variant through the reference interpreter to
+        learn which shapes it draws, then compile every object's script
+        for the device. Empty variants (no defs at all) come out with
+        all counts zero - the device ends those instantly."""
+        sx, sy = gfx.SCREEN_SX, gfx.SCREEN_SY
+        defs = pk.section(variant + 1)
+        shape_data = pk.section(variant + 3)
+        pkt = pk.section(variant + 5)
+        per = count = nanim = 0
+        objects = []
+        start_state = []
+        if defs:
+            per, count, objects = refscene.read_disk_objects(defs)
+            nanim = count // per if per else 0
+            # the reference interpreter mutates these dicts in place
+            # while it runs, so keep each object's disk staging state
+            # (layer, frame, x, y, scale, rotation) for the device
+            # records - the device replays the same bytecode from the
+            # same start and
+            # must agree with the reference at step zero (logic.c:2128
+            # loads these fields once per PlaySceneAnimation call)
+            start_state = [(o['layer'], o['frame'], o['x'], o['y'],
+                            o['scale'], o['rotation']) for o in objects]
+        drawn_sec = set()
+        for a in range(nanim):
+            anim = refscene.RefAnimation(defs, objects, a)
+            steps = 0
+            while not anim.finished:
+                if steps >= 4096:
+                    raise ValueError('%s variant %d animation %d does '
+                                     'not finish' % (name, variant, a))
+                # RefAnimation.step records nothing on its own - the
+                # frames the original draws arrive through the draw
+                # callback only (logic.c:2359,2377 draw sites)
+                got = []
+                anim.step(lambda layer, frame, x, y: got.append(
+                    (layer, frame, x, y)))
+                for layer, frame, _x, _y in got:
+                    if layer == 0:
+                        pri_used.add(frame & 0xFF)
+                    elif layer == 1:
+                        drawn_sec.add(frame & 0xFF)
+                steps += 1
+        recs = bytearray()
+        instrs = bytearray()
+        for i, obj in enumerate(objects):
+            start = len(instrs) // 4
+            # objects share bytecode streams: the script runs from
+            # scriptOffset through the shared tail and ends at the
+            # first NUL found at a command position - a NUL inside an
+            # operand (label value 0!) is data, not a terminator, so
+            # the tail is passed whole and _compile_script stops at
+            # the terminating byte itself (logic.c:2291 loop test)
+            script = defs[obj['scriptOffset']:]
+            for op, b1, h in self._compile_script(script, obj['layer'],
+                                                  start):
+                instrs += struct.pack('<BBh', ord(op), b1 & 0xFF, h)
+            # the record holds the disk staging position, not where the
+            # reference left the object (start_state above): the device
+            # replays the script from the start and must agree with the
+            # reference at step zero. x and y are i32 original pixels:
+            # the original runtime holds them as 32-bit ints and the
+            # deltas accumulate unclamped (logic.c:2431-2450), so the
+            # running position can leave the i16 range; the device
+            # carries them the same way and scales only at draw time
+            layer, frame, x, y, scale, rot = start_state[i]
+            # rotation is stored because the draw site passes it on
+            # (logic.c:2382: DrawSpriteScaled gets the rotation), and
+            # four objects of MIDGAME.V02 hold 30 degrees. Flip needs
+            # no field of its own: the frame byte doubles as the flip
+            # bits (gr.c:541-551) and the shipped data only ever
+            # reaches 0 and 16 at a draw call.
+            recs += struct.pack('<BBiiHhh', layer, frame & 0xFF,
+                                x, y, scale & 0xFFFF, start, rot)
+        sec_frames = shape.decode_all(shape_data) if shape_data else []
+        nsec = max(drawn_sec) + 1 if drawn_sec else 0
+        sec_tbl = bytearray()
+        sec_pix = bytearray()
+        for idx in range(nsec):
+            entry = (0, 0, 0, 0, 0)
+            if idx in drawn_sec and idx < len(sec_frames):
+                sc = gfx.scale_frame(sec_frames[idx], self.palette, sx, sy)
+                if sc is not None:
+                    img, hx, hy = sc
+                    entry = (len(sec_pix), img.shape[1], img.shape[0],
+                             max(-128, min(127, hx)),
+                             max(-128, min(127, hy)))
+                    sec_pix += img.tobytes()
+            sec_tbl += struct.pack('<IBBbb', *entry)
+        return dict(per=per, nanim=nanim, nobjs=count,
+                    ninstrs=len(instrs) // 4, nsec=nsec,
+                    pktlen=len(pkt), recs=bytes(recs),
+                    instrs=bytes(instrs), sec_tbl=bytes(sec_tbl),
+                    sec_pix=bytes(sec_pix), pkt=pkt)
+
+    def _pri_blob(self, frames, used, sx, sy):
+        """Scale the shared primary shapes the animations actually
+        draw, once for the union over both variants."""
+        n = max(used) + 1 if used else 0
+        tbl = bytearray()
+        blob = bytearray()
+        for idx in range(n):
+            entry = (0, 0, 0, 0, 0)
+            if idx in used and idx < len(frames) and frames[idx]:
+                sc = gfx.scale_frame(frames[idx], self.palette, sx, sy)
+                if sc is not None:
+                    img, hx, hy = sc
+                    entry = (len(blob), img.shape[1], img.shape[0],
+                             max(-128, min(127, hx)),
+                             max(-128, min(127, hy)))
+                    blob += img.tobytes()
+            tbl += struct.pack('<IBBbb', *entry)
+        return tbl, blob, n
+
+    def convert_midgame(self):
+        """mid<NN>.wc: one cutscene and its two outcome variants (the
+        reference interpreter tool/wc1/refscene.py decides which shape
+        frames an animation really draws; only those are scaled into the
+        file; the bytecode streams are re-emitted for the device).
+
+            4s   'WCG1'
+            u8   cutscene number, u8 variant count (always 2)
+            u16  primary frame count, u32 primary pixel blob offset
+            per primary frame: u32 offset from the primary pixel blob,
+                               u8 w, u8 h, i8 hot_x, i8 hot_y
+            per variant: 6 x u16 objects per animation, animations,
+                         object count, instruction count, shape frame
+                         count, scene packet length; then 5 x u32
+                         offsets of the object, instruction, shape
+                         table, shape pixel and scene packet blocks
+            blocks in variant order: objects, instructions, shape
+            table, shape pixels, scene packet; then the primary pixel
+            blob. Shape table pixel offsets are relative to the blob
+            of their own variant; object records are 16 bytes
+            '<BBiiHhh': layer, flip frame, x and y in the original
+            pixel space (i32 - the original runtime holds x/y as
+            32-bit ints and carries staging positions like -1280 and
+            +1170 unclamped, and the device stores them the same way,
+            scaling to device pixels only at the draw site), scale,
+            index of the object's first instruction, rotation in
+            degrees (the draw site
+            passes it to DrawSpriteScaled, logic.c:2382).
+        """
+        sx, sy = gfx.SCREEN_SX, gfx.SCREEN_SY
+        for scene in range(9):
+            name = 'MIDGAME.V%02d' % scene
+            if not self.has(name):
+                self.log('  scene %d: %s not installed' % (scene, name))
+                continue
+            pk = self.packet(name)
+            pri_used = set()
+            variants = [self._midgame_variant(name, pk, v, pri_used)
+                        for v in (0, 1)]
+            pri_frames = shape.decode_all(pk.section(0)) \
+                if pk.section(0) else []
+            pri_tbl, pri_pix, npri = self._pri_blob(pri_frames, pri_used,
+                                                    sx, sy)
+            fixed = 12 + npri * 8 + len(variants) * 32
+            out = bytearray(SCENE_MAGIC)
+            out += bytes([scene, len(variants)])
+            out += struct.pack('<H', npri)
+            pos = fixed
+            index = bytearray()
+            for v in variants:
+                v['obj_off'] = pos
+                v['ins_off'] = pos + len(v['recs'])
+                v['sectbl_off'] = v['ins_off'] + len(v['instrs'])
+                v['secpix_off'] = v['sectbl_off'] + len(v['sec_tbl'])
+                v['pkt_off'] = v['secpix_off'] + len(v['sec_pix'])
+                pos = v['pkt_off'] + v['pktlen']
+                index += struct.pack('<6H', v['per'], v['nanim'],
+                                     v['nobjs'], v['ninstrs'], v['nsec'],
+                                     v['pktlen'])
+                index += struct.pack('<5I', v['obj_off'], v['ins_off'],
+                                     v['sectbl_off'], v['secpix_off'],
+                                     v['pkt_off'])
+            out += struct.pack('<I', pos)           # pri_pix_off
+            out += pri_tbl
+            out += index
+            for v in variants:
+                out += v['recs'] + v['instrs'] + v['sec_tbl'] + \
+                    v['sec_pix'] + v['pkt']
+            out += pri_pix
+            size = self.write('mid%02d.wc' % scene, bytes(out))
+            self.log('  scene %d: pri %d sec %d/%d instr %d/%d pkt '
+                     '%d/%d %d bytes'
+                     % (scene, npri, variants[0]['nsec'],
+                        variants[1]['nsec'], variants[0]['ninstrs'],
+                        variants[1]['ninstrs'], variants[0]['pktlen'],
+                        variants[1]['pktlen'], size))
+
+    def convert_scramble(self):
+        """scr<NN>.wcs: the SCRAMBLE.VGA sections the hard-coded launch
+        and landing scenes draw (docs/06 6.2), at screen scale in the
+        same .wcs layout as the flight sprites."""
+        if not self.has('SCRAMBLE.VGA'):
+            self.log('  scramble: SCRAMBLE.VGA not installed')
+            return
+        pk = self.packet('SCRAMBLE.VGA')
+        for sec, label in sorted(SCRAMBLE_SECTIONS.items()):
+            if len(pk) <= sec:
+                self.log('  scramble %d (%s): no such section'
+                         % (sec, label))
+                continue
+            scaled = self.scaled_set(shape.decode_all(pk.section(sec)), 64)
+            name = 'scr%02d' % sec
+            size = gfx.write_sprite_set(self.path(name + '.wcs'),
+                                        scaled, 64)
+            self.total += size
+            self.save_preview(name, scaled)
+            self.log('  scr %d %-17s %2d frames res 64 %6d bytes'
+                     % (sec, label, len(scaled), size))
+
+    def convert_ck_scenes(self):
+        """cksc<N> ckint<N> ckbg<N> ckslide<N>.wcs: the cockpit pieces
+        the scramble, door, death and ejection scenes draw for player
+        ship N, from PCSHIP.V0N (docs/06 6.2)."""
+        for ship in range(4):
+            name = 'PCSHIP.V0%d' % ship
+            if not self.has(name):
+                self.log('  ck scenes %d: %s not installed' % (ship, name))
+                continue
+            pk = self.packet(name)
+            for sec, stem in sorted(CK_CUTSCENE_SECTIONS.items()):
+                if len(pk) <= sec:
+                    self.log('  ck %s%d: no section %d' % (stem, ship, sec))
+                    continue
+                scaled = self.scaled_set(
+                    shape.decode_all(pk.section(sec)), 64)
+                fname = '%s%d' % (stem, ship)
+                size = gfx.write_sprite_set(self.path(fname + '.wcs'),
+                                            scaled, 64)
+                self.total += size
+                self.save_preview(fname, scaled)
+                self.log('  ck %s%d sec %d %2d frames %6d bytes'
+                         % (stem, ship, sec, len(scaled), size))
+
+    def convert_pilotanm(self):
+        """pil<NN>.wcs: PILOTANM.VGA - the pilot's death face (section
+        0, screens.c:1710), the ejection seat (section 1, eject.c:50)
+        and the ejected pilot the chase projects (section 2,
+        eject.c:97-99), at screen scale."""
+        if not self.has('PILOTANM.VGA'):
+            self.log('  pilotanm: PILOTANM.VGA not installed')
+            return
+        pk = self.packet('PILOTANM.VGA')
+        for sec, label in sorted(PILOTANM_SECTIONS.items()):
+            if len(pk) <= sec:
+                self.log('  pilotanm %d (%s): no such section'
+                         % (sec, label))
+                continue
+            scaled = self.scaled_set(shape.decode_all(pk.section(sec)), 64)
+            name = 'pil%02d' % sec
+            size = gfx.write_sprite_set(self.path(name + '.wcs'),
+                                        scaled, 64)
+            self.total += size
+            self.save_preview(name, scaled)
+            self.log('  pil %d %-15s %2d frames res 64 %6d bytes'
+                     % (sec, label, len(scaled), size))
+
     def convert_sounds(self):
         """sfx_*.ima: the original has no sampled effects on a PC (its
         sound is AdLib / Roland music data), so the handful of cockpit
@@ -601,6 +1317,17 @@ class Converter:
                 self.log('  campaign %d: not installed' % c)
         self.convert_comm()
         self.convert_pictures()
+        self.log('heads:')
+        self.convert_heads()
+        self.convert_backdrops()
+        self.convert_overlay()
+        self.convert_intro_word()
+        self.log('scenes:')
+        self.convert_midgame()
+        self.log('scramble:')
+        self.convert_scramble()
+        self.convert_ck_scenes()
+        self.convert_pilotanm()
         self.convert_sounds()
         self.log('done: %d files, %.1f MB'
                  % (len([f for f in os.listdir(self.out)

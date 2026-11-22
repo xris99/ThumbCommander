@@ -434,3 +434,57 @@ PLAYER_DAMAGE_SYSTEMS = [
     1, 4, 1, 5, 2, 3, 4, 7, 2, 1,
     4, 4, 4, 4, 0, 8, 6, 5, 4, 0,
 ]
+
+
+# ---------------------------------------------------------------------------
+# Talking heads and cutscenes (wc1-re src/cmpgn.c, src/screens.c,
+# src/logic.c - GPL-3.0).
+# ---------------------------------------------------------------------------
+
+# asMouthFramesByPhoneme[26] - wc1-re src/cmpgn.c:12 (0x004655f0).
+# Character -> head<NN>.wc mouth patch index (frame mouthFrame + 1).
+MOUTH_FRAMES_BY_PHONEME = [
+    0, 5, 4, 4, 1, 8, 4, 7, 0, 4, 4, 7, 5,
+    4, 2, 5, 6, 4, 4, 4, 3, 4, 6, 4, 4, 4,
+]
+
+# aTalkingHeadOrigins[11] - wc1-re src/screens.c:16 (0x0046e190), each
+# (faceX, faceY, mouthX, mouthY) in 320x200 coordinates.
+TALKING_HEAD_ORIGINS = [
+    (161, 60, 161, 90),
+    (161, 60, 161, 87),
+    (160, 60, 159, 90),
+    (161, 60, 161, 90),
+    (161, 60, 161, 90),
+    (161, 60, 161, 90),
+    (161, 60, 161, 90),
+    (161, 60, 161, 90),
+    (161, 60, 161, 90),
+    (161, 60, 161, 90),
+    (160, 53, 160, 88),
+]
+
+# Secret Missions 2 faces 11/12 (Doomsday, Jazz) have no entry in
+# aTalkingHeadOrigins; the SDL port hardcodes them in LoadFace,
+# wc1-re src/cmpgn.c:281-284 (SM2.EXE 0x4a5db8/0x4a5dc0).
+SM2_HEAD_ORIGINS = {
+    11: (161, 60, 160, 90),
+    12: (160, 60, 160, 90),
+}
+
+# nConversationBackdropFrame = f(nConversationCharacter) from LoadFace,
+# wc1-re src/cmpgn.c:215-257 (0x4050B0). character -> backdrop shape
+# frame, per scene type (the shape the conversation uses):
+#   type 0 (briefing):     BRIEFING.VGA 0
+#   type 1 (debriefing):   BRIEFING.VGA 6
+#   type 2 (the bar):      RECROOM.VGA 1
+# Characters with no entry draw a black backdrop (the `default` branch).
+BACKDROP_BY_CHARACTER = {
+    0: 4, 1: 5, 2: 0, 3: 1, 4: 2, 8: 1, 9: 2,
+    10: 0, 11: 1, 12: 0, 13: 1,
+}
+
+# asSceneAnimationLogicalFiles[8] - wc1-re src/logic.c:97 (0x00469d60):
+# cutscene number -> logical file. Logical 63..66 are MIDGAME.V00..V03
+# (the four WC1 scenes, won and lost variants); SM2 uses the rest.
+SCENE_LOGICAL_FILES = [63, 64, 65, 66, 67, 68, 69, 70]

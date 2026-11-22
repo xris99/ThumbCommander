@@ -3,8 +3,10 @@
 This folder is the handover for whoever continues the port (a person or
 another model). It explains where the game comes from, how its data is
 read and converted, how the running game works, and - in most detail -
-the parts that are **not built yet**: talking heads, cutscenes, the
-radio, music and the original sound effects.
+the parts that are **not built yet**: the radio, music, the original
+sound effects, and the hard-coded scenes that have not been started
+(6.2: medals, funeral, office, bar, barracks, intro, credits,
+endings).
 
 Read `../README.md` first for what the game is and how to run it. Then:
 
@@ -30,9 +32,9 @@ Read `../README.md` first for what the game is and how to run it. Then:
 | Missions, campaign tree, scoring, promotions, medals (as text) | done, all 3 campaigns |
 | Flight model, weapons, damage, pilot AI, manoeuvres | done (see chapter 4 for what is simplified) |
 | 3-D view, cockpits, radar, displays | done |
-| Briefing / debriefing / bar conversations | **text only**; all branch tests work |
-| Talking heads, lip sync | not started - data and logic documented (chapter 5) |
-| Cutscenes (launch, landing, "Meanwhile...", medals, funeral, endings) | not started - documented (chapter 6) |
+| Briefing / debriefing / bar conversations | text plus **talking heads** with lip sync, eye animation and the close-up backdrops; all branch tests work |
+| "Meanwhile..." scripted cutscenes between series | done (chapter 6 6.1); every object position checked step by step against the original interpreter |
+| Hard-coded cutscenes | first group done: hangar run, deck, launch door, fly-off, landing, death, ejection and stranded (chapter 6 6.2); medals, funeral, office, bar, barracks, intro, credits and endings not started |
 | Radio | four orders and a landing request with made-up lines; original table is converted (`comm.wc`) but unused (chapter 7) |
 | Music | none - format, driver and game rules documented (chapters 8, 10) |
 | Sound effects | five synthesised placeholders; original records documented (chapter 9) |
@@ -85,7 +87,7 @@ out of the DOS binaries, this project did not.
 |---|---|
 | CPU | RP2350, two Cortex-M33 cores; the game raises the clock to 300 MHz (`engine.freq`) |
 | RAM | 520 KB total, of which 231 KB of MicroPython heap are free when the game starts (measured). The game's code takes about 80 KB of that, its fixed buffers 42 KB - see chapter 12 before planning any buffer |
-| Flash | 16 MB, shared by firmware, all games and their assets (this game's assets: about 3 MB) |
+| Flash | 16 MB, shared by firmware, all games and their assets (this game's assets: about 4.4 MB) |
 | Screen | 128 x 128, RGB565, `display.buffer` is a `bytearray` |
 | Sound | one PWM output (GPIO 23); the engine plays one IMA-ADPCM stream from a viper loop on core 1 |
 | Code | MicroPython about 1.27; `@micropython.viper` / `.native` allowed; `.mpy` built with `-march=armv7emsp` |

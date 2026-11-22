@@ -1,7 +1,12 @@
 # 6. Cutscenes
 
-Nothing in this chapter is implemented. The original has two kinds of
-cutscene, and they need different approaches:
+The scripted animations of 6.1 are implemented: the converter emits
+`mid<NN>.wc` blocks, `scene.py` plays them and `MainGame.meanwhile`
+runs them between series. Of the hard-coded scenes of 6.2 the first
+group is implemented - hangar run, deck, launch door, fly-off,
+landing, death, ejection and stranded, see 6.2's "The first group,
+implemented"; the rest are not started. The original has two kinds
+of cutscene, and they need different approaches:
 
 1. **Scripted animations** - the "Meanwhile..." scenes between series.
    Data-driven: objects with positions and a small bytecode, stored in
@@ -31,9 +36,12 @@ After the last mission of a series, `UpdateSeries` reads the series'
 `sequence` byte (2.7). Values 0-7 play `MIDGAME.V0<sequence>` with
 variant 0 if the series was won and 1 if it was lost; 0x40 and 0x41
 are the two hard-coded endings; 0xFF is nothing. WC1 uses scenes 0-3
-(series 2-11) [data]. `campaign.post_mission` already returns this as
-`out.sequence` and `out.series_failed`; `MainGame.ending` handles only
-0x40 / 0x41.
+(series 2-11) [data]. `campaign.post_mission` returns this as
+`out.sequence` and `out.series_failed`; `MainGame.mission` plays
+`scene.show` for every `out.sequence` 0-7 with variant
+`out.series_failed` (MainGame.py:379-384); `MainGame.ending` handles
+the two hard-coded endings 0x40 / 0x41 as text pages
+(MainGame.py:475-486).
 
 `ShowMeanwhileTransition(scene, variant)` [src]:
 
@@ -43,6 +51,13 @@ are the two hard-coded endings; 0xFF is nothing. WC1 uses scenes 0-3
 3. run `SceneDirector(6, ...)` on the scene packet (section
    `variant + 5`);
 4. fade to black, stop the music.
+
+`scene.show` (scene.py:604-659) implements this verbatim except for
+the music - the port has none yet. The word is the converted
+`meanwhile_128_62.COL.bin` held for `100 * 1000 // 60` ms
+(`WaitForSceneAdvance`), the director and interpreter run below it,
+and the fade is eight `wcgfx.dim_rows` passes over the picture rows
+followed by the black fill (6.3).
 
 The scene packet is an ordinary conversation (2.8) whose records use
 shots 50-59: play animation `shot - 50` with the record's text as a
@@ -113,16 +128,30 @@ Properties: `X`, `Y`, `R` rotation (wrapped to 0-359), `S` scale
 (clamped to 0x40-0x1FFF), `F` flip, `T` the object's delay.
 
 What the shipped data actually uses [data, all nine files, both
-variants]: commands `A B D E G L Q R W` only (never `J`, `P`, `X`);
-properties `X`, `Y` and `T` everywhere, `S` only in `MIDGAME.V02`,
-and rotation and flip **never**. A first interpreter can leave
-rotation and flip out and still play everything. Sizes range from
-1 animation of 7 objects to 9 animations of 11 objects per variant.
+variants, counted by replaying every object script through a
+simulation that mirrors the dispatch and label search byte for byte]:
+commands `A B D E G L Q R W` only, never `J`, `P`, `X`; properties
+`X`, `Y` and `T` everywhere, `S` only in `MIDGAME.V02` (value -10,
+shrinking sprites), `F` and `R` **never** - no script ever touches
+rotation or flip. The 27 `Q` goals are all on `X` (13) or `Y` (14);
+`W` waits 27 times; `R` copies 189 times, in scenes 0-3, 5 v0, 6 v0
+and 7 only, never in 4, 5 v1 or 8. The initial disk records still
+carry rotation and flip though: four records sit at 30 degrees, both
+variants of `MIDGAME.V02`, and they are layer-1 sprites that get
+drawn; thirteen records carry the flip bit 0x10 (`V02` v1, `V06` v0,
+`V08` v1) and forty a scale outside 0/256 (`V06`/`V08` only). So an
+interpreter cannot leave rotation and flip out - those records draw;
+the port passes them through `_coeffs` and `wcgfx.blit_rs`
+(scene.py:309-374). Sizes range from 1 animation of 7 objects
+(`MIDGAME.V04` v1) to 9 animations of 11 (`MIDGAME.V08` v0); 158 of
+the 671 records are layer-2 mirrors.
 
 ### One frame
 
-`PlaySceneAnimation(text, n, duration)` prints the subtitle (y = 160),
-binds each object's shape and script, then loops [src]:
+`PlaySceneAnimation(text, n, duration)` prints the subtitle (y = 160
+in the original's 200 rows; on the device the picture clips at row 78
+and the text starts at y = 79, scene.py:76-81), binds each object's
+shape and script, then loops [src]:
 
 ```
 every displayed frame:
@@ -185,41 +214,58 @@ until completion (or just sets the countdown to 0 when `W` is used).
 - Layer 1 (sprites): `.wcs` at screen scale (`res` 64). Sprites up to
   268 x 128 exist; at screen scale that is 107 x 61 = 6.5 KB, inside
   the cache's 8,000-byte buffers.
-- Scripts: re-emit as a compact fixed-size instruction list with
-  coordinates and deltas **pre-scaled** (x by 0.40, y by 0.48). Keep
-  fractional precision: a delta of -2 px per frame becomes -0.8, so
-  store positions and deltas as 8.8 fixed point.
+- Scripts: re-emit as a compact fixed-size instruction list, `<BBh`
+  four-byte instructions (`_compile_script`, wc1_convert.py:838-919).
+  Positions and deltas stay in the **original pixel space** and
+  integrate by integer addition exactly as the original does;
+  scaling to the device's 8.7 units happens only at the draw site
+  (`_x8` / `_y8`, scene.py:59-73). The earlier plan of pre-scaling
+  into 8.8 fixed point was dropped: goal tests and completion stay
+  exact integer comparisons like the original's, and the agreement
+  check confirms both interpreters finish on the same step.
 - Only scene 2 scales sprites (`AS`); `wcgfx.blit_rs` already draws a
   scaled sprite. Everything else is a plain blit with transparency.
 
-Storage, every frame at screen scale without compression [data,
-frame rectangles including transparent pixels]:
+Storage as converted (`mid<NN>.wc`, only the frames the scripts
+reference) [data, measured from the built assets]:
 
 | File | Frames | KB |
 |------|--------|----|
-| MIDGAME.V00 | 51 | 214 |
-| MIDGAME.V01 | 22 | 257 |
-| MIDGAME.V02 | 29 | 203 |
-| MIDGAME.V03 | 21 | 147 |
+| mid00.wc | 46 | 41 |
+| mid01.wc | 22 | 70 |
+| mid02.wc | 29 | 68 |
+| mid03.wc | 21 | 30 |
 
-About 0.8 MB for WC1's four scenes with both variants; converting
-only frames that scripts reference will reduce it.
+The four WC1 scenes take 0.2 MB with both variants. The five Secret
+Missions 2 files (mid04-08, unused by WC1) add about 0.7 MB more,
+the bulk being mid05 at 474 KB. (The old 51 frames / 214 KB figure
+for V00 and the 0.8 MB total estimated the cost of the *full* frame
+rectangles at screen scale without compression.)
 
-**Runtime** (`scene.py`, new):
+**Runtime** (`scene.py`) - implemented:
 
-- one `Obj`-like record per animation object in preallocated arrays;
+- one list of integers per object, built once per variant by
+  `load_variant` (scene.py:564-584); a cutscene run may allocate,
+  it is not the flight loop;
 - the interpreter loop above, driven by time: the original advances
   one step per displayed frame, 16 frames per second (62 ms, chapter
-  1.4) [src]. Run one script step every 62 ms by `time.ticks_ms()`
-  and draw after each step; with the engine at 20 or 30 fps that
-  needs no change to holds or deltas. If drawing a scene takes longer
-  than 62 ms, do the steps that are due and draw once;
+  1.4) [src]; the port runs one script step every `STEP_MS` = 62 ms
+  (scene.py:85) and draws after each step. If drawing runs longer
+  than 62 ms, the steps that became due execute without presenting
+  and only the last picture shows;
 - subtitles through the existing font code, below the picture;
-- A or B skips, as in the original.
+- `A` fast-forwards as in the original: `_skip` runs the scripts
+  without drawing, or zeroes the `W` countdown; `B` or `MENU` leaves
+  the whole scene (the director's skip break, screens.c:1461).
 
-**Check**: a script that renders every animation of every scene to
-PNG strips on the PC and compares object positions per step against a
-Python reference interpreter working on the *unscaled* data.
+**Check** - implemented as `tool/wc1_scene.py`: every object position
+of every animation of every variant is stepped side by side against
+`tool/wc1/refscene.py` running on the *unscaled* disk data; the draw
+entries must match and both interpreters must finish on the same step
+with the same `W` globals. All 18 variants pass: positions agree to
+the last (worst error 0.000 device pixels), draw positions within one
+pixel of the rounding at the draw site. `--preview` writes PNG strips
+of the distinct frames to `/tmp/wc1_scene_previews`.
 
 ## 6.2 Hard-coded scenes
 
@@ -304,6 +350,150 @@ four comments by the ship's damage level
 All of these exist as text pages or flashes today, so each scene can
 be added on its own, with the text page as the fallback when its
 asset file is missing.
+
+### The first group, implemented
+
+The first group of 6.2 is implemented: hangar run, climbing into the
+fighter on the deck, the launch canopy, the fly-off, landing, death,
+ejection and stranded. These are **not** the step-4 scripts of the
+porting plan: each scene is a verbatim port of its C function, with
+the original's coordinates, frame numbers and step counts transcribed
+into the Python module and every constant commented with its wc1-re
+symbol. One shared engine in `scramble.py`; the other modules are
+small:
+
+| Module | Ports |
+|--------|-------|
+| `scramble.py` | `PlayScrambleHangarScene` (`cutscene.c:281`), `AnimateScrambleWalk` (`:200`), `scramble` (`:620`), `landing` (`:801`), the actor machinery `DrawScrambleActor` (`:378`) / `ConfigureScrambleActor` (`:437`) and `DrawScrambleFrame` (`:456`); plus the shared helpers `_cx` / `_cy` / `_draw` / `_draws` / `_steps` the other modules use |
+| `launchseq.py` | `DrawLaunchDoorFrame` (`launch.c:55`), `LaunchPlayerShip` (`:103`), `ShowCarrierLaunchSequence` (`:164`) - phases A, B and C (A in `_approach`); `GetTransformedShapeBounds` (`gr.c:1311`) |
+| `deathseq.py` | `death_sequence` (`screens.c:1694`) |
+| `ejectseq.py` | `ejection_sequence` (`eject.c:32`: stages 1 and 2 plus the 3-D chase `_chase` (`:143-181`) - `view.c`'s scripted eye, `spc.c`'s camera cases, `geom.c`'s cull order and `flight.py`'s projection/`right_shape`/`dirv` mirrors) and `stranded_sequence` (`:202`); the stranding check `check_stranded` (`cockpt.c:3013`) with `any_enemy` (`logic.c:906`) and `distance_from_*` (`geom.c:687-703`) |
+
+Two draw bands, as in the original. Hangar, deck and landing draw
+into the conversation picture - `stSceneBuffer`, 320 x 128
+(`main.c:501-515`), on the device rows 16..77; door, fly-off, death
+and ejection fill the whole picture, the original's 320 x 200 space
+buffer dumped over the screen, on the device rows 16..111 with clip
+bottom 112. Original pixel positions map through the fixed point of
+3.1 (`_x8` / `_y8`, `scene.py:59-73`; `_cx` / `_cy` add the picture
+origin). One step per displayed frame at 62 ms, like 6.1: the
+original's `nFrameSkip` is 1 (`init.c:202`), so every pass renders
+and applies the deltas, and the port does the same. Any button breaks
+a sequence, as every original loop checks `bEscapePressedFlag` (e.g.
+`cutscene.c:274-275`). When a sprite file is missing the whole scene
+skips and the game behaves as it did before this chapter.
+
+Art, converted by `tool/wc1_convert.py`:
+
+- `scr<NN>.wcs` - SCRAMBLE.VGA sections 0-9: the hangar corridor and
+  stairs, the flight deck, the blast door (`scr07`, `launch.c:118-119`),
+  the Tiger's Claw and its deck crew (`scr08`, `scr04`), and the
+  landing view (`scr09`);
+- `pil00.wcs`, `pil01.wcs`, `pil02.wcs` - PILOTANM.VGA sections 0, 1
+  and 2: the pilot's death face, the ejection seat and the 13 frames
+  of the tumbling ejected pilot (`eject.c:97-99`);
+- `ckint<NN>.wcs`, `ckbg<NN>.wcs`, `ckslide<NN>.wcs` - PCSHIP.V0N
+  sections 0, 3 and 5: the cockpit interior, background and sliding
+  panels of the death and ejection scenes.
+
+The fly-off reuses the converted `sh<NN>.wcs` ship sets
+(`launch.c:196-197`); the canopy shows the flight cockpit's static art
+`ck<N>.wc`; the deck and landing canopy frames are the existing
+`cksc<N>.wcs` (PCSHIP section 8). The new scene art is about 0.39 MB
+altogether.
+
+Deliberately not ported, each noted in the module header so the scene
+can still be read against its C function: the scenes' music and sound
+effects (chapters 8 and 9); the death scene's 60-frame 3-D aftermath (`screens.c:1743-1756` - the
+flight has already shown the kill that killed you); the launch's
+animated cockpit instruments - `update_cockpit` (`cockpt.c:3151`)
+draws the scanner, readouts and pilot as dynamic overlays over the
+dumped space buffer, never the frame art; the device picture is the
+space buffer itself, so the door scene redraws the doors still
+approaching over a background the original clears on every pass
+(`RefreshCockpitStatus`, `main.c:2136-2142`, clears whenever
+`nFrameSkipCounter <= 1` - all cutscene loops set it to 1) - sections
+that have passed by are deleted, not painted over - and the
+instruments are absent (laying the static `ck<N>.wc` art over the
+doors was wrong: it clipped the tunnel into the small ck glass window
+and painted the dashboard across the parts passing by); the original's
+palette fades - the port dims with `wcgfx.dim_rows` and clears to
+black, as elsewhere; and `pIntroFont` - the stranded message uses the
+small `ui.text` font because the TITLE.VGA intro font is not converted
+yet (6.3 "Big text").
+
+The ejection's 3-D chase (`eject.c:143-181`) is ported in `ejectseq`
+as `_chase`: 201 pictures at 62 ms, the scripted camera driven by
+`view.c`'s parse/update/initialize trio (`EJECT_SCRIPT`: the eye
+hangs 600 m below the pilot for 70 passes, rides him for 80 more,
+then chases a point 700 m behind for the fly-by; mode 4 starts on
+pass 151 and the scripted view switches off with the script's -1
+entry), `spc.c`'s camera cases 10, 11 and 4, and the pilot and the
+dying fighter drawn through the flight's own projection - the culls
+follow `geom.c:1240-1299`'s order and `right_shape` and `dirv`
+mirror `flight.py`, so the tumbling pilot, the receding ship and its
+fireball come out as the flight renders them, depth-sorted far to
+near (`flight.py:386-402`). The deviations are noted in the `_chase`
+header: the live simulation stands still while the chase runs on
+local snapshots (it never moves `world.o[0]`, so the stranding check
+below reads the mission's own positions); velocities, the pilot's 5 m
+kick and the ship's rotation are scaled by 62/100 once at spawn so
+the scene keeps its 16 fps pacing; `init_ijk` resets the eye's basis
+to identity, so `eject.c:145-151`'s basis-swap lines are dead code
+the port skips; the pilot's class, radius and scale come from
+`types.wc` type 56 (DEBRIS class 6, radius 6, scale 512) and his
+tumble runs `pil02.wcs` one frame per pass with no `right_shape`, as
+the original's DEBRIS branch does; stars never respawn because the
+eye's pitch and yaw stay 0; the shock wave, the mission-ship state
+and the explosion sound (`ship.c:1373-1434`) are not ported, and a
+dying fighter shows exactly the one fireball `ship.c:1325-1360`
+builds (`spc.c:955-956`'s extra onboard explosions belong to
+capitals only); when the ship's counter runs out the original makes
+debris chunks (`spc.c:968-969`) and the port simply drops the ship
+from the scene.
+
+The fly-off's phase A (`launch.c:200-288`) is ported in `launchseq`
+as `_approach`: 100 pictures at 62 ms on the same `view.c`/`spc.c`
+machinery as the chase, but only its first half is exercised -
+`asCarrierLaunchViewData` (`launch.c:34-36`) holds no command 13 or
+14, so `parse_view_script` runs the script to its -1 entry inside
+`initialize_scripted_view` (`view.c:198-206`) and every pass takes
+`set_eye_direction_and_position`'s camera case 15 (`spc.c:458-464`).
+The fighter and the carrier edge are pinned at original-space screen
+positions instead of projected (the centre the original adds back at
+`winmain.c:95-96` is the fixed 160, 100), so the scene needs no
+transform engine: the fighter climbs and shrinks on the
+`launch.c:12-22` schedule, the carrier slides in from x = 520 with
+the deck line, and the star and dust backdrop streams past the
+scripted eye that free-flies along the carrier's right at twice the
+scripted velocity (case 15 and `launch.c:280-282` add the velocity to
+the position twice a pass, so the port doubles it and advances once).
+`MainGame.py:391` hands the flight's own world to `flyoff` so the eye
+can start on the carrier the player landed on (`launch.c:199-200`,
+`gameflow.c:363-364`); the selfplay call without a world and flights
+that ended without a carrier skip the approach and play the deck
+slide. Stars stand still while the dust streams - the eye neither
+pitches nor yaws, the chase's deviation.
+
+The scenes are hooked in `MainGame.py:361-401` in gameflow.c's order:
+before `fly()` the hangar run (gameflow.c:337), the deck climb-in
+(`:341`) and the closing canopy (`:354`); on `R_DEAD` the death
+sequence (`:401`); on `R_LANDED` the fly-off and then
+`landing(world.damage_level(), ship)` (`:362-369`); on `R_EJECTED` the
+ejection, the stranding check and, if the carrier was lost, the
+stranded message that ends the campaign (`:372-375`).
+`scramble.cleanup()` and `launchseq.cleanup()` let go of the sprite
+sets between flights.
+
+**Check** - `tool/wc1_selfplay.py` holds the pilot still while a scene
+plays: the PC emulation runs an engine tick inside every
+`display.update()` (`thumby_engine/pc`, `display/color.py:205-209`),
+so without the freeze every scene would advance the simulation a few
+frames early. It counts the picture and text pixels each scene draws
+(rows 16..111 and 79..111): landing must draw its damage comment text,
+the death and ejection faces must show, the stranded message must
+show. A full sortie passes; the run writes 40 screenshots to
+`build/wc1_selfplay/`.
 
 ## 6.3 Things the scenes rely on that the port lacks
 

@@ -270,7 +270,12 @@ The executable is not parsed. Tables that the game compiles in were
 copied from the wc1-re source into `tool/wc1/tables.py`: ship and
 weapon statistics, hardpoints, the 62-direction view tables, formation
 offsets, every AI table, pilot names and ranks, the player's damage
-table, conversation colours. Still to be copied when their features
-are built (all in wc1-re, with file names in the later chapters):
-talking-head origins, the phoneme table, cutscene coordinates, the
-sound-effect records, percussion maps, Kilrathi ace names.
+table, conversation colours, the talking-head origins and the
+phoneme table (`TALKING_HEAD_ORIGINS`, `SM2_HEAD_ORIGINS`,
+`MOUTH_FRAMES_BY_PHONEME`; chapter 5 plays them in `talk.py`).
+The hard-coded cutscene coordinates were transcribed straight into
+the scene modules instead: `scramble.py`, `launchseq.py`,
+`deathseq.py`, `ejectseq.py`, each constant commented with its
+wc1-re symbol. Still to be copied when their features are built (all
+in wc1-re, with file names in the later chapters): the sound-effect
+records, percussion maps, Kilrathi ace names.

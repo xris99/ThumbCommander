@@ -151,8 +151,9 @@ GAMES = {
         'entry': {'thumbycolor': 'main.py'},
         'modules': {
             'common': [GAME_ENTRY, 'MainGame.py', 'world.py', 'ai.py',
-                       'flight.py', 'talk.py', 'campaign.py', 'ui.py',
-                       'wcdata.py', 'wcgfx.py', 'wcmath.py', 'sky.py'],
+                       'flight.py', 'talk.py', 'scene.py', 'campaign.py',
+                       'ui.py', 'wcdata.py', 'wcgfx.py', 'wcmath.py',
+                       'sky.py'],
             'thumbycolor': ['manifest.txt', 'icon.bmp'],
         },
     },

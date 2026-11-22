@@ -86,7 +86,7 @@ unscaled data agrees with the device interpreter on every object's
 position at every step (scaled); screenshots of each animation's
 first and last frame are in `build/`.
 
-## 5. Launch and landing (6.2) - PC
+## 5. Launch and landing (6.2) - PC - done
 
 Transcribe `PlayScrambleHangarScene`, `scramble`, `LaunchPlayerShip`,
 `ShowCarrierLaunchSequence`, `landing` into scene scripts for the
@@ -97,9 +97,24 @@ Done when: a full `wc1_selfplay.py` sortie shows hangar -> deck ->
 launch before the flight and landing after it, each skippable, each
 falling back to today's behaviour when its asset file is missing.
 
+MET, with a different method: the scenes became direct verbatim ports
+of the C functions in `scramble.py` and `launchseq.py`, coordinates
+and frame lists transcribed and commented with their wc1-re symbols,
+instead of step-4 scripts (docs/06 6.2 "The first group,
+implemented"). A full `wc1_selfplay.py` sortie passes: hangar -> deck
+-> door before the flight, fly-off -> landing after it, each skippable
+and each skipping to the old text behaviour when its asset file is
+missing; the harness counts each scene's picture and text pixels.
+
 ## 6. Death, ejection, medals, funeral, office, intro, endings - PC
 
 Same method, lower priority, one function at a time (table in 6.2).
+
+Done for death, ejection and the stranded ending: verbatim ports of
+`death_sequence`, `ejection_sequence`, `stranded_sequence` and
+`check_stranded` in `deathseq.py` and `ejectseq.py` (docs/06 6.2).
+Medals, funeral, office, bar, barracks, intro and endings not
+started.
 
 ## 7. Sound: sequencer and driver (chapters 8, 10) - PC
 
@@ -140,7 +155,7 @@ a port of a named wc1-re function.
 | Free RAM is short | 63 KB free in flight, 88 KB in the menus (measured); heads need about 15 KB, music about 40 KB in its small variant | chapter 12.7 goes through each planned feature; 12.6 lists the levers |
 | viper FM may be too slow | decides the whole audio design | 10.9 before writing the synth; fallbacks in 10.10 |
 | Core 1 stalls during flash writes or collection | audible gaps | 10.9 (c); write files only in menus |
-| Flash budget | 16 MB shared; assets today 3 MB; all scene art at screen scale is about 2 MB more uncompressed | convert only frames that are used; halve animation frame counts |
+| Flash budget | 16 MB shared; assets today 4.4 MB; the scene art still unconverted is about 0.7 MB more uncompressed | convert only frames that are used; halve animation frame counts |
 | Descriptions of art not looked at | several "what the frames show" entries in 2.4 are inferred from code | export and view before converting |
 
 ## Conventions for whoever continues

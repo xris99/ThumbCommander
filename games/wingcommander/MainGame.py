@@ -14,6 +14,7 @@
 #   campaign.py  series tree, scoring, promotions, the saved game
 #   wcdata.py    asset loaders        wcgfx.py  pixel loops (viper)
 #   wcmath.py    integer 3-D math     ui.py     menus and text pages
+#   scene.py     cutscene interpreter ("Meanwhile..." between series)
 #
 # The game logic is derived from wc1-re and therefore GPL-3.0 (see
 # LICENSE.txt in this directory).
@@ -350,17 +351,59 @@ class Game:
             k = ui.menu(b'LAUNCH?', [b'Launch', b'Flight plan', b'Back'])
         if k != 0:
             return
+        # The hard scenes the original plays around the launch
+        # (gameflow.c:335-354): the walk through the hangar, the climb
+        # onto the deck, the blast doors parting past the cockpit. The
+        # ship is the type of the mission's player ship record
+        # (gameflow.c:338-340) - the same one init_ship assigns to the
+        # flight (world.py:465, 488).
+        ship = mis.ship(mis.player_ship)[0]
+        import scramble, launchseq
+        scramble.hangar()            # PlayScrambleHangarScene :337
+        scramble.deck(ship)          # scramble() :341
+        launchseq.door(ship)         # LaunchPlayerShip() :354
+        launchseq.cleanup()          # let go of the sets: the scenes
+                                     # after the flight load them again
         world, result = self.fly(mis)
         out = campaign.Outcome()
         out.result = result
         if result == W.R_ABORT:
             return
         if result == W.R_DEAD:
+            import deathseq
+            deathseq.death(ship)     # death_sequence (gameflow.c:401)
+            scramble.cleanup()
             ui.page(b'KILLED IN ACTION', [
                 b'Your ship was destroyed.', b'',
                 b'The mission can be flown again from the last saved '
                 b'game.'], ui.AMBER)
             return
+        if result == W.R_LANDED:
+            # gameflow.c:362-369: after landing comes the carrier
+            # fly-off, then the deck landing with the crew's look at
+            # the damage (calculate_damage_level is world.py:1019-1036)
+            # The fly-off's phase A - the 100-frame scripted approach
+            # (launch.c:200-288) that gameflow.c:363-364 runs on the
+            # object the player landed on - needs the live world for
+            # the carrier's frame, position and radius and the player's
+            # scale; without it flyoff plays the deck slide alone, as
+            # the selfplay harness calls it (wc1_selfplay.py:220).
+            launchseq.flyoff(ship, world)
+            scramble.landing(world.damage_level(), ship)
+        if result == W.R_EJECTED:
+            import ejectseq
+            # ejection_sequence (:372). The live world, the type table,
+            # the palette and the shared cache are what the 3-D chase
+            # (eject.c:143-181) needs: the ship snapshot, the pilot's
+            # class/radius/scale, the .wcs blits and the sprite sets.
+            # Without them eject is the sprite-only scene.
+            ejectseq.eject(ship, world, self.T, self.pal, CACHE)
+            if ejectseq.check_stranded(world):         # :373
+                ejectseq.stranded()                    # :374-375: the
+                scramble.cleanup()                     # campaign ends
+                return                                 # right here
+        scramble.cleanup()           # the scenes are done with the
+                                     # sprite sets
         world.cleanup_objectives()
         out.ejected = result == W.R_EJECTED
         campaign.post_mission(st, self.camp, world, out)
@@ -375,6 +418,12 @@ class Game:
         self.summary(out, mis)
         campaign.apply_awards(st, out)
         st.save()
+        # A finished series plays the scripted transition the original
+        # puts between series (pilot.cpp:36 ShowMeanwhileTransition).
+        # The campaign endings 0x40/0x41 are handled by ending().
+        if 0 <= out.sequence <= 7:
+            self.meanwhile(out.sequence, 1 if out.series_failed else 0,
+                           out, mis.series_name)
         if out.finished:
             self.ending(out)
 
@@ -452,6 +501,18 @@ class Game:
             ui.page(b'TRANSFER', [
                 b'You are reassigned. Your new fighter is the',
                 b'', SHIP_NAMES[st.ship if 0 <= st.ship < 4 else 0] + b'.'])
+
+    def meanwhile(self, sc, variant, out=None, series=None):
+        """The scripted cutscene between series (docs/06 6.1). The
+        interpreter and the mid<NN>.wc block are held only while it
+        runs, like a conversation."""
+        if not D.exists('mid%02d.wc' % sc):
+            return
+        import scene
+        scene.show(sc, variant, self.st, self.ai, out, series)
+        del scene
+        sys.modules.pop('scene', None)
+        collect()
 
     def ending(self, out):
         st = self.st

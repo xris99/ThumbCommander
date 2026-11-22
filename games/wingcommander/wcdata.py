@@ -408,3 +408,166 @@ def briefing_packet(campaign, series, mission):
         data = f.read(size)
     f.close()
     return data
+
+
+PIC_SIZE = 128 * 62              # one head base, one backdrop frame
+
+
+# --- talking heads -----------------------------------------------------------
+
+class Head:
+    """head<NN>.wc ('WCH1'): one conversation face (docs/05 5.6). The
+    base picture is w*h palette indices, 0 = transparent so the
+    backdrop shows around the head; the ten mouth and ten eye patches
+    are rectangles of the base with one expression composited in -
+    they were cut from the same scaled picture, so they line up
+    exactly. A zero patch draws nothing (TALKING1.VGA faces have only
+    nine eye frames).
+
+    Source: CloseTalk composes head frame 0 at (0, 0), the eye patch
+    for faceFrame + 11 at the face origin and the mouth patch for
+    mouthFrame + 1 at the mouth origin (wc1-re src/cmpgn.c)."""
+
+    def __init__(self, face):
+        d = load('head%02d.wc' % face)
+        self.w = d[6]
+        self.h = d[7]
+        self.mouth_rect = unpack_from('<4B', d, 8)
+        self.eye_rect = unpack_from('<4B', d, 12)
+        n = self.w * self.h
+        self.base = memoryview(d)[16:16 + n]
+        pos = 16 + n
+        mw = self.mouth_rect[2] * self.mouth_rect[3]
+        self.mouth = [memoryview(d)[pos + i * mw:pos + (i + 1) * mw]
+                      for i in range(10)]
+        pos += 10 * mw
+        ew = self.eye_rect[2] * self.eye_rect[3]
+        self.eye = [memoryview(d)[pos + i * ew:pos + (i + 1) * ew]
+                    for i in range(10)]
+
+
+# --- conversation backdrops --------------------------------------------------
+
+class Backdrops:
+    """bdrop.wc ('WBD1'): 128 x 62 indexed conversation backdrops.
+    Entries are keyed by scene type * 16 + conversation character -
+    the character to backdrop switch in LoadFace (wc1-re
+    src/cmpgn.c:215-257, tables.BACKDROP_BY_CHARACTER). kind 2 entries
+    have a star field baked in (flags bit 1). The bodies are
+    contiguous 7,936 byte frames; one seek reads the frame that is
+    being shown, so all fourteen never sit in RAM at once."""
+
+    SIZE = PIC_SIZE
+
+    def __init__(self):
+        f = open(A + 'bdrop.wc', 'rb')
+        if f.read(4) != b'WBD1':
+            raise ValueError('bdrop.wc is not WBD1')
+        self.n = f.read(1)[0]
+        self.table = f.read(self.n * 2)
+        self.base = 5 + self.n * 2
+        f.close()
+
+    def index(self, kind, char):
+        """Table entry for this scene type and character, -1 for none."""
+        k = kind * 16 + char
+        t = self.table
+        for i in range(self.n):
+            if t[2 * i] == k:
+                return i
+        return -1
+
+    def stars(self, i):
+        return self.table[2 * i + 1] & 1
+
+    def read(self, i, view):
+        f = open(A + 'bdrop.wc', 'rb')
+        f.seek(self.base + i * self.SIZE)
+        f.readinto(view)
+        f.close()
+
+
+# --- cutscenes ---------------------------------------------------------------
+
+class Scene:
+    """mid<NN>.wc ('WCG1'): one "Meanwhile" cutscene with its won and
+    lost variant (docs/06 6.1). The index - primary shape table and
+    the two variant tables - stays in RAM (a few hundred bytes); the
+    blocks of a variant (object records, instructions, shape table,
+    shape pixels, scene packet) are read once when an animation
+    starts, and single shape frames are read into a scratch buffer."""
+
+    OBJ_SIZE = 16                # '<BBiiHhh': layer, frame (the draw
+                                 # site uses it as flip bits), x and y
+                                 # in original-pixel i32 - scaled to
+                                 # the device's 8.7 units only at the
+                                 # draw site (scene.py _x8/_y8), so
+                                 # goal tests stay exact integers,
+                                 # scale, first instruction index,
+                                 # rotation in degrees
+
+    def __init__(self, scene):
+        self.name = 'mid%02d.wc' % scene
+        f = open(A + self.name, 'rb')
+        head = f.read(12)
+        if head[:4] != b'WCG1':
+            raise ValueError(self.name + ' is not WCG1')
+        self.scene = head[4]
+        self.nvar = head[5]
+        self.npri = unpack_from('<H', head, 6)[0]
+        self.pri_off = unpack_from('<I', head, 8)[0]
+        self.pri_tbl = bytes(f.read(self.npri * 8))
+        self.v = []
+        for _ in range(self.nvar):
+            d = f.read(32)
+            self.v.append((unpack_from('<6H', d, 0),
+                           unpack_from('<5I', d, 12)))
+        f.close()
+
+    def variant(self, v):
+        """((per, nanim, nobjs, ninstrs, nsec, pktlen),
+        (obj_off, ins_off, sectbl_off, secpix_off, pkt_off))."""
+        return self.v[v]
+
+    def block(self, off, n):
+        f = open(A + self.name, 'rb')
+        f.seek(off)
+        d = f.read(n)
+        f.close()
+        return d
+
+    def objects(self, v):
+        cnt, off = self.v[v]
+        return self.block(off[0], cnt[2] * self.OBJ_SIZE) if cnt[2] else b''
+
+    def instructions(self, v):
+        cnt, off = self.v[v]
+        return self.block(off[1], cnt[3] * 4) if cnt[3] else b''
+
+    def sec_table(self, v):
+        cnt, off = self.v[v]
+        return self.block(off[2], cnt[4] * 8) if cnt[4] else b''
+
+    def packet(self, v):
+        cnt, off = self.v[v]
+        return self.block(off[4], cnt[5]) if cnt[5] else b''
+
+    def frame(self, tbl, index, view, base):
+        """One '<IBBbb' entry of a shape table (pixel offsets relative
+        to base): (w, h, hot_x, hot_y), or None for an empty slot.
+        The indices land at the front of `view`."""
+        off, w, h, hx, hy = unpack_from('<IBBbb', tbl, index * 8)
+        n = w * h
+        if off == 0 or n == 0:
+            return None
+        f = open(A + self.name, 'rb')
+        f.seek(base + off)
+        f.readinto(view[0:n])
+        f.close()
+        return w, h, hx, hy
+
+    def pri_frame(self, index, view):
+        return self.frame(self.pri_tbl, index, view, self.pri_off)
+
+    def sec_frame(self, v, index, tbl, view):
+        return self.frame(tbl, index, view, self.v[v][1][3])
