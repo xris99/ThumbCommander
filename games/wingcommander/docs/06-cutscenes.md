@@ -455,7 +455,13 @@ dumped space buffer, never the frame art. Of these overlays only the
 pilot's hand on the flight stick is ported - `flight.draw_pilot_hand`
 composites `pil03.wcs` (PILOTANM.VGA section 3) over the flight
 cockpit, the grip fixed between the legs and the pose following the
-pitch and yaw keys (`cockpt.c:2634` `determine_pilot_hand`, `:2665`);
+pitch and yaw keys (`cockpt.c:2634` `determine_pilot_hand`, `:2665`) -
+together with `flight.draw_stick`, the device's own joystick under the
+hand: the original flight data carries no stick to draw (`logic.c:83`
+loads no stick shape - the cockpit art is only the legs and the seat
+cushion, and the hand moves over them), so the port draws a base plate
+on the cushion between the knees, a grey shaft and a red ball at the
+grip origin, bent by the same -9 .. 9 axes that pick the hand's pose;
 the scanner and readouts stay absent. The device picture is the
 space buffer itself, so the door scene redraws the doors still
 approaching over a background the original clears on every pass

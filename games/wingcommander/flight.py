@@ -85,6 +85,23 @@ HAND_SO = tuple((round(dx * 128 / 320), round(dy * 96 / 200))
                  (-1, -1), (-4, -1), (-6, -1), (6, 0), (8, 0), (10, 0),
                  (13, 3), (8, -7), (6, -9), (5, -11), (5, -14)))
 
+# The flight stick the hand grips. The original never draws one: its
+# cockpit art carries the legs and the seat cushion and the hand only
+# moves over them (logic.c:83 loads no stick shape). The device adds
+# one between the knees - a base on the cushion, a grey shaft and a
+# red ball at the grip origin - and the ball travels with the same
+# -9 .. 9 axes of controls() that pick the hand's pose.
+STICK_PIVOT = (59, 110)              # shaft foot, between the knees
+STICK_BASE = (56, 109, 7, 3)         # base plate, above the 112 bar
+STICK_TRAVEL = 3                     # px of knob travel at a full axis
+
+
+def stick_knob(st_x, st_y):
+    """Knob position of the device's stick: the grip origin bent by the
+    pitch and yaw axes, the same axes determine_pilot_hand reads."""
+    return (HAND_GX + tdiv(st_y * STICK_TRAVEL, 9),
+            HAND_GY - tdiv(st_x * STICK_TRAVEL, 9))
+
 
 def num(n):
     return str(n).encode()
@@ -557,7 +574,8 @@ class Flight:
         if self.cockpit is not None:
             G.blit_indexed(fb, self.pal, self.cockpit, 0, PIC_Y, 128, 96,
                            PIC_Y, PIC_Y + 96)
-            self.draw_pilot_hand(fb)       # the hand between the legs
+            self.draw_stick(fb)            # the stick between the knees
+            self.draw_pilot_hand(fb)       # the hand grips its knob
             k = self.ck
             self.draw_radar(k[4], PIC_Y + k[5], k[6], k[7])
             lx0 = k[8] + 1; ly0 = PIC_Y + k[9] + 1
@@ -700,6 +718,22 @@ class Flight:
                             HAND_GX + dx - self.sleeve_hx,
                             HAND_GY + dy - self.sleeve_hy,
                             self.sleeve_w, self.sleeve_h, x0, x1, y0, y1)
+
+    def draw_stick(self, fb):
+        """The joystick between the pilot's knees. The original flight
+        data holds no stick: PCSHIP section 4 is the pilot's damage
+        overlay and section 1 a cutaway for the scenes, so animate_pilot
+        just moves the hand over the baked seat. The device draws the
+        stick under the hand - base plate, shaft, red ball - and the
+        ball follows the pitch/yaw axes the hand pose reads from, so the
+        whole stick bends with the input. Drawn before the hand, which
+        then grips the ball; only display primitives, nothing allocated
+        while flying."""
+        kx, ky = stick_knob(self.st_x, self.st_y)
+        display.drawFilledRectangle(STICK_BASE[0], STICK_BASE[1],
+                                    STICK_BASE[2], STICK_BASE[3], DGREY)
+        display.drawLine(STICK_PIVOT[0], STICK_PIVOT[1], kx, ky, DGREY)
+        display.drawFilledRectangle(kx - 1, ky - 1, 3, 3, RED)
 
     def draw(self):
         self.draw_space()
