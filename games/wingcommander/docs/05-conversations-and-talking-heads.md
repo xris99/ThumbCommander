@@ -224,13 +224,16 @@ Two consequences of this exact code, worth copying rather than
 **Time base.** The loop does one pass per displayed frame; the
 reference port throttled those frames to 16 per second (62 ms,
 `ThrottleFrameAndDrawFps`, chapter 1.4) [src], while the game ran a
-turn per frame and a turn is 1/10 s (docs/04 4.4.1). The port holds
-them to the turn: one pass every 100 ms, so a tick of two passes is
-200 ms. `duration` stays in 1/60 s (`SetMultimediaTimerCallback`). On
-the ThumbyColor, drive both from `time.ticks_ms()`: one tick = 200 ms,
-`duration * 1000 // 60` ms after the line. With no speech, the mouth
-finishes long before a reader does, so also wait for a button, as
-`talk.py` does now.
+turn per frame and a turn is 1/10 s (docs/04 4.4.1). The port first
+held the passes to the turn, one every 100 ms and a tick of two
+passes at 200 ms, and that ran every head 1.6 times slower than the
+original looked (device report); the port now holds one pass to the
+throttle's 62 ms (`talk.STEP_MS`), so a tick of two passes is the
+original's 124 ms. `duration` stays in 1/60 s
+(`SetMultimediaTimerCallback`). On the ThumbyColor, drive both from
+`time.ticks_ms()`: one tick = 124 ms, `duration * 1000 // 60` ms
+after the line. With no speech, the mouth finishes long before a
+reader does, so also wait for a button, as `talk.py` does now.
 
 The podium shots reuse the mouth list without a head [src
 `CloseLook`]: shot 2 draws frame `mouth` of BRIEFING.VGA 2 at
@@ -318,7 +321,7 @@ version; the original animates PLANETS.VGA stars
    common and larger values occur. The longest lists in WC1 are 73
    mouth commands and 13 face commands [data].
 3. Implemented: `long_talk` (talk.py:560-645) steps both cursors by
-   elapsed time - one pass per 100 ms (`STEP_MS`, talk.py:30) - and
+   elapsed time - one pass per 62 ms (`STEP_MS`, talk.py:33) - and
    `close_talk` (talk.py:482-543) redraws the whole composite each
    pass: backdrop, head, eye patch, mouth patch, overlay. Redrawing
    only the changed rectangles was the first plan; full blits cost

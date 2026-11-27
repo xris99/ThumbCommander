@@ -98,9 +98,11 @@
 # - Continue Campaign has no path in the DOS title (menuOptions[2] stays
 #   -1 so the C key is dead, title.c:432-434); the port offers it when a
 #   save exists and loads it, which main.c's switch (no case 1) cannot.
-# - The world runs one turn per picture frame at the turn's own
-#   length, 100 ms (docs/04 4.4.1), the original's nFrameSkip = 1
-#   pace, drawing after each turn.
+# - The world runs one turn per rendered frame on the throttle's
+#   62 ms pass (docs/04 1.4), the original's nFrameSkip = 1 pace,
+#   drawing after each frame; the 10 Hz tick presents ten of them a
+#   second, a frame due inside a spent tick never reaching the screen
+#   (6.1's flicker fix).
 # - Music and sound (title.c's hooks) are not ported.
 # - The harness wants a shot of the sphere-entry explosions, so phase D
 #   is held for four drawn turns after the entry before the credits
@@ -1127,14 +1129,17 @@ def _logo(fb, distance, y):
 # come from the renderer pass (main.c).
 def _pace(t0, n):
     """Wait until the n-th rendered frame is due, one frame every
-    S.STEP_MS - the game turn, 100 ms, presenting the buffer through
-    the wait. The original ran the title one game turn per rendered
-    frame (nFrameSkip = 1); a turn is 1/10 s (docs/04 4.4.1), so the
-    title's 1595 frames land close on the title music's 165 seconds
-    (docs/08-music.md, track 23) - the rate every scene outside flight
-    keeps here. titleseq.title holds the engine tick at that same rate
-    for the cinematic, so one wait is one tick and the picture on the
-    screen is re-blitted once per turn, not twice or thrice as at the
+    S.STEP_MS - the throttle's 62 ms pass, presenting the buffer
+    through the wait. The original ran the title one pass per rendered
+    frame at its throttle of 16 a second (docs/04 1.4, nFrameSkip = 1)
+    - the rate every scene outside flight keeps here, so the title's
+    1595 frames span the original's own 99 seconds. titleseq.title
+    holds the engine tick at 10 Hz for the cinematic (the flicker
+    fix), slower than the step's grid: the wait ends at the tick after
+    its deadline, and a frame that comes due inside a tick already
+    spent never gets its own blit - the last picture drawn is what the
+    screen shows. The title presents ten pictures a second and every
+    still is pushed once per tick, not twice or thrice as at the
     menu's 20 Hz."""
     while ticks_diff(ticks_ms(), t0) < n * S.STEP_MS:
         display.update()
@@ -2336,12 +2341,19 @@ def title(has_save, T, cache, txt, ai=None):
     # the buffer again (color.py:204-211). The panel scans that buffer
     # by DMA while the blit rewrites it, and the race between the two
     # is the flicker the device reported on the title. The cinematic
-    # paints one picture per game turn (S.STEP_MS, 10 a second), so
-    # the tick is set to the turn's own rate for the sequence: a still
-    # picture is pushed once, not twice extra per turn as at the 20 Hz
-    # it came in with, and the period is a whole number of ms as
-    # flight.py:44-47 requires. The menu keeps its 20 Hz - its button
-    # loop would read a press up to 100 ms late at 10.
+    # asks for a picture every S.STEP_MS = 62 ms; the menu's 20 Hz
+    # tick, 50 ms, is quicker than that grid and would blit the same
+    # still picture two or three times per step, and every re-blit
+    # races the panel's DMA scan. So the tick is held to 10 Hz through
+    # the sequence: every wait ends at the tick after its deadline,
+    # frames due inside a tick already spent are never blitted, only
+    # the last picture drawn reaches the screen, and a still is pushed
+    # exactly once per tick. The period stays a whole number of ms as
+    # flight.py:44-47 requires. Across the 62 ms schedule the title
+    # now spans the original's own 99 seconds - the old 100 ms mapping
+    # had run it at two and a half minutes, 1.6 times slow (device
+    # report). The menu keeps its 20 Hz - its button loop would read a
+    # press up to 100 ms late at 10.
     display.setFPS(10)
     fb = display.buffer
     _cinematic(fb)                       # False when the player skips;

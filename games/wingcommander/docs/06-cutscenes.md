@@ -253,17 +253,19 @@ rectangles at screen scale without compression.)
   advances one step per displayed frame at its throttle's 16 fps
   (62 ms, chapter 1.4) [src]; the game itself ran one turn per frame
   and a turn is 1/10 s (docs/04 4.4.1). The port holds every step
-  outside flight to that turn: one script step every `STEP_MS` = 100
-  ms (scene.py:86) drawn after it. If drawing runs past 100 ms, the
-  steps that became due execute without presenting and only the last
-  picture shows;
+  outside flight to that throttle: one script step every `STEP_MS` =
+  62 ms (scene.py:88, scramble.py:48, talk.py:33) drawn after it;
+  holding them to the turn's 100 ms instead ran heads, launch and
+  landing 1.6 times slow (device report). If drawing runs past 62 ms,
+  the steps that became due execute without presenting and only the
+  last picture shows;
 - the engine tick, not the turn, is the push rate: every wait loop
   calls `display.update`, and each call spins to the next tick and
   blits the buffer again (`color.py:204-211`). The panel scans that
   buffer by DMA while the blit rewrites it, and racing those re-blits
   of a still picture shows as flicker - the device report on the
   title. The two cinematics set the tick to their picture's own rate
-  while they run (`titleseq.title`: 10 Hz for the turn; `Game.intro`:
+  while they run (`titleseq.title`: 10 Hz for the picture; `Game.intro`:
   10 Hz against the intro's 140 ms pace, `introfx.py:62`), and hand
   the menu back the 20 Hz it polls its buttons at. Flight keeps its
   25 (`flight.PICTURES`, docs/04 4.4.1);
@@ -397,8 +399,9 @@ and ejection fill the whole picture, the original's 320 x 200 space
 buffer dumped over the screen, on the device rows 16..111 with clip
 bottom 112. Original pixel positions map through the fixed point of
 3.1 (`_x8` / `_y8`, `scene.py:59-73`; `_cx` / `_cy` add the picture
-origin). One step per displayed frame, held to the turn's 100 ms like
-6.1: the original's `nFrameSkip` is 1 (`init.c:202`), so every pass
+origin). One step per displayed frame, held to the throttle's 62 ms
+like 6.1: the original's `nFrameSkip` is 1 (`init.c:202`), so every
+pass
 renders and applies the deltas, and the port does the same. Any button
 breaks
 a sequence, as every original loop checks `bEscapePressedFlag` (e.g.
@@ -477,7 +480,7 @@ small `ui.text` font, ported before the intro font became `ti1.wcs`
 and kept so (6.3 "Big text").
 
 The ejection's 3-D chase (`eject.c:143-181`) is ported in `ejectseq`
-as `_chase`: 201 pictures at the turn's 100 ms, the camera driven
+as `_chase`: 201 pictures at the throttle's 62 ms, the camera driven
 by `view.c`'s parse/update/initialize trio (`EJECT_SCRIPT`: the eye
 hangs 600 m below the pilot for 70 passes, rides him for 80 more,
 then chases a point 700 m behind for the fly-by; mode 4 starts on
@@ -491,8 +494,9 @@ near (`flight.py:386-402`). The deviations are noted in the `_chase`
 header: the live simulation stands still while the chase runs on
 local snapshots (it never moves `world.o[0]`, so the stranding check
 below reads the mission's own positions); velocities, the pilot's 5 m
-kick and the ship's rotation are per-turn numbers, unscaled, since
-the chase's pass is the turn's 100 ms (`PASS_MS` = `TURN_MS`);
+kick and the ship's rotation are per-turn numbers scaled by
+`PASS_MS` / `TURN_MS` - the pass is the throttle's 62 ms while the
+turn stays 100 - so the chase keeps the flight's own speed;
 `init_ijk` resets the eye's basis
 to identity, so `eject.c:145-151`'s basis-swap lines are dead code
 the port skips; the pilot's class, radius and scale come from
@@ -508,7 +512,7 @@ debris chunks (`spc.c:968-969`) and the port simply drops the ship
 from the scene.
 
 The fly-off's phase A (`launch.c:200-288`) is ported in `launchseq`
-as `_approach`: 100 pictures at 100 ms on the same `view.c`/`spc.c`
+as `_approach`: 100 pictures at 62 ms on the same `view.c`/`spc.c`
 machinery as the chase, but only its first half is exercised -
 `asCarrierLaunchViewData` (`launch.c:34-36`) holds no command 13 or
 14, so `parse_view_script` runs the script to its -1 entry inside
@@ -587,16 +591,23 @@ of plain flight (`:221`), 100 of the logo zoom with the distance
 stepping -4 after each draw while it is above 16 (`:225`,
 `:235-236`), eleven credit blocks of 70 drawn frames plus 40 of
 rendering (`:257`, `:275`, `nIntroCreditCount` 11 at `:22`) and 150
-to close (`:289`) - 1595 frames at the turn's 100 ms, two and a half
-minutes, close on the title music's 165 s (docs/08-music.md, track
-23). Every rendered frame waits for its boundary there (`_pace`,
-`titleseq.py`), the clock every scene outside flight runs on: with
-`nFrameSkipCounter` pinned to 1 (`:189`) every pass is a turn and a
-picture, so the cinematic draws a picture every 100 ms, ten turns a
-second (docs/04 4.4.1). The FX opening with the flyby and logo spans
+to close (`:289`) - 1595 frames on the throttle's 62 ms pass, the
+original's own 99 seconds, about a minute and a half; the title
+music, 165 s (docs/08-music.md, track 23), is not ported and in the
+original it carried on into the menu. Every rendered frame waits for
+its boundary there (`_pace`, `titleseq.py`), the step clock the
+scenes outside flight run on; in the original every pass is a turn
+and a picture (`nFrameSkipCounter` pinned to 1 at `:189`). On the
+device the title's tick, 10 Hz for the flicker fix, is slower than
+that step, so a frame due inside a tick already spent leaves its
+picture never blitted and only the last one drawn reaches the
+screen: ten pictures a second across the 62 ms schedule. Before the
+step fix this cinematic had run two and a half minutes, 1.6 times
+slow (device report). The FX opening with the flyby and logo spans
 the Origin FX music's 25 s (docs/08 cue 19; the original measured at
-about 24): its ~177 pictures at `FX_MS` = 140 ms; the menu comes up a
-little over three minutes after the program boots. The logo draws its
+about 24): its ~177 pictures at `FX_MS` = 140 ms, a constant of the
+intro's own that the step fix does not touch; the menu comes up
+about two minutes after the program boots. The logo draws its
 three `ti0.wcs` tiles with the original's
 scale (`0x1000 / distance`, `:85`) and the `ti0geo.wc` sidecar's
 original-pixel anchors, keeping the one-pixel left-seam overlap of
@@ -712,5 +723,6 @@ the fade to black mirrors 6.3's dim and fill.
 - **Timing.** The reference port's scene code counts frames of its
   throttle's 62 ms and 1/60 s timer ticks (1.4 in chapter 1); the
   game's own pace was the turn, 1/10 s (docs/04 4.4.1). Keep the frame
-  counts as they are and run the steps by the clock, 100 ms outside
-  flight.
+  counts as they are and run the steps by the clock, the throttle's
+  62 ms outside flight - the turn's 100 ms played the scenes 1.6
+  times slow (device report).

@@ -25,10 +25,12 @@ FACES = (b'Col. Halcyon', None, None, None, None, None, None, None, None,
 PHONEME = bytes((0, 5, 4, 4, 1, 8, 4, 7, 0, 4, 4, 7, 5,
                  4, 2, 5, 6, 4, 4, 4, 3, 4, 6, 4, 4, 4))
 
-# one pass of LongTalk's loop is one displayed frame; outside flight a
-# frame is the original's game turn, 1/10 s (docs/04 4.4.1, ten turns a
-# second - docs/05 5.5)
-STEP_MS = 100
+# one pass of LongTalk's loop is one displayed frame; the original ran
+# a pass per displayed frame and the reference port throttled those
+# frames to 16 per second, 62 ms (docs/04 1.4). The pass keeps that
+# throttle - the turn's 100 ms animated every head 1.6 times slower
+# than the original (device report).
+STEP_MS = 62
 
 # both command lists end with one -1 (wc1-re src/cmpgn.c:60, 97)
 END = pack('<h', -1)
@@ -628,7 +630,7 @@ class Talk:
         branches of the SDL port - no voices are ported, so the mouth
         always follows its script (cmpgn.c:314-323 are skipped). Two
         cursors step over the (frame, ticks) pairs, one pass per displayed
-        frame; outside flight that is the game turn, 100 ms (STEP_MS).
+        frame; outside flight that is the throttle's 62 ms pass (STEP_MS).
         Returns
         ('done', None) when the line ended on its own and ('key', button)
         when the player ended it.

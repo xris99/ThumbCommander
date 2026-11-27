@@ -19,9 +19,10 @@
 # MIDGAME scenes use. Original pixel positions map through _x8 / _y8
 # (scene.py:59-73, reused here) and the hot spot lands at the object's
 # position exactly like _Drawer does (scene.py:342-398). One step per
-# displayed frame, held to the original's game turn: 100 ms, ten turns
-# a second (docs/04 4.4.1) - the speed flight.py's 'original' option
-# flies at; the original
+# displayed frame, held to the reference port's dib throttle: 62 ms,
+# sixteen a second (docs/04 1.4); the original's own game turn of
+# 100 ms is what the port used first, and it ran every sequence 1.6
+# times slower than the original looked (device report). The original
 # counts frames of nFrameSkip = 1 (init.c:202), so every loop pass
 # renders and every pass applies the position deltas - the port does
 # the same. Any button breaks a sequence, as every loop checks
@@ -40,7 +41,12 @@ import wcmath as M
 
 PIC_Y0 = 16
 PIC_Y1 = 78
-STEP_MS = 100
+# one script step per displayed frame at the reference port's throttle
+# of 16 per second, 62 ms (docs/04 1.4): launch, landing and every
+# cutscene step pulled from here run at the original's rate, presented
+# on the engine tick. The former 100 ms turn played them 1.6 times
+# slow.
+STEP_MS = 62
 VIEW_N = 128 * 96            # scratch: the biggest converted piece
 
 

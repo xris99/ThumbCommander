@@ -57,8 +57,9 @@
 # no shock wave, no mission state, the rest of the world frozen and
 # undrawn (the chase never touches the live world, so the stranding
 # check at MainGame.py:583 stays correct), per-pass velocities instead
-# of per-turn ones - with the pass now held to the turn's 100 ms
-#(PASS_MS = TURN_MS), they are the per-turn numbers themselves, and
+# of per-turn ones - the pass is the throttle's 62 ms while the turn
+# stays 100, so the per-turn numbers are scaled by PASS_MS / TURN_MS
+# in _per_pass below, and
 # the star field that cannot respawn while the eye neither pitches nor
 # yaws.
 
@@ -130,10 +131,12 @@ CHASE_GAP = 700
 # case 4 closes the gap at 1/25 of it per pass (spc.c:233 divide_vector
 # by (25 << 8))
 GAP_DIV = 25 * 256
-# velocity conversion: one chase pass is S.STEP_MS ms, one flight turn
-# is 100 ms (flight.TURN_MS); outside flight a pass is the turn itself,
-# so metres-per-turn are metres-per-pass unchanged
-PASS_MS = 100
+# velocity conversion: one chase pass is S.STEP_MS ms, the throttle's
+# 62 (scramble.py:43), one flight turn is the turn's 100 ms; metres-
+# per-turn become metres-per-pass by the ratio PASS_MS / TURN_MS, so
+# the chase keeps the flight's own speed while presenting at the
+# faster rate. TURN_MS stays the flight's turn.
+PASS_MS = 62
 TURN_MS = 100
 
 # --- the flight, mirrored -------------------------------------------------
@@ -157,7 +160,7 @@ def _tdiv(a, b):        # flight.py:93-95: C division, truncates toward
 
 def _per_pass(v):
     """One flight velocity (Q8 metres per turn) as metres per pass:
-    v * PASS_MS / TURN_MS with both now the turn's 100 ms, truncated
+    v * PASS_MS / TURN_MS - 62 against the turn's 100 - truncated
     away from zero like the original's DivideFixed."""
     return _tdiv(v * PASS_MS, TURN_MS)
 
@@ -903,8 +906,8 @@ def _chase(ship, world, T, pal, cache, pss):
 
 def _rot_step(ob):
     """rotate_object (world.py:1247-1255) at the chase's pass scale:
-    the pass is the turn's 100 ms now, so _per_pass is the identity
-    and the spin runs at the flight's rate exactly."""
+    the pass is the throttle's 62 ms, so _per_pass scales the spin to
+    it and the spin still runs at the flight's rate exactly."""
     m = ob.m
     if ob.rp:
         M.pitch(m, _per_pass(ob.rp))
@@ -1074,7 +1077,7 @@ def stranded():
     esc = False
     drawn = 0
     pic0 = S.PIC_Y0 if S is not None else 16    # scramble.py:41
-    step = S.STEP_MS if S is not None else 100  # scramble.py:43
+    step = S.STEP_MS if S is not None else 62   # scramble.py:48
     for frame in range(400):                    # eject.c:210, 226
         if drawn == 0 and frame >= 160:         # :216-218
             ui.text.centre(fb, STRANDED_LINES[0], STRANDED_ROWS[0],
