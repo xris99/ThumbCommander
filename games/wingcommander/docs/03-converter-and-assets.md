@@ -47,6 +47,13 @@ pixel, and returns the scaled hot spot. Sprites that must line up with
 each other after scaling (overlays on a head, tiles of a background)
 need more care - see 5.6.
 
+Area averaging dilutes sparse frames: the hot-spot padding can
+surround a one-pixel dot with transparent cells, and its output
+coverage then falls below quantize's alpha cut of 0.42 - the dot turns
+transparent and is trimmed away. `gfx.scale_frame` takes a
+`threshold` argument for that; `con.wcs` uses 0.05 so the funeral
+constellation's dots survive with their true source colours.
+
 One exception: the scene interpreter (6.1) keeps object positions and
 deltas in original pixels and applies the two factors only at the
 draw site, so goal tests stay exact integer comparisons in the space
@@ -63,7 +70,9 @@ All little-endian. Loaders are in `wcdata.py`.
 | `ai.wc` | `tables.*` | `'WCA1'`, manoeuvre tables for 13 named pilots and 5 Kilrathi levels, aggression / recovery / turn interval, formations, gun delays, conversation colours, pilot roster, rank and medal names, player damage table |
 | `sh<NN>.wcs` | SHIPTYPE / SHIP .Vnn | sprite set, 37 views |
 | `scr<NN>.wcs` | SCRAMBLE.VGA 0-9 | sprite set, the hard-coded cutscene art (6.2) |
-| `pil<NN>.wcs` | PILOTANM.VGA 0-1 | sprite set, the pilot faces and the ejection seat (6.2) |
+| `pil<NN>.wcs` | PILOTANM.VGA 0-3 | sprite set, the pilot faces, the ejection seat, the ejected pilot and the hand on the flight stick the cockpit animates (6.2) |
+| `fun.wcs` | BRIEFING.VGA 9 | sprite set, the funeral composites: flag bearer, guard and rifle poses, casket, volley sparks, foreground trees, the talking-head overlays (6.2) |
+| `con.wcs` | PLANETS.VGA 0 | sprite set, the funeral's 38 constellation particles and stars, one to four pixels each (6.2; threshold per 3.1) |
 | `ms.wcs`, `fx<NN>.wcs`, `hud.wcs` | SHIPTYPE.V29, OBJECTS.VGA, COCKPIT.VGA 0 | sprite sets |
 | `ck<N>.wc` | PCSHIP.V0N sections 0 and 6 | `'WCK1'`, view window, radar, two display rectangles (u8 each, already scaled), then 128x96 palette indices, 0 = see-through |
 | `cksc<NN>.wcs` | PCSHIP.V0N section 8 | sprite set, the fighter's canopy as seen from the flight deck and at landing (`scramble`, `landing`; 6.2) |
@@ -107,14 +116,16 @@ returns 0 for an opaque pixel.
 Talking heads with their close-up backdrops (`head<NN>.wc`,
 `bdrop.wc`), the scripted "Meanwhile" scenes (`mid<NN>.wc`) and the
 first group of hard-coded scenes (SCRAMBLE.VGA 0-9, PILOTANM.VGA 0-1
-and the PCSHIP cockpit panels, 6.2) are converted already; what is
+and the PCSHIP cockpit panels, 6.2) and, following them, the funeral
+art (`fun.wcs`, `con.wcs`) and the title's logo and bars (`ti0.wcs`,
+`ti4.wcs`) are converted already; what is
 left is:
 
 | Needed for | Source | Suggested output | Chapter |
 |-----------|--------|------------------|---------|
 | briefing-room shots, medals, office | BRIEFING.VGA 1-5, 7-10 | sprite sets + a table of positions | 5, 6 |
 | bar seats and pilots, barracks | RECROOM.VGA 3-11, 12 | sprite sets | 5, 6 |
-| intro, credits, endings | TITLE.VGA 0-5, OBJECTS.VGA 14 | sprite sets | 6 |
+| endings and the big text | TITLE.VGA 1-3, 5, 17, OBJECTS.VGA 14 | sprite sets | 6 |
 | radio portraits | WINGMEN.VGA | one small sprite set | 7 |
 | music | MUSIC.MID, WINGLDR.TIM 1 | compiled songs + timbre bank | 8, 10 |
 | sound effects | records from wc1-re | a table next to the timbres | 9 |
@@ -146,17 +157,20 @@ left is:
 ## 3.5 Size budget so far
 
 Measured in the built `assets/` folder, previews excluded: **about
-4.4 MB** for three campaigns with talking heads, the scripted scenes
-and the first group of hard-coded scenes included. Ship sprites
-1.2 MB, mission and campaign records 0.7 MB, briefing packets 0.6 MB,
-the thirteen heads 192 KB, `bdrop.wc` 109 KB, the four WC1
-"Meanwhile" files 0.2 MB, the five SM2 scene files 0.7 MB, the
-first-group cutscene art 0.37 MB (`scr` 181 KB, `pil` 82 KB, the
-cockpit panels 113 KB), the rest about 0.3 MB. Still to be added, at
-screen scale and without compression: radio portraits under 50 KB;
-the songs 207 KB and the timbre bank 4 KB (8.1, 8.2); the scene art
-still unconverted about 0.7 MB (BRIEFING.VGA 297 KB, RECROOM.VGA
-98 KB, TITLE.VGA 349 KB - the screen-scale figures of 6.2).
+4.6 MB** for three campaigns with talking heads, the scripted scenes
+and the hard-coded scenes done so far, the funeral and the title
+included. Ship sprites 1.2 MB, mission and campaign records 0.7 MB,
+briefing packets 0.6 MB, the thirteen heads 192 KB, `bdrop.wc`
+109 KB, the four WC1 "Meanwhile" files 0.2 MB, the five SM2 scene
+files 0.7 MB, the first-group cutscene art 0.37 MB (`scr` 181 KB,
+`pil` 82 KB, the cockpit panels 113 KB), `fun.wcs` 22 KB and the
+title's `ti0.wcs`/`ti4.wcs` 12 KB, the rest about 0.3 MB. Still to
+be added, at screen scale and without compression: radio portraits
+under 50 KB; the songs 207 KB and the timbre bank 4 KB (8.1, 8.2);
+the BRIEFING.VGA and RECROOM.VGA scene art about 0.4 MB (297 KB and
+98 KB at screen scale, 6.2) plus whatever of TITLE.VGA the endings
+still need - 349 KB was the whole-file figure, and its logo and menu
+sections are converted now.
 
 ## 3.6 Deployment
 

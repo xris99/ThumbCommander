@@ -5,7 +5,9 @@ The scripted animations of 6.1 are implemented: the converter emits
 runs them between series. Of the hard-coded scenes of 6.2 the first
 group is implemented - hangar run, deck, launch door, fly-off,
 landing, death, ejection and stranded, see 6.2's "The first group,
-implemented"; the rest are not started. The original has two kinds
+implemented", and the opening cinematic and title menu too (6.2 "The
+intro and the title, implemented"); the rest - medals, office, bar,
+barracks and endings - are not started. The original has two kinds
 of cutscene, and they need different approaches:
 
 1. **Scripted animations** - the "Meanwhile..." scenes between series.
@@ -39,9 +41,9 @@ are the two hard-coded endings; 0xFF is nothing. WC1 uses scenes 0-3
 (series 2-11) [data]. `campaign.post_mission` returns this as
 `out.sequence` and `out.series_failed`; `MainGame.mission` plays
 `scene.show` for every `out.sequence` 0-7 with variant
-`out.series_failed` (MainGame.py:379-384); `MainGame.ending` handles
+`out.series_failed` (MainGame.py:582-584); `MainGame.ending` handles
 the two hard-coded endings 0x40 / 0x41 as text pages
-(MainGame.py:475-486).
+(MainGame.py:705-718).
 
 `ShowMeanwhileTransition(scene, variant)` [src]:
 
@@ -247,12 +249,24 @@ rectangles at screen scale without compression.)
 - one list of integers per object, built once per variant by
   `load_variant` (scene.py:564-584); a cutscene run may allocate,
   it is not the flight loop;
-- the interpreter loop above, driven by time: the original advances
-  one step per displayed frame, 16 frames per second (62 ms, chapter
-  1.4) [src]; the port runs one script step every `STEP_MS` = 62 ms
-  (scene.py:85) and draws after each step. If drawing runs longer
-  than 62 ms, the steps that became due execute without presenting
-  and only the last picture shows;
+- the interpreter loop above, driven by time: the reference port
+  advances one step per displayed frame at its throttle's 16 fps
+  (62 ms, chapter 1.4) [src]; the game itself ran one turn per frame
+  and a turn is 1/10 s (docs/04 4.4.1). The port holds every step
+  outside flight to that turn: one script step every `STEP_MS` = 100
+  ms (scene.py:86) drawn after it. If drawing runs past 100 ms, the
+  steps that became due execute without presenting and only the last
+  picture shows;
+- the engine tick, not the turn, is the push rate: every wait loop
+  calls `display.update`, and each call spins to the next tick and
+  blits the buffer again (`color.py:204-211`). The panel scans that
+  buffer by DMA while the blit rewrites it, and racing those re-blits
+  of a still picture shows as flicker - the device report on the
+  title. The two cinematics set the tick to their picture's own rate
+  while they run (`titleseq.title`: 10 Hz for the turn; `Game.intro`:
+  10 Hz against the intro's 140 ms pace, `introfx.py:62`), and hand
+  the menu back the 20 Hz it polls its buttons at. Flight keeps its
+  25 (`flight.PICTURES`, docs/04 4.4.1);
 - subtitles through the existing font code, below the picture;
 - `A` fast-forwards as in the original: `_skip` runs the scripts
   without drawing, or zeroes the `W` countdown; `B` or `MENU` leaves
@@ -344,7 +358,7 @@ four comments by the ship's damage level
 |--------|---------------|
 | before a mission | `Game.mission`, between briefing and `fly()` (hangar run, deck, launch) |
 | after a flight | `Game.mission` after `fly()` returns: `R_LANDED` -> landing with `world.damage_level()`; `R_DEAD` -> death, funeral; `R_EJECTED` -> ejection |
-| after the debriefing | medal (`out.medal`), office (`out.office`: promotion or transfer) |
+| after the debriefing | wingman funeral (`out.wingman_lost`, `gameflow.c:468-469` - plays even when the player ejected, before the office), medal (`out.medal`), office (`out.office`: promotion or transfer) |
 | end of a series | `out.sequence` -> Meanwhile scene, then endings (`Game.ending`) |
 
 All of these exist as text pages or flashes today, so each scene can
@@ -355,11 +369,15 @@ asset file is missing.
 
 The first group of 6.2 is implemented: hangar run, climbing into the
 fighter on the deck, the launch canopy, the fly-off, landing, death,
-ejection and stranded. These are **not** the step-4 scripts of the
+ejection and stranded; the funeral follows, ported as the same kind of
+verbatim module. These are **not** the step-4 scripts of the
 porting plan: each scene is a verbatim port of its C function, with
 the original's coordinates, frame numbers and step counts transcribed
 into the Python module and every constant commented with its wc1-re
-symbol. One shared engine in `scramble.py`; the other modules are
+symbol. One shared engine in `scramble.py`, which streams every drawn
+sprite through one scratch, a `bytearray(VIEW_N)` of 12,288 bytes
+claimed with the module (`scramble.py:94`) and given back to the
+heap when the module is popped (docs/12 12.2); the other modules are
 small:
 
 | Module | Ports |
@@ -368,6 +386,9 @@ small:
 | `launchseq.py` | `DrawLaunchDoorFrame` (`launch.c:55`), `LaunchPlayerShip` (`:103`), `ShowCarrierLaunchSequence` (`:164`) - phases A, B and C (A in `_approach`); `GetTransformedShapeBounds` (`gr.c:1311`) |
 | `deathseq.py` | `death_sequence` (`screens.c:1694`) |
 | `ejectseq.py` | `ejection_sequence` (`eject.c:32`: stages 1 and 2 plus the 3-D chase `_chase` (`:143-181`) - `view.c`'s scripted eye, `spc.c`'s camera cases, `geom.c`'s cull order and `flight.py`'s projection/`right_shape`/`dirv` mirrors) and `stranded_sequence` (`:202`); the stranding check `check_stranded` (`cockpt.c:3013`) with `any_enemy` (`logic.c:906`) and `distance_from_*` (`geom.c:687-703`) |
+| `funeralseq.py` | `funeral_sequence` (`cutscene.c:1103`) including the volley and particle machinery (`:1257-1338`) and the descent (`:1340-1368`), `funeral_player` (`:998`) as the talking-head composite, `funeral_wingman` (`:1069`) behind shot 17's eulogy lines (`screens.c:1443-1445`); `InitializeConstellationField` (`view.c:279`) and `DrawConstellationField` (`:330`) as the star field behind the crowd, with `asConstellationFrame` / `asConstellationVelocity` (`:17-22`); the heads' special shape is `fun.wcs` frames 10 / 11, fetched at `:1166-1167` and drawn by `talk.py` (`cmpgn.c:462-473`) |
+
+| `titleseq.py` | `Title_Sequence` (`title.c:135`) with `DrawTitleLogo` (`:78-113`) and `GetLineLength` / `print_subtitle` (`mono.c`) - the five phases and the eleven credit blocks (`:191-289`) with their `PH_*` frame counts and the New Game / Continue menu of `:319-497` driven by buttons; plus the canned world the cinematic flies: `advance` / `update_canned_sequence` (`mono.c`), the view-script trio (`view.c`), `set_eye`'s case 15, `rotate_eye_to_goal` and the canned gate (`spc.c`), `fire_fixed_projectile_weapon` (`ship.c`), the whole hazard chain (`winmain.c`), the `screenX` gates, `ClampVectorTo30` and `point_at` (`geom.c`), `intro_drawbackgroundships` (`eventmgr.c`), `set_up_action_sphere` and the ship init (`mission.c`), `kilrathi_near` (`cockpt.c`), `signed_random` and the clamped `find_ratio` (`logic.c`), `Update_3Space` / `house_keep` / `Draw_3Space_Frame` / `RenderSpaceViewFrame` (`main.c`) and `GetShapeFrameExtent` (`cutscene.c`) |
 
 Two draw bands, as in the original. Hangar, deck and landing draw
 into the conversation picture - `stSceneBuffer`, 320 x 128
@@ -376,9 +397,10 @@ and ejection fill the whole picture, the original's 320 x 200 space
 buffer dumped over the screen, on the device rows 16..111 with clip
 bottom 112. Original pixel positions map through the fixed point of
 3.1 (`_x8` / `_y8`, `scene.py:59-73`; `_cx` / `_cy` add the picture
-origin). One step per displayed frame at 62 ms, like 6.1: the
-original's `nFrameSkip` is 1 (`init.c:202`), so every pass renders
-and applies the deltas, and the port does the same. Any button breaks
+origin). One step per displayed frame, held to the turn's 100 ms like
+6.1: the original's `nFrameSkip` is 1 (`init.c:202`), so every pass
+renders and applies the deltas, and the port does the same. Any button
+breaks
 a sequence, as every original loop checks `bEscapePressedFlag` (e.g.
 `cutscene.c:274-275`). When a sprite file is missing the whole scene
 skips and the game behaves as it did before this chapter.
@@ -395,12 +417,33 @@ Art, converted by `tool/wc1_convert.py`:
 - `ckint<NN>.wcs`, `ckbg<NN>.wcs`, `ckslide<NN>.wcs` - PCSHIP.V0N
   sections 0, 3 and 5: the cockpit interior, background and sliding
   panels of the death and ejection scenes.
+- `fun.wcs` - BRIEFING.VGA section 9: the funeral composites - flag
+  bearer `f0`/`f1`, guard poses `f2`/`f3`, rifle poses `f4`/`f5`, the
+  casket `f8`, volley sparks `f9`, foreground trees `f6`/`f7`, and the
+  overlay frames `f10`/`f11` the eulogy heads draw behind them
+  (`cutscene.c:1166-1167`, `cmpgn.c:462-473`);
+- `con.wcs` - PLANETS.VGA section 0: the constellation - 32 particle
+  frames and 6 star frames, one to four pixels each, drifted and
+  recycled every frame (`view.c:279-398`); converted with a lower
+  alpha threshold than usual so the dots survive the area averaging
+  (3.1);
+- `ti0.wcs`, `ti0geo.wc`, `ti1.wcs`, `ti1wd.wc`, `ti4.wcs` -
+  TITLE.VGA sections 0, 1 and 4: the three tiles of the WING COMMANDER
+  logo (packet 9 section 0, fetched at `title.c:185-186`) with
+  `ti0geo.wc`, the converter's copy of the original-pixel frame
+  headers behind `DrawTitleLogo`'s `GetTransformedShapeBounds` anchors
+  (`title.c:91-112`); the 60 glyph frames of the intro picture font
+  (`title.c:164`) with `ti1wd.wc`, one byte per glyph frame of the
+  original `GetShapeFrameExtent` right edge (`cutscene.c`); and the
+  option graphics of the title menu (`title.c:330`); together 13.5 KB.
 
 The fly-off reuses the converted `sh<NN>.wcs` ship sets
 (`launch.c:196-197`); the canopy shows the flight cockpit's static art
 `ck<N>.wc`; the deck and landing canopy frames are the existing
 `cksc<N>.wcs` (PCSHIP section 8). The new scene art is about 0.39 MB
-altogether.
+altogether; the funeral's `fun.wcs` adds 22 KB (`con.wcs` is 433
+bytes) and the title's logo, intro font and bars 13.5 KB (`ti0.wcs`,
+`ti0geo.wc`, `ti1.wcs`, `ti1wd.wc`, `ti4.wcs`).
 
 Deliberately not ported, each noted in the module header so the scene
 can still be read against its C function: the scenes' music and sound
@@ -408,7 +451,12 @@ effects (chapters 8 and 9); the death scene's 60-frame 3-D aftermath (`screens.c
 flight has already shown the kill that killed you); the launch's
 animated cockpit instruments - `update_cockpit` (`cockpt.c:3151`)
 draws the scanner, readouts and pilot as dynamic overlays over the
-dumped space buffer, never the frame art; the device picture is the
+dumped space buffer, never the frame art. Of these overlays only the
+pilot's hand on the flight stick is ported - `flight.draw_pilot_hand`
+composites `pil03.wcs` (PILOTANM.VGA section 3) over the flight
+cockpit, the grip fixed between the legs and the pose following the
+pitch and yaw keys (`cockpt.c:2634` `determine_pilot_hand`, `:2665`);
+the scanner and readouts stay absent. The device picture is the
 space buffer itself, so the door scene redraws the doors still
 approaching over a background the original clears on every pass
 (`RefreshCockpitStatus`, `main.c:2136-2142`, clears whenever
@@ -419,12 +467,12 @@ doors was wrong: it clipped the tunnel into the small ck glass window
 and painted the dashboard across the parts passing by); the original's
 palette fades - the port dims with `wcgfx.dim_rows` and clears to
 black, as elsewhere; and `pIntroFont` - the stranded message uses the
-small `ui.text` font because the TITLE.VGA intro font is not converted
-yet (6.3 "Big text").
+small `ui.text` font, ported before the intro font became `ti1.wcs`
+and kept so (6.3 "Big text").
 
 The ejection's 3-D chase (`eject.c:143-181`) is ported in `ejectseq`
-as `_chase`: 201 pictures at 62 ms, the scripted camera driven by
-`view.c`'s parse/update/initialize trio (`EJECT_SCRIPT`: the eye
+as `_chase`: 201 pictures at the turn's 100 ms, the camera driven
+by `view.c`'s parse/update/initialize trio (`EJECT_SCRIPT`: the eye
 hangs 600 m below the pilot for 70 passes, rides him for 80 more,
 then chases a point 700 m behind for the fly-by; mode 4 starts on
 pass 151 and the scripted view switches off with the script's -1
@@ -437,8 +485,9 @@ near (`flight.py:386-402`). The deviations are noted in the `_chase`
 header: the live simulation stands still while the chase runs on
 local snapshots (it never moves `world.o[0]`, so the stranding check
 below reads the mission's own positions); velocities, the pilot's 5 m
-kick and the ship's rotation are scaled by 62/100 once at spawn so
-the scene keeps its 16 fps pacing; `init_ijk` resets the eye's basis
+kick and the ship's rotation are per-turn numbers, unscaled, since
+the chase's pass is the turn's 100 ms (`PASS_MS` = `TURN_MS`);
+`init_ijk` resets the eye's basis
 to identity, so `eject.c:145-151`'s basis-swap lines are dead code
 the port skips; the pilot's class, radius and scale come from
 `types.wc` type 56 (DEBRIS class 6, radius 6, scale 512) and his
@@ -453,7 +502,7 @@ debris chunks (`spc.c:968-969`) and the port simply drops the ship
 from the scene.
 
 The fly-off's phase A (`launch.c:200-288`) is ported in `launchseq`
-as `_approach`: 100 pictures at 62 ms on the same `view.c`/`spc.c`
+as `_approach`: 100 pictures at 100 ms on the same `view.c`/`spc.c`
 machinery as the chase, but only its first half is exercised -
 `asCarrierLaunchViewData` (`launch.c:34-36`) holds no command 13 or
 14, so `parse_view_script` runs the script to its -1 entry inside
@@ -468,14 +517,18 @@ the deck line, and the star and dust backdrop streams past the
 scripted eye that free-flies along the carrier's right at twice the
 scripted velocity (case 15 and `launch.c:280-282` add the velocity to
 the position twice a pass, so the port doubles it and advances once).
-`MainGame.py:391` hands the flight's own world to `flyoff` so the eye
+`MainGame.py:554` hands the flight's own world to `flyoff` so the eye
 can start on the carrier the player landed on (`launch.c:199-200`,
 `gameflow.c:363-364`); the selfplay call without a world and flights
 that ended without a carrier skip the approach and play the deck
-slide. Stars stand still while the dust streams - the eye neither
-pitches nor yaws, the chase's deviation.
+slide. The approach also needs the flight's code, which `fly()` let
+go with the flight; `launchseq` lands it again inside a guarded
+import (docs/12 12.2), so when the room after the flight will not
+take it phase A is skipped and the deck slide plays instead of an
+out-of-memory ending the game. Stars stand still while the dust
+streams - the eye neither pitches nor yaws, the chase's deviation.
 
-The scenes are hooked in `MainGame.py:361-401` in gameflow.c's order:
+The scenes are hooked in `MainGame.py:490-610` in gameflow.c's order:
 before `fly()` the hangar run (gameflow.c:337), the deck climb-in
 (`:341`) and the closing canopy (`:354`); on `R_DEAD` the death
 sequence (`:401`); on `R_LANDED` the fly-off and then
@@ -483,7 +536,18 @@ sequence (`:401`); on `R_LANDED` the fly-off and then
 ejection, the stranding check and, if the carrier was lost, the
 stranded message that ends the campaign (`:372-375`).
 `scramble.cleanup()` and `launchseq.cleanup()` let go of the sprite
-sets between flights.
+sets between flights. `MainGame.py` releases the two modules
+themselves around the flight: their names drop before `fly()` pops
+them (`:497-505`, `:663-666`) so the 12,288-byte scratch and the
+scene code become the flight's room (docs/12 12.1), and every
+post-flight path re-claims them and lets them go again (`:525-528`,
+`:558-561`, `:586-597`). `ejectseq` follows the same rule inside: it
+lands its own 8.5 KB of code and no scene helper at import, never
+the flight either - the chase's projection stands mirrored in its
+own numbers (`ejectseq.py:139-155`) - and claims `scramble` and
+`sky` inside itself with its scene asks guarded (docs/12 12.4),
+dropping the module and the seat helper after the scene
+(`:586-597`).
 
 **Check** - `tool/wc1_selfplay.py` holds the pilot still while a scene
 plays: the PC emulation runs an engine tick inside every
@@ -492,8 +556,138 @@ so without the freeze every scene would advance the simulation a few
 frames early. It counts the picture and text pixels each scene draws
 (rows 16..111 and 79..111): landing must draw its damage comment text,
 the death and ejection faces must show, the stranded message must
-show. A full sortie passes; the run writes 40 screenshots to
-`build/wc1_selfplay/`.
+show. The title cinematic keeps the same freeze, with one exception: the
+pilot returns when `titleseq.hold` goes False, so the New Game /
+Continue menu is driven like any other screen while the two and a
+half minutes of intro play untouched; the run photographs its stages
+(`titleA`, `titleB`, `titleC`, `titleD`, `titleE`, `titlemenu`) and
+fails if one is missing. A full sortie passes; the run that
+verified the finished port passed after 1604 frames, writing 50
+screenshots to `build/wc1_selfplay/`.
+
+### The intro and the title, implemented
+
+The opening cinematic and the title menu are implemented in
+`titleseq.py`, a verbatim port of `Title_Sequence` (`title.c:135`)
+holding `DrawTitleLogo` (`:78-113`) and `print_subtitle`'s placement
+(`mono.c:205`) in the same module. The Origin FX opening
+(`introfx.play`, `dos_intro.c:239`) plays once per program start
+before the cinematic (`MainGame.py:732-734`); `Game.title` follows and
+`main()` goes straight from the title menu into a campaign when one is
+picked (`:735-739`).
+
+The frame counts are the original's: 25 opening frames (`:191`), 110
+of plain flight (`:221`), 100 of the logo zoom with the distance
+stepping -4 after each draw while it is above 16 (`:225`,
+`:235-236`), eleven credit blocks of 70 drawn frames plus 40 of
+rendering (`:257`, `:275`, `nIntroCreditCount` 11 at `:22`) and 150
+to close (`:289`) - 1595 frames at the turn's 100 ms, two and a half
+minutes, close on the title music's 165 s (docs/08-music.md, track
+23). Every rendered frame waits for its boundary there (`_pace`,
+`titleseq.py`), the clock every scene outside flight runs on: with
+`nFrameSkipCounter` pinned to 1 (`:189`) every pass is a turn and a
+picture, so the cinematic draws a picture every 100 ms, ten turns a
+second (docs/04 4.4.1). The FX opening with the flyby and logo spans
+the Origin FX music's 25 s (docs/08 cue 19; the original measured at
+about 24): its ~177 pictures at `FX_MS` = 140 ms; the menu comes up a
+little over three minutes after the program boots. The logo draws its
+three `ti0.wcs` tiles with the original's
+scale (`0x1000 / distance`, `:85`) and the `ti0geo.wc` sidecar's
+original-pixel anchors, keeping the one-pixel left-seam overlap of
+`bounds.left - 1` (`:95`); the 16.16 blit comes from scramble.py.
+
+The title flies the original's own canned world, not authored
+choreography: a Mission built from game.c's title data - the intro
+camera script `asIntroCameraSequence` (`game.c:110-113`), the canned
+command sequences `asCannedSequence32..45` (`:116-196`),
+`aMissionNavPoints[16..19]` (`:199-226`) and `aMissionShips[32..45]`
+(`:229-290`) - through world.py's physics: the ships accelerate along
+their canned headings (world.py's `move`), the canned command scripts
+run (`advance` / `update_canned_sequence`, mono.c), the hazard chain
+of winmain.c spawns, turns and recycles rocks and mines past the
+camera (`title.c:253`, `winmain.c:435-454`), and the intro fleet
+explodes on entry into the asteroid field's nav
+(`set_up_action_sphere`'s explode-on-entry, mission.c) - the
+original's transition into the credits, where the ships vanish and the
+rocks take over. The eye is the scripted one the intro script's cmd3
+installs, camera case 15 (`spc.c:496`): `view.c`'s parse / update /
+initialize trio, `set_eye`'s turn with `rotate_eye_to_goal` and
+`ClampVectorTo30`'s rotation decay added after world.py's
+`rotate_object`, which does not apply it; phase D scales the eye's
+forward vector by `0x9600`, ten times the intro speed, like
+`ScaleFixedVector` (`title.c:246`) for the entry into the field, and
+the credit phase drops it to a 40-unit drift - a documented deviation
+on the owner's instruction: the port draws the dust as streaks from the
+eye's motion (the original's was single pixels) and they cross the
+112-row screen far too fast at 150 under credit text. `match_ship_to_eye`
+holds the hazard chain's reference speed at 100 whatever the eye does.
+The draw is flight.py's renderer
+port run in the title's space - `Draw_3Space_Frame`'s pipeline
+(`main.c:2018-2033`: transform, `draw_stars`, depth sort, sorted draw
+to the whole picture), the verbatim `screenX` marker gates of geom.c
+painting the parallel lists the explode-on-entry gate and the hazard
+spawn consult while the drawing culls (+/-40 000, vz < 60) stay
+drawing-only, and geom.c's scale-cull gate replaced by flight.py's
+tiny gate so distant ships survive as specks as the original's do.
+Stars are the world's Lites drawn by `draw_stars`; sky.py's dust field
+stands in for the procedural dust of `set_eye` (`spc.c:821-852`) and
+`draw_exhaust`'s engine plumes are not ported. The rest is in the
+module header: the eye is slot 0 (the original's eye is object 61 and
+world.py's NSHIP is 10; the hazard chain's `match_ship_to_eye` writes
+the eye there too), world.py's unclamped `find_ratio` replaced by a
+local clamped one as logic.c has it, cmd3 firing through world.py's
+`fire_weapon` with its shot counter, world.py's `LITE` guard forcing
+marker flags and distance-table entries into parallel lists,
+`intro_drawbackgroundships`' black silhouettes (`eventmgr.c:1089-1112`,
+`title.c:199`) as a second blit pass over the drawn objects with a
+zeroed palette (`DrawSolidColourSpriteScaled`) while the dust streaks
+keep their colour and have their black point painted over, and phase D
+held for four drawn turns after the sphere entry before the credits so
+the harness photographs the explosions where the original goes
+straight into the first credit.
+
+Text follows `GetLineLength` and `print_subtitle` (`mono.c`): letters
+`A`..`z` take the glyph frame `c - 65` and advance its right extent
+plus 2, `.` is frame 58 and `,` frame 59 (`mono.c:183-190`), a space
+advances 6 and a newline ends the line; the extents come from
+`ti1wd.wc`, one byte per glyph frame of the original
+`GetShapeFrameExtent` right edge. The block is centred on the
+original's 200-row screen (y = (200 - 16 * lines) / 2,
+`mono.c:219-222`) and every line centred across the 320, the 16-pixel
+line pitch (`:243`) becoming about 9 device rows under the y * 14 / 25
+mapping; an earlier port centred in the 128 device rows instead, which
+the mapping ran a second time and left the text at the top - corrected
+in this change. The strings are the
+verbatim opening text and the eleven DOS credits (`title.c:12-35`),
+drawn in the converted intro font itself - `ti1.wcs`' glyph frames of
+TITLE.VGA section 1 through the `print_subtitle` port, not `ui.text` -
+and the colour argument `print_subtitle` takes selects nothing in the
+original: the glyph shapes carry their own colours. A device
+deviation: the original read its glyphs from RAM, while every glyph
+read here goes through `SpriteSet.read` - an open, a seek and a close
+on flash (`wcdata.py:194-198`) - so drawing the block glyph by glyph
+put some seventy opens and closes into each drawn frame of phase A
+and ran the opening pan at one frame per second on the device. The
+port now renders each text block once into a full-screen index canvas
+and blits that canvas over the scene every drawn frame, the anchors
+and the mapping untouched. The canvas is the title's own: MainGame
+claims its 14,336 bytes while the heap is fresh, just before it
+imports the cinematic, and gives them back whole when the title
+ends (docs/12 12.2); when the ask fails the title runs its
+text-less path. The
+menu draws the
+option frames of `ti4.wcs` at the SDL regions (left 49, top 48 with 43
+a row, `title.c:345-346`) - frames 2 and 3 are never drawn, the DOS
+build keeping those options at -1 (`:334-341`) - and is driven by
+UP / DOWN / A / B / MENU instead of the mouse cursor and region
+hit-tests (`:116-132`, `:461-462`), a yellow `>` marking the selection
+where the original's option frame carries its cursor; it plays one
+cycle rather than looping until a key ends it (`:176`); and
+Continue really loads a saved campaign here, which the DOS build
+never allowed (`menuOptions[2]` stays -1, `:432-434`; `main.c:375-379`
+has no case 1). The music and sound hooks (`:159`, `:187`,
+`:302-303`, `:316`) are not ported, as everywhere in this chapter;
+the fade to black mirrors 6.3's dim and fill.
 
 ## 6.3 Things the scenes rely on that the port lacks
 
@@ -501,12 +695,16 @@ show. A full sortie passes; the run writes 40 screenshots to
   colour cycling are palette operations in the original. On an RGB565
   frame buffer a fade is `wcgfx.dim_rows` over the picture rows; it
   exists and is used for landing today.
-- **Big text.** "Meanwhile...", the intro and "The End" use the
-  proportional picture font in TITLE.VGA section 1 (60 frames, one per
-  glyph), not FONTS.FNT. Convert it as a sprite set or render those
-  few strings to pictures in the converter.
+- **Big text.** The proportional picture font of TITLE.VGA section 1
+  (60 frames, one per glyph) is converted as `ti1.wcs` with the width
+  table `ti1wd.wc` and drawn by the title's `print_subtitle` port
+  (6.2). "Meanwhile..." is held as a converted picture
+  (`meanwhile_128_62.COL.bin`); "The End" waits for the endings,
+  which are not started.
 - **Scaled sprite draws** (`DrawSpriteScaled` with rotation):
   `wcgfx.blit_rs` covers them.
-- **Timing.** Scene code counts frames of 62 ms and 1/60 s timer
-  ticks (1.4 in chapter 1). Keep the frame counts as they are and run
-  the steps by the clock.
+- **Timing.** The reference port's scene code counts frames of its
+  throttle's 62 ms and 1/60 s timer ticks (1.4 in chapter 1); the
+  game's own pace was the turn, 1/10 s (docs/04 4.4.1). Keep the frame
+  counts as they are and run the steps by the clock, 100 ms outside
+  flight.

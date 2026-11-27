@@ -15,6 +15,8 @@
 #   wcdata.py    asset loaders        wcgfx.py  pixel loops (viper)
 #   wcmath.py    integer 3-D math     ui.py     menus and text pages
 #   scene.py     cutscene interpreter ("Meanwhile..." between series)
+#   titleseq.py  the opening cinematic and the title menu
+#   introfx.py   the Origin FX startup intro (orchestra, Earth, logo)
 #
 # The game logic is derived from wc1-re and therefore GPL-3.0 (see
 # LICENSE.txt in this directory).
@@ -44,19 +46,36 @@ def mem(tag):
 # Memory plan. The heap of the ThumbyColor is small (about 190 KB once
 # the engine is up) and MicroPython's allocator does not move blocks,
 # so a large block must be claimed before the heap is cut up:
-#   1. the frame cache and the cockpit buffer, the largest blocks the
-#      game ever needs, right here, once, for the whole session;
-#   2. then all the code a flight needs, in one go;
-#   3. everything else comes and goes in small pieces.
+#   1. the frame cache, the largest block the game ever needs, right
+#      here, once, for the whole session. It is the one standing
+#      reservation this game keeps; its content is forgotten (reset)
+#      at every phase boundary, so no stale frames ride into the
+#      phase that follows;
+#   2. the code a flight needs is not claimed at start-up: a
+#      cinematic never flies. Game.fly claims it at launch, where the
+#      room is large again; a pop gives a module back in full, code
+#      included, once nothing holds it, so the flight-free stretch
+#      holds neither;
+#   3. every other large buffer belongs to the phase that uses it:
+#      claimed when that phase starts, after everything the last
+#      phase held has been popped and collected, and given back whole
+#      when the phase ends. Nothing is ever borrowed from a standing
+#      reservation, so each phase begins with the room entire.
 mem('start')
 CACHE = D.FrameCache()
-CKBUF = bytearray(D.CK_SIZE)
 mem('buffers')
 
 import ui
 import wcgfx as G
-import flight                   # with world, ai, wcmath
-import world as W
+# flight and ai are not here: they are claimed at launch and released
+# when the flight lets go, so the flight-free stretch holds neither;
+# booting them would hold some 44 KB through the title instead.
+# world is not here either: the title's import of titleseq pulls it
+# in itself, so a boot copy would spend the title's room twice. The
+# mission flow binds the name where it needs the R_* constants; the
+# name is free there because flight imported the module first.
+# Game.fly claims flight and ai at launch; Game.options borrows
+# flight briefly for the speed names.
 mem('code')
 
 OPT_FILE = 'wc_settings.json'
@@ -145,6 +164,8 @@ class Game:
     def __init__(self):
         self.opts = load_opts()
         self.T = D.Types()
+        # ai.wc - some 2 KB - parsed at start-up; the title world
+        # rides the tables read here instead of parsing them again.
         self.ai = D.Ai()
         self.pal = bytearray(D.load('pal.wc'))
         ui.setup(D.Font(2), D.Font(1), self.pal)
@@ -159,11 +180,17 @@ class Game:
             audio_set_volume(12)
         self.st = None
         self.camp = None
+        # The push rate for the menus, the notices and the scenes
+        # outside flight; the opening cinematic and the intro run the
+        # tick at the picture's own rate (titleseq.title, Game.intro)
+        # and flight runs it at flight.PICTURES. docs/06 6.1.
         display.setFPS(20)
         mem('ready')
 
     # --- title and main menu ----------------------------------------------------
-    def title(self):
+    def static_title(self):
+        """The title picture: what shows when titleseq's art is missing,
+        and what back from the main menu replays."""
         fb = display.buffer
         display.fill(0)
         if not ui.backdrop('title_128_96.COL.bin', 16):
@@ -176,6 +203,87 @@ class Game:
             display.update()
             if buttonA.justPressed():
                 return
+
+    def intro(self):
+        """SdlPlayDosStartupIntro (introfx.play, dos_intro.c:239): the
+        Origin FX opening the DOS game shows before its title - the
+        orchestra under its spotlight, the Earth behind it, the ORION
+        logo zooming in and the fireworks that close it. The original
+        plays it once per program start; it is skipped silently when
+        its art is missing, as the title falls back to its static
+        picture. The module is held only while it runs, like a
+        funeral. scramble, its drawing engine, stays loaded
+        afterwards; its frame scratch is claimed with the module and
+        goes back to the heap when the title's pop list lets go."""
+        # The same flicker fix the title's cinematic carries (see
+        # titleseq.title): the intro paints one picture every FX_MS
+        # (introfx.py:62), so its tick runs at 10 a second while it
+        # plays - a still picture pushed once per wait instead of
+        # twice - and the menu and the scenes have their 20 back after.
+        display.setFPS(10)
+        import introfx
+        introfx.play()
+        display.setFPS(20)
+        del introfx
+        sys.modules.pop('introfx', None)
+        collect()
+
+    def title(self):
+        """Title_Sequence (titleseq.title, title.c:135): the opening
+        cinematic, then the New Game / Continue menu. Returns True when
+        a campaign is ready to fly - New started or a save loaded - and
+        False to fall through to the main menu (left the menu, or the
+        title art is missing). The module is held only while it runs,
+        like a conversation or a funeral."""
+        import campaign
+        saved = campaign.State(self.ai)
+        has_save = saved.load() and saved.over == 0
+        # A phase starts with the room entire. Everything a flight or
+        # a cutscene ever held - flight and pilot code included, the
+        # title never flies - is popped and collected here first, so
+        # titleseq and the world it pulls land in one fresh run of the
+        # heap instead of small pieces carved out of a fragmented free
+        # list. The cache forgets its frames too: what a flight cached
+        # is done with.
+        if 'flight' in sys.modules:
+            sys.modules.pop('flight', None)
+            sys.modules.pop('ai', None)
+        for m in ('world', 'wcmath', 'sky', 'scramble', 'launchseq',
+                  'ejectseq', 'introfx', 'funeralseq', 'deathseq',
+                  'scene'):
+            sys.modules.pop(m, None)
+        CACHE.reset()
+        collect()
+        mem('pop')
+        # The title's canvas, 14 KB in one block, is the title's own:
+        # claimed now while the heap is fresh and given back whole when
+        # the title ends. If the ask fails, titleseq runs its
+        # text-less path instead of raising.
+        try:
+            TXT = bytearray(128 * 112)
+        except MemoryError:
+            TXT = None
+        import titleseq
+        mem('title')
+        r = titleseq.title(has_save, self.T, CACHE, TXT, self.ai)
+        CACHE.reset()                # the title's frames are done with
+        del TXT                      # the canvas goes back to the heap
+        del titleseq
+        sys.modules.pop('titleseq', None)
+        collect()
+        if r is None:
+            self.static_title()
+            return False
+        if r == 0:
+            self.st = campaign.State(self.ai)
+            self.st.campaign = 0
+            self.st.save()
+            return True
+        if r == 1 and has_save:
+            self.st = saved
+            return True
+        return False                    # B / MENU: title.c:432-436, :443
+
 
     def main_menu(self):
         import campaign
@@ -197,8 +305,8 @@ class Game:
             acts.append(11)
             k = ui.menu(b'WING COMMANDER', items, 0)
             if k < 0:
-                self.title()
-                continue
+                self.static_title()     # back replays the picture, not
+                continue                # the hundred-second cinematic
             a = acts[k]
             if a == -1:
                 self.st = saved
@@ -217,6 +325,10 @@ class Game:
                 return True
 
     def options(self):
+        # The title lets the flight code go until a flight needs it
+        # (docs/12 12.2); the speed names live there, so the module
+        # comes back for this menu.
+        import flight
         o = self.opts
         sel = 0
         while True:
@@ -230,6 +342,14 @@ class Game:
                 hint=b'UP ON STICK = NOSE DOWN (NORMAL)')
             if sel < 0:
                 save_opts(o)
+                # Let the flight code go again when the menu closes -
+                # it came back only for the speed names, and it drags
+                # ai with it (flight.py:29); the rest of the flight-
+                # free stretch does not want either held in the heap
+                # the title churned (docs/12 12.2).
+                sys.modules.pop('flight', None)
+                sys.modules.pop('ai', None)
+                collect()
                 return
             if sel == 4:
                 o['speed'] = (sp + 1) % len(flight.TURN_MS)
@@ -277,11 +397,21 @@ class Game:
 
     def talk(self, title, mis, which, picture, out=None, map_draw=None):
         """One conversation of this mission's packet. The packet (up to
-        some 15 KB) and the talk module are only held while it runs."""
+        some 15 KB), the head and the backdrop are the conversation's
+        own: claimed when it starts, given back whole when it ends, so
+        the talking head runs in room that is all its own."""
+        # Whatever a flight left loaded goes first: the head asks some
+        # 18 KB in one block and the heap must be swept clean for it.
+        # A later mission re-imports what it needs, and pays its
+        # landing again - the price of starting each phase fresh.
+        for m in ('flight', 'ai', 'world', 'wcmath', 'sky', 'scene'):
+            sys.modules.pop(m, None)
+        collect()
         import talk
         st = self.st
         pk = D.briefing_packet(st.campaign, st.series, st.mission)
-        t = talk.Talk(self.ai, st, out, map_draw=map_draw, picture=picture)
+        t = talk.Talk(self.ai, st, out, map_draw=map_draw,
+                      picture=picture)
         t.run(title, pk, which, mis.series_name)
         del t, pk, talk
         sys.modules.pop('talk', None)
@@ -364,15 +494,41 @@ class Game:
         launchseq.door(ship)         # LaunchPlayerShip() :354
         launchseq.cleanup()          # let go of the sets: the scenes
                                      # after the flight load them again
+        # The two modules leave with this frame's names before the
+        # flight is built. fly() pops them from sys.modules, but a pop
+        # returns a module only when nothing holds it (docs/12 12.4):
+        # these names are the holders, launchseq's globals hold
+        # scramble with them, and scramble's hold its 12,288 byte
+        # frame scratch. Dropping them here is what gives the flight
+        # the room to claim the cockpit's 12 KB with its own code.
+        del scramble, launchseq
         world, result = self.fly(mis)
+        # world came with flight (flight.py:28), so binding the name
+        # here is a hit on the already loaded module, not a copy of
+        # code: it is only needed for the R_* constants of the result.
+        import world as W
         out = campaign.Outcome()
         out.result = result
         if result == W.R_ABORT:
             return
         if result == W.R_DEAD:
-            import deathseq
+            import deathseq          # the death scene draws with
+                                     # scramble's helpers: scramble
+                                     # lands again for it (docs/12
+                                     # 12.2 - every phase pays its
+                                     # landing when it starts fresh)
             deathseq.death(ship)     # death_sequence (gameflow.c:401)
-            scramble.cleanup()
+            import scramble
+            scramble.cleanup()       # free_3Space (:402) before the funeral
+            # the scene is done with them: they go before the funeral
+            # and the pages ask their room (docs/12 12.4)
+            del scramble, deathseq
+            sys.modules.pop('scramble', None)
+            sys.modules.pop('deathseq', None)
+            collect()
+            self.funeral(1)          # funeral_sequence (:407): the
+                                     # player's own honour guard, played
+                                     # before the campaign is ended
             ui.page(b'KILLED IN ACTION', [
                 b'Your ship was destroyed.', b'',
                 b'The mission can be flown again from the last saved '
@@ -388,22 +544,70 @@ class Game:
             # the carrier's frame, position and radius and the player's
             # scale; without it flyoff plays the deck slide alone, as
             # the selfplay harness calls it (wc1_selfplay.py:220).
+            import launchseq, scramble   # re-claim what fly() let go
+                                         # after the flight (docs/12
+                                         # 12.2): flyoff's 3-D approach
+                                         # imports the sky and the
+                                         # flight code for itself,
+                                         # guarded - no room, deck
+                                         # slide only
             launchseq.flyoff(ship, world)
             scramble.landing(world.damage_level(), ship)
+            scramble.cleanup()           # the scenes are done with
+                                         # the sprite sets
+            del scramble, launchseq
+            sys.modules.pop('scramble', None)
+            sys.modules.pop('launchseq', None)
+            collect()                    # the debriefing's face asks
+                                         # its 18 KB over none of this
         if result == W.R_EJECTED:
-            import ejectseq
-            # ejection_sequence (:372). The live world, the type table,
-            # the palette and the shared cache are what the 3-D chase
-            # (eject.c:143-181) needs: the ship snapshot, the pilot's
-            # class/radius/scale, the .wcs blits and the sprite sets.
-            # Without them eject is the sprite-only scene.
-            ejectseq.eject(ship, world, self.T, self.pal, CACHE)
-            if ejectseq.check_stranded(world):         # :373
-                ejectseq.stranded()                    # :374-375: the
-                scramble.cleanup()                     # campaign ends
-                return                                 # right here
-        scramble.cleanup()           # the scenes are done with the
-                                     # sprite sets
+            # fly() let the flight code go with the flight (docs/12
+            # 12.2); ejectseq lands its own 8.5 KB of code and
+            # nothing else now - what the scene draws it imports
+            # inside, guarded (docs/12 12.4) - and if even the
+            # module does not fit, the pilot is picked up without
+            # the chase scene, as a rescue the player never sees,
+            # instead of an OOM ending the game.
+            try:
+                import ejectseq
+            except MemoryError:
+                ejectseq = None
+            if ejectseq is not None:
+                # ejection_sequence (:372). The live world, the type
+                # table, the palette and the shared cache are what the
+                # 3-D chase (eject.c:143-181) needs: the ship snapshot,
+                # the pilot's class/radius/scale, the .wcs blits and
+                # the sprite sets. Without them eject is the
+                # sprite-only scene.
+                ejectseq.eject(ship, world, self.T, self.pal, CACHE)
+                stranded = ejectseq.check_stranded(world)  # :373
+                if stranded:
+                    ejectseq.stranded()                    # :374-375
+                del ejectseq
+                sys.modules.pop('ejectseq', None)
+                # the seat scene's helper landed inside eject(),
+                # guarded: if it fitted, this pop gives its 22.2 KB
+                # back, scratch included (docs/12 12.2); if it did
+                # not fit there is nothing to give back.
+                if 'scramble' in sys.modules:
+                    import scramble
+                    scramble.cleanup()       # free_3Space (:402)
+                    del scramble
+                    sys.modules.pop('scramble', None)
+                collect()
+                if stranded:
+                    return                   # the campaign ends here
+            else:
+                # the import died on the way in: all that can be
+                # reclaimed is what a partial landing left behind -
+                # with ejectseq's module-top imports gone there is
+                # normally nothing in the modules to reclaim.
+                if 'scramble' in sys.modules:
+                    import scramble
+                    scramble.cleanup()
+                    del scramble
+                    sys.modules.pop('scramble', None)
+                collect()
         world.cleanup_objectives()
         out.ejected = result == W.R_EJECTED
         campaign.post_mission(st, self.camp, world, out)
@@ -415,6 +619,10 @@ class Game:
                 b'shuttle. Your fighter is lost.'], ui.AMBER)
         else:
             self.talk(b'DEBRIEFING', mis, 1, 'debrief_128_61.COL.bin', out)
+        # gameflow.c:468-469: a wingman who did not come back is buried
+        # after the debriefing, before the office visit and the report
+        if out.wingman_lost:
+            self.funeral(0)
         self.summary(out, mis)
         campaign.apply_awards(st, out)
         st.save()
@@ -439,11 +647,39 @@ class Game:
         ui.wait_key()
 
     def fly(self, mis):
+        # Nothing a video or a cutscene held is still around by the
+        # time a flight starts: talk, introfx, titleseq, ejectseq, the
+        # funeral and the death scene each dropped themselves in the
+        # function that ran them, and the launch scenes' sprite sets
+        # are freed by scramble.cleanup. The launch scenes' modules go
+        # here with the caller's names dropped by mission() (docs/12
+        # 12.4): scramble carries its 12,288 byte frame scratch, and
+        # launchseq held the sky, the flight and the pilot code with
+        # its own imports until those moved into _approach - landing
+        # them at the launch is what left no hole for the flight
+        # (device log 2026-11-27). With all of them collected, the
+        # flight's code landing, its world and its cockpit buffer meet
+        # a heap in one piece again.
+        sys.modules.pop('scene', None)
+        sys.modules.pop('launchseq', None)
+        sys.modules.pop('scramble', None)
+        collect()
         mem('launch')
+        # The title let the flight code go for the flight-free
+        # stretch (docs/12 12.2); it comes back here, where the
+        # briefing has left its room behind.
+        import flight                # noqa: comes back if unloaded
+        # flight.py:28 imported world with itself; binding the name
+        # now is free - the module is resident, and the end-of-flight
+        # screens below read the R_* constants off it.
+        import world as W
+        # The cockpit's 12 KB are the flight's own buffer: passed in
+        # nothing, the flight claims it at start and gives it back
+        # whole when the flight ends.
         fl = flight.Flight(self.T, self.ai, (ui.small, ui.text), self.pal,
                            self.st, mis, self.opts,
                            self.sfx and self.opts.get('sound', 1),
-                           CACHE, CKBUF)
+                           CACHE)
         mem('flight')
         gc_pace()
         # pictures as fast as the device manages, up to flight.PICTURES (25) a second; game
@@ -476,6 +712,22 @@ class Game:
             audio_stop()
         save_opts(self.opts)
         del fl
+        CACHE.reset()               # the flight's cached frames go too
+        collect()                   # cockpit buffer and sets with it
+        # flight, ai and sky leave with the flight. The room their
+        # code landed into pays for the scenes after it - the fly-off
+        # re-imports them through launchseq's _approach, the ejection
+        # through ejectseq - and for the debriefing's face (docs/12
+        # 12.2). world stays: its objects are the score and the fly-
+        # off's carrier, and its constants are read off the name the
+        # caller rebinds. The local name goes first: a module held by
+        # a live frame's name does not come back on a pop (docs/12
+        # 12.4).
+        del flight
+        sys.modules.pop('flight', None)
+        sys.modules.pop('ai', None)
+        sys.modules.pop('sky', None)
+        collect()
         mem('landed')
         return w, result
 
@@ -514,6 +766,17 @@ class Game:
         sys.modules.pop('scene', None)
         collect()
 
+    def funeral(self, kind):
+        """funeral_sequence (docs/06 6.2): the honour guard at the
+        casket. kind 1 when the player died (gameflow.c:407), kind 0
+        when a wingman did not come back (:469). The scene module is
+        held only while it runs, like a conversation or a meanwhile."""
+        import funeralseq
+        funeralseq.funeral(kind, self.ai, self.st)
+        del funeralseq
+        sys.modules.pop('funeralseq', None)
+        collect()
+
     def ending(self, out):
         st = self.st
         if out.sequence == 0x40:
@@ -541,11 +804,14 @@ def main():
                    b'again and deploy', b'the assets folder.', b'',
                    b'A: go on'))
     game = Game()
-    game.title()
-    while True:
-        if not game.main_menu():
+    game.intro()               # the Origin FX opening, once per
+                               # program start, before the title
+    go = game.title()          # the cinematic and its menu: straight
+    while True:                # into the campaign when one was picked
+        if not go and not game.main_menu():
             break
         game.carrier()
+        go = False
     display.fill(0)
     display.update()
     reset()

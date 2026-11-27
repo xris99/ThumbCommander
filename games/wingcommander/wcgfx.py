@@ -75,6 +75,33 @@ def blit_indexed(fb, pal, src, x: int, y: int, w: int, h: int,
 
 
 @micropython.viper
+def blit_indexed_clip(fb, pal, src, x: int, y: int, w: int, h: int,
+                      x0: int, x1: int, y0: int, y1: int):
+    """Unscaled 8-bit picture with transparency, clipped to a rectangle:
+    columns [x0, x1), rows [y0, y1). The pilot's hand over the cockpit
+    is cut to the hand bounds of its ship, as the original clips it to
+    the rectangle in data.c:274."""
+    f = ptr16(fb)
+    pl = ptr16(pal)
+    s = ptr8(src)
+    row = 0
+    while row < h:
+        dy = y + row
+        if dy >= y0 and dy < y1:
+            si = row * w
+            di = dy * 128 + x
+            col = 0
+            while col < w:
+                px = x + col
+                if px >= x0 and px < x1:
+                    pix = s[si + col]
+                    if pix != 0:
+                        f[di + col] = pl[pix]
+                col += 1
+        row += 1
+
+
+@micropython.viper
 def glyph(fb, font, ch: int, x: int, y: int, col: int) -> int:
     """Draw one character of a font<N>.wc file; returns its advance."""
     f = ptr16(fb)

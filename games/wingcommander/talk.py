@@ -11,6 +11,7 @@
 
 from struct import unpack_from, pack
 from time import ticks_ms, ticks_diff, ticks_add
+from gc import collect
 from thumby_engine.platform import (display, buttonA, buttonB, buttonMENU)
 import ui
 import wcdata as D
@@ -24,9 +25,10 @@ FACES = (b'Col. Halcyon', None, None, None, None, None, None, None, None,
 PHONEME = bytes((0, 5, 4, 4, 1, 8, 4, 7, 0, 4, 4, 7, 5,
                  4, 2, 5, 6, 4, 4, 4, 3, 4, 6, 4, 4, 4))
 
-# one pass of LongTalk's loop is one displayed frame; outside flight the
-# frame rate is held at 16 per second, 62 ms (docs/05 5.5, docs/01 ch 1.4)
-STEP_MS = 62
+# one pass of LongTalk's loop is one displayed frame; outside flight a
+# frame is the original's game turn, 1/10 s (docs/04 4.4.1, ten turns a
+# second - docs/05 5.5)
+STEP_MS = 100
 
 # both command lists end with one -1 (wc1-re src/cmpgn.c:60, 97)
 END = pack('<h', -1)
@@ -139,6 +141,10 @@ class Talk:
         self.bdrop = None              # pCurrentConversationBackdrop
         self.bd_view = None
         self.bd_idx = -2               # the backdrop frame shown now
+        self.funeral = None            # the running funeralseq, when set
+        self.special = None            # pCurrentConversationSpecialShape
+        self.sp_view = None
+        self.escaped = False           # bEscapePressedFlag as run() ends
 
     # --- $ codes (AddPCName) -----------------------------------------------
     def expand(self, raw):
@@ -312,15 +318,23 @@ class Talk:
         return -1
 
     # --- director --------------------------------------------------------------
-    def run(self, title, packet, which, series_name=b''):
+    def run(self, title, packet, which, series_name=b'', nhead=10,
+            kind=None, special=None):
         """Play scene `which` (0 briefing, 1 debriefing, 2..4 bar) of a
-        briefing packet. Returns False if the player skipped it."""
-        if len(packet) < 40:
+        briefing packet. Returns False if the player skipped it; a key
+        that ended a funeral eulogy line (shot 17) sets self.escaped
+        instead, as the original's bEscapePressedFlag ends the whole
+        sequence. funeralseq passes nhead=14 (the funeral packets'
+        header), kind=3 (the funeral conversation, screens.c:1235) and
+        the funeral sprite set as `special`."""
+        if len(packet) < nhead * 4:
             return True
         self.series_name = series_name
         # the scene type decides the backdrop: 0 briefing, 1 debriefing,
-        # 2..4 are the bar's tables (docs/05 5.1)
-        self.kind = which if which <= 2 else 2
+        # 2..4 are the bar's tables (docs/05 5.1); the funeral sets it
+        # to 3 (SceneDirector(3, ...) cutscene.c:1172)
+        self.kind = kind if kind is not None else (which if which <= 2
+                                                   else 2)
         self.character = -1            # screens.c:149
         self.prev_shot = -2            # screens.c:1246
         self.prev_colour = -2          # screens.c:1247
@@ -329,7 +343,10 @@ class Talk:
         self.head_face = -1
         self.ovl = None
         self.bd_idx = -2
-        head = unpack_from('<10I', packet, 0)
+        self.escaped = False
+        self.special = special
+        self.sp_view = bytearray(special.largest) if special else None
+        head = unpack_from('<%dI' % nhead, packet, 0)
         scene = head[which * 2]
         tbase = head[which * 2 + 1]
         if scene == 0 or scene >= len(packet):
@@ -416,24 +433,37 @@ class Talk:
                 colour = ui.pal565(c)
             raw = D.cstr(packet, tbase + toff)
             if raw:
-                # the mouth and face lists are only read by LongTalk
-                # (screens.c:1375-1384 and the default case at 1449-1454);
-                # the record's offsets are relative to the text base, an
-                # empty string leaves the single-sentinel list
-                mcmd = fcmd = None
-                if self.head is not None and 20 <= self.prev_shot <= 32:
-                    mcmd = END
-                    fcmd = END
-                    mo = tbase + moff
-                    fo = tbase + foff
-                    if 0 <= mo < len(packet) and packet[mo] != 0:
-                        mcmd = parse_mouth(D.cstr(packet, mo))
-                    if 0 <= fo < len(packet) and packet[fo] != 0:
-                        fcmd = parse_face(D.cstr(packet, fo))
-                if not self.say(title, speaker, self.expand(raw), colour,
-                                kind == 4, max(0, dur * 1000 // 60),
-                                mcmd, fcmd):
-                    return False
+                if self.funeral is not None and self.prev_shot == 17:
+                    # screens.c:1443-1445: previousShot 17 dispatches
+                    # the eulogy to funeral_wingman (cutscene.c:1069),
+                    # which runs the honour-guard scene under the text
+                    # instead of talking; a key there is the original's
+                    # Escape - it ends the SceneDirector loop (:1461)
+                    # and the whole funeral (:1174)
+                    if self.funeral.shot17(self.expand(raw), colour, dur):
+                        self.escaped = True
+                        break
+                else:
+                    # the mouth and face lists are only read by LongTalk
+                    # (screens.c:1375-1384 and the default case at
+                    # 1449-1454); the record's offsets are relative to
+                    # the text base, an empty string leaves the
+                    # single-sentinel list
+                    mcmd = fcmd = None
+                    if self.head is not None and 20 <= self.prev_shot <= 32:
+                        mcmd = END
+                        fcmd = END
+                        mo = tbase + moff
+                        fo = tbase + foff
+                        if 0 <= mo < len(packet) and packet[mo] != 0:
+                            mcmd = parse_mouth(D.cstr(packet, mo))
+                        if 0 <= fo < len(packet) and packet[fo] != 0:
+                            fcmd = parse_face(D.cstr(packet, fo))
+                    if not self.say(title, speaker, self.expand(raw),
+                                    colour, kind == 4,
+                                    max(0, dur * 1000 // 60),
+                                    mcmd, fcmd):
+                        return False
             rec += 1
         return True
 
@@ -467,13 +497,26 @@ class Talk:
         if face == self.head_face and self.head is not None:
             return
         self.head = None                 # FreePacketAndClear, cmpgn.c:259
+        collect()                        # MicroPython has no reference
+                                         # counting: the dropped face's
+                                         # 13 to 18 KB block stays
+                                         # heap-held until this sweep,
+                                         # and the new face asks one
+                                         # block of its file's size -
+                                         # so only one head is ever
+                                         # live, and the hole the old
+                                         # face leaves is re-made
+                                         # before the ask. Device log
+                                         # 2026-11-27: the third face
+                                         # failed with 66,336 free in
+                                         # no one piece. docs/12.
         self.head_face = face
         if not D.exists('head%02d.wc' % face):
             return                       # text-only fallback, docs/05 5.7.5
         try:
             self.head = D.Head(face)
-        except OSError:
-            return
+        except (OSError, MemoryError):
+            return                       # no picture: the text shows
         # LoadFace ends with CloseTalk(head, -1, -1) (cmpgn.c:298): the
         # neutral face shows at once, even if this record has no text
         self.lazy_bdrop()
@@ -490,9 +533,13 @@ class Talk:
         #    window stars into the backdrop frame (docs/05 5.6), so the
         #    constellation is never animated separately
         # 2. backdrop (cmpgn.c:426-445): the character's frame of this
-        #    scene's backdrops, black when LoadFace finds none
-        idx = self.bdrop.index(self.kind, self.character) if self.bdrop \
-            else -1
+        #    scene's backdrops, black when LoadFace finds none. Scene
+        #    type 3 - the funeral - is the one case that never shows a
+        #    backdrop: it clears to cPrimaryViewBufferColour (:440-442),
+        #    palette 191, which the converted menu palette holds as
+        #    black, so the fill below is already what the original does.
+        idx = self.bdrop.index(self.kind, self.character) \
+            if (self.bdrop and self.kind != 3) else -1
         if idx != self.bd_idx:
             self.bd_idx = idx
             if idx >= 0:
@@ -539,8 +586,27 @@ class Talk:
                                        self.ovl.table[frame * 8 + 5],
                                        16, 78)
         # 7. conversation characters 5 and 6 add a special shape
-        #    (cmpgn.c:462-470); which pictures they are is still open
-        #    (docs/05 5.8), so nothing is drawn for them.
+        #    (cmpgn.c:462-473): the funeral packet, BRIEFING.VGA
+        #    section 9 that funeral_sequence fetches at cutscene.c:1166
+        #    - fun.wcs frames 10 and 11, drawn at (0, 0) of the scene
+        #    viewport, the hot spot landing at the viewport's corner.
+        #    This closes docs/05 5.8: character 5 shows frame 10 only
+        #    (:463-467), character 6 both frames (:468-473).
+        if self.special is not None and self.sp_view is not None:
+            if self.character == 5:
+                frames = (10,)
+            elif self.character == 6:
+                frames = (10, 11)
+            else:
+                frames = ()
+            for frame in frames:
+                off, w, h, hx, hy = unpack_from('<IBBbb',
+                                                self.special.table,
+                                                frame * 8)
+                if off and w and h:
+                    self.special.read(off, memoryview(self.sp_view)[:w * h])
+                    wcgfx.blit_indexed(fb, ui.pal, self.sp_view,
+                                       -hx, 16 - hy, w, h, 16, 78)
 
     def scene_advance(self, fb, dur_ms):
         """WaitForSceneAdvance(duration, 0) verbatim (wc1-re
@@ -562,7 +628,8 @@ class Talk:
         branches of the SDL port - no voices are ported, so the mouth
         always follows its script (cmpgn.c:314-323 are skipped). Two
         cursors step over the (frame, ticks) pairs, one pass per displayed
-        frame; outside flight that is 62 ms (STEP_MS). Returns
+        frame; outside flight that is the game turn, 100 ms (STEP_MS).
+        Returns
         ('done', None) when the line ended on its own and ('key', button)
         when the player ended it.
 

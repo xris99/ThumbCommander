@@ -23,6 +23,24 @@ import wcdata as D
 NSHIP = 10
 NOBJ = 44
 
+# The fields Obj.clear writes, in clear's order. tool/wc1_check.py runs
+# its Lite-default comparison over this tuple, and holds the rule that
+# a Lite owns exactly i, m and LITE. The last name, view, is the
+# player's mirror field the title sets on w.o[0] and reads back
+# (titleseq.py:2283): the original game kept it outside the object's
+# cleared fields, and so does this port - except that it is a whole
+# number like the rest, and it is cleared with them.
+OBJF = ('cls', 'typ', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'owner', 'counter',
+        'radius', 'mass', 'scale', 'grace', 'side', 'speed', 'maxspd',
+        'rp', 'ry', 'rr', 'gp', 'gy', 'gr', 'dmg', 'acc', 'energy', 'fuel',
+        'special', 'abtimer', 'iondmg', 'plant', 'pilot_hp', 'guns_lost',
+        'target', 'mtype', 'objective', 'tactic', 'man', 'seq', 'tot',
+        'level', 'rating', 'stress', 'cooldown', 'event', 'turn_reg',
+        'turn_int', 'turns', 'mship', 'mtarget', 'leader', 'fdx', 'fdy',
+        'fdz', 'spx', 'spy', 'spz', 'nav', 'lastcol', 'alert', 'msg',
+        'vis', 'rad', 'sx', 'sy', 'dist',
+        'view')
+
 # ObjectClass
 C_NULL = 0
 C_EXPLOSION = 5
@@ -173,6 +191,9 @@ class Obj:
         self.rad = 0
         self.sx = self.sy = 0
         self.dist = 0
+        # the title sets and reads this on the player mirror; it starts
+        # empty-handed at zero (titleseq.py:2283)
+        self.view = 0
 
 
 # Fields a Lite object resets (besides i and m). tool/wc1_check.py runs
@@ -194,7 +215,18 @@ class Lite:
     with the value Obj.clear() gives it and is only ever read. Writing
     one of those through an instance would work, but the value would
     survive clear() - add the name to LITE and to clear() instead.
+
+    __slots__ pins the owned set to i, m and LITE: an instance's
+    storage is one fixed allocation instead of a dict that grows while
+    clear() writes its names one by one. That growth was the
+    contiguous ask a fragmented heap refused on the device (docs/12
+    12.2): the 34 Lites of the title's world cost some 21 KB as dicts
+    and about 6 KB now, and they no longer churn the heap's free
+    space. The write guard in tool/wc1_check.py holds the rule that
+    the owned set stays exactly this - nothing else may be set
+    through an instance.
     """
+    __slots__ = ('i', 'm') + LITE
     weapons = ()
     sh = shmax = (0, 0)
     ar = (0, 0, 0, 0)
@@ -223,6 +255,9 @@ class Lite:
     nav = -1
     alert = 0
     msg = -1
+    # a ship's mirror field, never written through a Lite, so the class
+    # default stands for the cleared value
+    view = 0
 
     def __init__(self, index):
         self.i = index
@@ -273,6 +308,7 @@ class World:
         self.nav = -1                    # current action sphere
         self.wave = -1
         self.hazards = []                # [x, y, z (units), radius, kind]
+        self.haz_ms = []                 # field ships already registered
         self.wingman = -1
         self.kills = 0
         self.wing_kills = 0
@@ -457,6 +493,25 @@ class World:
         nx, ny, nz = self.mis.nav_pos(self.mis.ship_nav[ms])
         return nx + rec[6], ny + rec[7], nz + rec[8]
 
+    def add_hazard_field(self, ms, nav):
+        """Register one field ship on the hazard list, at most once per
+        ship: the original registers every field ship when the mission
+        loads, radius = speed + 3000 (mission.c:937-943), and keeps no
+        more than seven fields (add_hazard_field caps the total,
+        winmain.c:470-484)."""
+        if ms < 0 or ms in self.haz_ms:
+            return
+        rec = self.mis.ship(ms)
+        typ = rec[0]
+        if typ != OT_ASTEROID_FIELD and typ != OT_MINE_FIELD:
+            return
+        if len(self.hazards) >= 7:
+            return
+        self.haz_ms.append(ms)
+        nx, ny, nz = self.mis.nav_pos(nav)
+        self.hazards.append([(nx + rec[6]) >> 8, (ny + rec[7]) >> 8,
+                             (nz + rec[8]) >> 8, rec[13] + 3000, typ])
+
     def init_ship(self, ms, nav):
         mis = self.mis
         if ms < 0:
@@ -466,9 +521,7 @@ class World:
         if typ < 0:
             return None
         if typ == OT_ASTEROID_FIELD or typ == OT_MINE_FIELD:
-            nx, ny, nz = mis.nav_pos(nav)
-            self.hazards.append([(nx + rec[6]) >> 8, (ny + rec[7]) >> 8,
-                                 (nz + rec[8]) >> 8, rec[13] + 3000, typ])
+            self.add_hazard_field(ms, nav)
             return None
         if self.find_ship(ms) != -1 or mis.ship_state[ms] != 0:
             return None
@@ -574,6 +627,15 @@ class World:
         for ms in mis.initial:
             self.init_ship(ms, entry)
         self.set_up_action_sphere(entry)
+        # Every field ship is registered now, wherever its nav sits: the
+        # original registers them at mission load (mission.c:937-943).
+        # The fields live for the whole mission and start rocks by the
+        # player's proximity, not by the action sphere (check_hazards,
+        # winmain.c:487-507), so the empty fields of the old port - which
+        # only appeared if a sphere happened to activate - are gone.
+        for n in range(16):
+            for ms in mis.nav_ships(n):
+                self.add_hazard_field(ms, n)
         # first destination that can still be reached
         self.dest = 0
 
@@ -591,7 +653,10 @@ class World:
         for i in range(NSHIP, NOBJ):
             if o[i].cls in (C_ASTEROID, C_MINE):
                 self.remove(o[i])
-        self.hazards = []
+        # The registered fields are kept, not re-registered here: they
+        # are set up once at launch and activated by proximity, as the
+        # original's check_hazards does (winmain.c:487-507); only the
+        # rocks are cleared when a sphere changes.
         for ms in mis.nav_ships(nav):
             if ms != -1:
                 self.init_ship(ms, nav)
@@ -1501,16 +1566,25 @@ class World:
         p = self.o[0]
         px = p.x >> 8; py = p.y >> 8; pz = p.z >> 8
         for h in self.hazards:
-            if M.mag(px - h[0], py - h[1], pz - h[2]) < h[3]:
+            # near_field: a field wakes up within its radius plus 4300
+            # units, not just its radius (winmain.c:289-294)
+            if M.mag(px - h[0], py - h[1], pz - h[2]) < h[3] + 4300:
                 return h
         return None
 
     def hazard_turn(self):
-        """Keep a handful of rocks / mines around the player while he is
-        inside a field (the original recycles its field objects the same
-        way)."""
-        if self.tick % 5:
-            return
+        """Rocks and mines live while the player is near a field and are
+        recycled past that distance (near_field = radius + 4300 units,
+        winmain.c:289-294; ok_hazard_spot recycles field objects at
+        4300, winmain.c:358-367). The spawn chance is the original's:
+        one attempt every turn, likelier the faster the player flies -
+        RandomBelowOrEqual(215) below the real velocity plus 30
+        (update_hazards, winmain.c:435-454). The original keeps 20
+        object slots just for hazards; here they are shared with the
+        weapon objects, so the cap is 12 rather than 20 (a deviation,
+        listed in docs/04 4.10). Rocks are still spawned in front of
+        the player, drifting at +-3 units a turn rather than aimed by
+        travel time - the documented simplification."""
         h = self.in_hazard()
         o = self.o
         p = o[0]
@@ -1518,11 +1592,14 @@ class World:
         for i in range(NSHIP, NOBJ):
             ob = o[i]
             if ob.cls == C_ASTEROID or (ob.cls == C_MINE and ob.owner == -1):
-                if h is None or self.dist(p, ob) > 5000:
+                if h is None or self.dist(p, ob) > 4300:
                     self.remove(ob)
                 else:
                     count += 1
-        if h is None or count >= 7:
+        if h is None or count >= 12:
+            return
+        speed = M.mag(p.vx, p.vy, p.vz) >> 8
+        if rndle(215) >= speed + 30:
             return
         mine = h[4] == OT_MINE_FIELD
         ob = self.new_object(OT_MINE if mine else OT_ASTEROID1 + rnd(6), -1)

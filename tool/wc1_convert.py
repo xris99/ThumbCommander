@@ -183,9 +183,12 @@ CK_CUTSCENE_SECTIONS = {
 
 # PILOTANM.VGA sections used by death_sequence / ejection_sequence
 # (screens.c:1710, eject.c:50). Section 2 is the ejected pilot of the
-# 3-D chase (eject.c:97-99, :169).
+# 3-D chase (eject.c:97-99, :169). Section 3 is the pilot's hand on the
+# flight stick which the flight cockpit animates (cockpt.c:2665
+# DrawPilotHandFrame, logic.c:55 fetches section 3 into the shape
+# pointer).
 PILOTANM_SECTIONS = {0: 'death face', 1: 'ejection seat',
-                     2: 'ejected pilot'}
+                     2: 'ejected pilot', 3: 'pilot hand on the stick'}
 
 # BRIEFING.VGA sections drawn by the room scenes the conversation
 # director dispatches (docs/05 5.2, docs/06 6.2). Every fetch cited is
@@ -291,10 +294,11 @@ class Converter:
                                     Image.NEAREST).save(
             os.path.join(pdir, name + '.png'))
 
-    def scaled_set(self, frames, res):
+    def scaled_set(self, frames, res, threshold=0.42):
         sx = gfx.SCREEN_SX * res / 64
         sy = gfx.SCREEN_SY * res / 64
-        return [gfx.scale_frame(f, self.palette, sx, sy) for f in frames]
+        return [gfx.scale_frame(f, self.palette, sx, sy, threshold)
+                for f in frames]
 
     # --- conversions ---------------------------------------------------
     def convert_palette(self):
@@ -1216,9 +1220,11 @@ class Converter:
 
     def convert_pilotanm(self):
         """pil<NN>.wcs: PILOTANM.VGA - the pilot's death face (section
-        0, screens.c:1710), the ejection seat (section 1, eject.c:50)
-        and the ejected pilot the chase projects (section 2,
-        eject.c:97-99), at screen scale."""
+        0, screens.c:1710), the ejection seat (section 1, eject.c:50),
+        the ejected pilot the chase projects (section 2, eject.c:97-99)
+        and the pilot's hand on the flight stick, section 3, which the
+        flight cockpit animates over its art (cockpt.c:2665), at screen
+        scale."""
         if not self.has('PILOTANM.VGA'):
             self.log('  pilotanm: PILOTANM.VGA not installed')
             return
@@ -1236,6 +1242,174 @@ class Converter:
             self.save_preview(name, scaled)
             self.log('  pil %d %-15s %2d frames res 64 %6d bytes'
                      % (sec, label, len(scaled), size))
+
+    def convert_funeral(self):
+        """fun.wcs / con.wcs: the funeral scene and its star field
+        (docs/06 6.2). fun.wcs is BRIEFING.VGA section 9, the twelve
+        frames funeral_sequence composites: base f0 and the f1 flag
+        detail, guard poses f2/f3, rifle poses f4/f5, the casket f8,
+        volley particles f9, foreground trees f7/f6, and the overlays
+        conversation characters 5 and 6 draw behind the talking head,
+        f10 and f11 (wc1-re src/cutscene.c:998-1066, :1163-1165;
+        src/cmpgn.c:462-473). con.wcs is PLANETS.VGA section 0: the
+        constellation that drifts behind the crowd - particle frames
+        0..31 and star frames 32..37, moved and recycled every frame
+        (src/view.c:279-398; the star frames also bake the bar
+        backdrop in _bake_stars)."""
+        if self.has('BRIEFING.VGA'):
+            pk = self.packet('BRIEFING.VGA')
+            if len(pk) > 9:
+                scaled = self.scaled_set(shape.decode_all(pk.section(9)),
+                                         64)
+                size = gfx.write_sprite_set(self.path('fun.wcs'),
+                                            scaled, 64)
+                self.total += size
+                self.save_preview('fun', scaled)
+                self.log('  fun funeral %2d frames res 64 %6d bytes'
+                         % (len(scaled), size))
+            else:
+                self.log('  funeral: BRIEFING.VGA has no section 9')
+        if self.has('PLANETS.VGA'):
+            # the constellation is a field of 1-4 pixel dots the original
+            # draws unscaled (view.c:279-398 DrawSpriteDefault); hot-spot
+            # padding and area-averaging dilute their alpha below the
+            # default 0.42 cut and they would convert to empty slots, so
+            # keep every dot with its true source colour (Palette.nearest
+            # never returns the transparent index 0).
+            scaled = self.scaled_set(
+                shape.decode_all(self.packet('PLANETS.VGA').section(0)),
+                64, threshold=0.05)
+            size = gfx.write_sprite_set(self.path('con.wcs'), scaled, 64)
+            self.total += size
+            self.save_preview('con', scaled)
+            self.log('  con constellation %2d frames res 64 %6d bytes'
+                     % (len(scaled), size))
+        else:
+            self.log('  constellation: PLANETS.VGA not installed')
+
+    def convert_title(self):
+        """The title and intro art, all from TITLE.VGA (docs/06 6.2).
+
+        section 0 -> ti0.wcs: the logo DrawTitleLogo zooms from distance
+        200 down to 16 (title.c:78-113, fetched at :186 as packet
+        resource 9,0); frames 0/1/2 are the left part, the centre and
+        the right part, placed by the transformed bounds of frame 1.
+        The sidecar ti0geo.wc keeps the shape's original-pixel frame
+        headers (the stored right, left, top, bottom words) so the port
+        can run that bounds computation exactly like the original.
+        section 1 -> ti1.wcs + ti1wd.wc: the subtitle font, the glyphs
+        print_subtitle and GetLineLength draw (mono.c:167-251). Glyph
+        index is ord(c) - 65 for 'A'..'z' alike (ASCII 91..96 map to
+        frames 26..31), '.' is 58 and ',' is 59. ti1wd.wc is one byte
+        per frame: the ORIGINAL-pixel `right` extent - the advance the
+        original computes as bounds[2] of GetShapeFrameBounds (x is
+        added and subtracted again), so the subtitle keeps its original
+        x-accumulation. 2 pixels are added per glyph and 6 per space by
+        the drawing code itself.
+        section 3 -> ti3.wcs: the Earth the intro flies past.
+        section 4 -> ti4.wcs: the option graphics the title menu draws
+        - New Game frame 0, Continue frame 1 - at the region tops
+        48 + 43*i (title.c:327-330, 374-391).
+        sections 6..17 -> ti06..ti17.wcs: the Origin FX opening intro
+        (dos_intro.c): section 6 is the sky frame and the ORION logo
+        tiles, 7..15 the nine orchestra actors, 16 the conductor, 17
+        the fireworks. dos_intro.c indexes them as titleSections[i] =
+        section (i + 6). Section 5 frame 0 (the title picture) is
+        converted by convert_pictures."""
+        if self.has('TITLE.VGA'):
+            pk = self.packet('TITLE.VGA')
+            if len(pk) > 0:
+                scaled = self.scaled_set(shape.decode_all(pk.section(0)),
+                                         64)
+                size = gfx.write_sprite_set(self.path('ti0.wcs'),
+                                            scaled, 64)
+                self.total += size
+                self.save_preview('ti0', scaled)
+                self.log('  ti0 logo %2d frames res 64 %6d bytes'
+                         % (len(scaled), size))
+                # ti0geo.wc: the shape's ORIGINAL-pixel frame headers,
+                # the four stored i16s right, left, top, bottom per
+                # frame (wc1base.h struct ShapeFrame +0..+6). The logo
+                # bounds DrawTitleLogo places its three tiles by come
+                # from GetTransformedShapeBounds on frame 1 (gr.c:1311
+                # -1402), which reads those extents unscaled and swaps
+                # cursor->right into frameLeft and cursor->left into
+                # frameRight (gr.c:1353-1354); the resampled .wcs cannot
+                # answer it. The sidecar keeps the raw header words as
+                # stored - empty frames read as zeros. 8 bytes a frame.
+                raw = pk.section(0)
+                table_end = struct.unpack_from('<H', raw, 4)[0]
+                n_fr = (table_end >> 2) - 1
+                geo = bytearray()
+                for index in range(n_fr):
+                    pos = struct.unpack_from('<i', raw, index * 4 + 4)[0]
+                    if 0 < pos and pos + 8 <= len(raw):
+                        geo += struct.pack('<4h', *struct.unpack_from(
+                            '<4h', raw, pos))
+                    else:
+                        geo += bytes(8)
+                gsize = self.write('ti0geo.wc', bytes(geo))
+                self.log('  ti0geo %2d frames %d bytes' % (n_fr, gsize))
+            else:
+                self.log('  title: TITLE.VGA has no section 0')
+            if len(pk) > 1:
+                glyphs = shape.decode_all(pk.section(1))
+                scaled = self.scaled_set(glyphs, 64)
+                size = gfx.write_sprite_set(self.path('ti1.wcs'),
+                                            scaled, 64)
+                self.total += size
+                self.save_preview('ti1', scaled)
+                # original-pixel advances: the frame's `right` extent,
+                # the distance from the hot spot to the right edge,
+                # exactly what GetShapeFrameExtent(0, 0, ..., 2) minus
+                # the draw x gives back. shape.Frame keeps only the
+                # bitmap box, and width = left + right + 1, so right
+                # comes back as width - left - 1.
+                widths = bytearray()
+                for fr in glyphs:
+                    widths.append(
+                        (fr.width - fr.left - 1) if fr is not None else 0)
+                wsize = self.write('ti1wd.wc', bytes(widths))
+                self.log('  ti1 font %2d glyphs res 64 %6d bytes, '
+                         'widths %d frames %d bytes'
+                         % (len(glyphs), size, len(widths), wsize))
+            else:
+                self.log('  font: TITLE.VGA has no section 1')
+            if len(pk) > 3:
+                scaled = self.scaled_set(shape.decode_all(pk.section(3)),
+                                         64)
+                size = gfx.write_sprite_set(self.path('ti3.wcs'),
+                                            scaled, 64)
+                self.total += size
+                self.save_preview('ti3', scaled)
+                self.log('  ti3 planet %2d frames res 64 %6d bytes'
+                         % (len(scaled), size))
+            else:
+                self.log('  planet: TITLE.VGA has no section 3')
+            if len(pk) > 4:
+                scaled = self.scaled_set(shape.decode_all(pk.section(4)),
+                                         64)
+                size = gfx.write_sprite_set(self.path('ti4.wcs'),
+                                            scaled, 64)
+                self.total += size
+                self.save_preview('ti4', scaled)
+                self.log('  ti4 menu %2d frames res 64 %6d bytes'
+                         % (len(scaled), size))
+            else:
+                self.log('  title menu: TITLE.VGA has no section 4')
+            for section in range(6, 18):
+                if len(pk) <= section:
+                    break
+                scaled = self.scaled_set(
+                    shape.decode_all(pk.section(section)), 64)
+                name = 'ti%02d.wcs' % section
+                size = gfx.write_sprite_set(self.path(name), scaled, 64)
+                self.total += size
+                self.save_preview(name[:-4], scaled)
+                self.log('  %s %2d frames res 64 %6d bytes'
+                         % (name, len(scaled), size))
+        else:
+            self.log('  title: TITLE.VGA not installed')
 
     def convert_sounds(self):
         """sfx_*.ima: the original has no sampled effects on a PC (its
@@ -1328,6 +1502,9 @@ class Converter:
         self.convert_scramble()
         self.convert_ck_scenes()
         self.convert_pilotanm()
+        self.convert_funeral()
+        self.log('title:')
+        self.convert_title()
         self.convert_sounds()
         self.log('done: %d files, %.1f MB'
                  % (len([f for f in os.listdir(self.out)

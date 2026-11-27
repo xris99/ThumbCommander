@@ -221,14 +221,16 @@ Two consequences of this exact code, worth copying rather than
 - an `R` in the middle (518 strings) sends the cursor back to the
   start, so the part before it loops for as long as the line lasts.
 
-**Time base.** The loop does one pass per displayed frame, and frames
-outside flight are held to 16 per second (62 ms,
-`ThrottleFrameAndDrawFps`, chapter 1.4) [src]. A tick is two passes,
-so about 125 ms. `duration` is in 1/60 s
-(`SetMultimediaTimerCallback`). On the ThumbyColor, drive both from
-`time.ticks_ms()`: one tick = 125 ms, `duration * 1000 // 60` ms after
-the line. With no speech, the mouth finishes long before a reader
-does, so also wait for a button, as `talk.py` does now.
+**Time base.** The loop does one pass per displayed frame; the
+reference port throttled those frames to 16 per second (62 ms,
+`ThrottleFrameAndDrawFps`, chapter 1.4) [src], while the game ran a
+turn per frame and a turn is 1/10 s (docs/04 4.4.1). The port holds
+them to the turn: one pass every 100 ms, so a tick of two passes is
+200 ms. `duration` stays in 1/60 s (`SetMultimediaTimerCallback`). On
+the ThumbyColor, drive both from `time.ticks_ms()`: one tick = 200 ms,
+`duration * 1000 // 60` ms after the line. With no speech, the mouth
+finishes long before a reader does, so also wait for a button, as
+`talk.py` does now.
 
 The podium shots reuse the mouth list without a head [src
 `CloseLook`]: shot 2 draws frame `mouth` of BRIEFING.VGA 2 at
@@ -283,13 +285,19 @@ finds.
 
 Measured for WC1 at screen scale: a head's bounding box is about
 70 x 60 pixels, a mouth patch about 22 x 21, an eye patch about
-33 x 14; **11 to 16 KB per face, about 150 KB for all eleven**
-[data, computed from frame sizes]. The composite method added
-little: the eleven WC1 faces measure 13,382 to 16,582 bytes each,
-157 KB together [data, the built files]. One face fits RAM
-comfortably (about 15 KB); `load_face` drops the previous head and
-loads the new one on a face change (talk.py:462-480, cmpgn.c:258-
-274).
+33 x 14; **11 to 16 KB per face** [data, computed from frame sizes].
+The composite method added little: the thirteen WC1 faces measure
+13,382 to 18,002 bytes each, 196 KB together [data, the built
+files]. One face fits RAM comfortably (about 15 KB); `load_face`
+drops the previous head and reads the new file into the
+conversation's own heap (talk.py:491-521, wcdata.py:422,
+cmpgn.c:258-274). `Game.talk` pops the flight code before it
+imports the conversation, so the head's block-sized ask lands in
+room that was just swept clean (docs/12 12.2). Each head change
+collects the dropped face back into the heap before the new file is
+read, so exactly one head's block is ever live (talk.py:499-500,
+docs/12 12.1's device log 2026-11-27); a face whose block cannot be
+claimed shows text only instead of failing the conversation.
 
 Backdrops: seven 128 x 62 pictures as `.COL.bin` (16 KB each) or as
 palette indices (8 KB each). Indices are better here: the head is
@@ -310,7 +318,7 @@ version; the original animates PLANETS.VGA stars
    common and larger values occur. The longest lists in WC1 are 73
    mouth commands and 13 face commands [data].
 3. Implemented: `long_talk` (talk.py:560-645) steps both cursors by
-   elapsed time - one pass per 62 ms (`STEP_MS`, talk.py:29) - and
+   elapsed time - one pass per 100 ms (`STEP_MS`, talk.py:30) - and
    `close_talk` (talk.py:482-543) redraws the whole composite each
    pass: backdrop, head, eye patch, mouth patch, overlay. Redrawing
    only the changed rectangles was the first plan; full blits cost
@@ -341,9 +349,16 @@ face: the base plus all ten mouth and eye states
 
 ## 5.8 Open points
 
-- Characters 5 and 6 ("special shape" frames 10 / 11) and the overlay
-  (0x40) each occur once or twice per campaign; which pictures they
-  are was not looked at. Check before deciding to skip them.
+- RESOLVED. Characters 5 and 6 are the two eulogy speakers of the
+  funeral. Their special shape is fetched in `funeral_sequence`
+  (`cutscene.c:1166-1167`): BRIEFING.VGA section 9, the funeral art,
+  already converted as `fun.wcs` - character 5 draws frame 10 alone
+  (`cmpgn.c:463-467`), character 6 frames 10 and 11 (`:468-473`), both
+  at the scene viewport's (0, 0) with the hot spot at the viewport's
+  corner; on the device that is (-hx, 16 - hy), clipped to rows
+  16..78. `Talk.close_talk` draws them (`talk.py:580-595`). The
+  overlay (0x40) was ported earlier: TALKING.VGA section 11, frame
+  min(face, 1) at (0, 0) (`cmpgn.c:458-461`; `talk.py:554-557`).
 - Conversation text colours: the 12-entry table is already in
   `ai.wc`; Secret Missions 2 adds two (indices 12, 13 -> palette 9 and
   13) [src].

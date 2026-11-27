@@ -5,8 +5,7 @@ another model). It explains where the game comes from, how its data is
 read and converted, how the running game works, and - in most detail -
 the parts that are **not built yet**: the radio, music, the original
 sound effects, and the hard-coded scenes that have not been started
-(6.2: medals, funeral, office, bar, barracks, intro, credits,
-endings).
+(6.2: medals, office, bar, barracks, endings).
 
 Read `../README.md` first for what the game is and how to run it. Then:
 
@@ -34,7 +33,7 @@ Read `../README.md` first for what the game is and how to run it. Then:
 | 3-D view, cockpits, radar, displays | done |
 | Briefing / debriefing / bar conversations | text plus **talking heads** with lip sync, eye animation and the close-up backdrops; all branch tests work |
 | "Meanwhile..." scripted cutscenes between series | done (chapter 6 6.1); every object position checked step by step against the original interpreter |
-| Hard-coded cutscenes | first group done: hangar run, deck, launch door, fly-off, landing, death, ejection and stranded (chapter 6 6.2); medals, funeral, office, bar, barracks, intro, credits and endings not started |
+| Hard-coded cutscenes | first group done: hangar run, deck, launch door, fly-off, landing, death, ejection, stranded and funeral, plus the opening cinematic and title menu (chapter 6 6.2); medals, office, bar, barracks and endings not started |
 | Radio | four orders and a landing request with made-up lines; original table is converted (`comm.wc`) but unused (chapter 7) |
 | Music | none - format, driver and game rules documented (chapters 8, 10) |
 | Sound effects | five synthesised placeholders; original records documented (chapter 9) |

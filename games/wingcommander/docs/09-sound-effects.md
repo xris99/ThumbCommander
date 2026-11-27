@@ -149,6 +149,18 @@ Not triggered at all yet: afterburner (12), fly-by (2), lock tones
 (21, 22, 24), clicks (25), alarms (32), static (23), and everything
 belonging to cutscenes.
 
+The device mechanics have one trap worth naming. `audio_stop` runs at
+every flight end (`MainGame.py:711`), and the engine's `stop()` must
+not close the files that `audio_open_id` registered at boot
+(`MainGame.py:177`): the tuples keep the open handles and `play_id`
+seeks back into them for every later replay. Closing a registered
+file ended the second flight of a session with a `ValueError` on its
+first sound - closed file, seek refused. It is device-only, since the
+PC reference never seeks (`audio/pc.py`). The engine releases a file
+on stop only when it is not one of the registered handles (the
+ownership check in `thumby_engine/audio/hardware.py`), so the boot
+table lives for the whole session, as `MainGame` intends.
+
 ## 9.5 Two ways forward
 
 **A. FM effects through the music player** (the original way).

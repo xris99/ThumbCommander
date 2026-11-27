@@ -113,11 +113,13 @@ def quantize(rgba, palette, threshold=0.42):
     return np.where(opaque, idx, 0).astype(np.uint8)
 
 
-def scale_frame(frame, palette, sx, sy):
+def scale_frame(frame, palette, sx, sy, threshold=0.42):
     """Resample one shape frame; returns (indexed, hot_x, hot_y) or None.
 
     The frame is padded so its hot spot lands on a whole output pixel -
-    sprites are positioned and rotated around it.
+    sprites are positioned and rotated around it. ``threshold`` is the
+    alpha cut passed to quantize; lower it to keep sparse frames whose
+    coverage is diluted by padding and area-averaging.
     """
     if frame is None:
         return None
@@ -135,7 +137,7 @@ def scale_frame(frame, palette, sx, sy):
     pad_b = int(round(out_h / sy)) - frame.height - pad_t
     rgba = np.pad(rgba, ((pad_t, max(0, pad_b)), (pad_l, max(0, pad_r)),
                          (0, 0)))
-    out = quantize(resample(rgba, out_w, out_h), palette)
+    out = quantize(resample(rgba, out_w, out_h), palette, threshold)
     # trim fully transparent borders (keeps the hot spot consistent)
     rows = np.flatnonzero(out.any(axis=1))
     cols = np.flatnonzero(out.any(axis=0))

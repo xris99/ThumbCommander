@@ -40,7 +40,7 @@
 #    draws dynamic overlays only).
 #  - phase A of the fly-off (launch.c:200-288), the 100-frame scripted
 #    3D approach, is ported in _approach below and runs when flyoff is
-#    handed the live flight world (MainGame.py:391; selfplay's
+#    handed the live flight world (MainGame.py:554; selfplay's
 #    single-argument call takes the B/C-only path). The objects are
 #    pinned at original-space screen positions instead of being
 #    projected, so the scene needs no 3-space transform engine;
@@ -66,9 +66,15 @@ from thumby_engine.platform import display
 import ui
 import wcgfx as G
 import wcmath as M
-import sky
-import flight as FL
-import world as W
+# sky, flight and world are not imported with the module. The blast
+# doors and the fly-off's deck halves draw with scramble's helpers
+# only; the 3-D approach is the single place that needs sky.py, the
+# flight's FX and FY and world's OT_TIGERS_CLAW, and it imports them
+# for itself (see _approach). Landing them here held some 44 KB
+# through the launch scenes: the device log 2026-11-27 died inside the
+# flight's construction, allocating the cockpit's 12,308 bytes in a
+# hole no wider, because its own code had landed before the launch
+# did. docs/12 12.4.
 
 # the space-buffer picture on the device: rows 16..111 (clip bottom 112)
 FULL_Y1 = 112
@@ -249,6 +255,19 @@ def _approach(world, carrier, fighter, fb):
     bScriptedView is already 0 before the frame loop (view.c:47-51):
     every pass of set_eye_direction_and_position (spc.c:158-168) skips
     the scripted update and takes case 15 (:458-464)."""
+    import world as W                   # resident: the flight this
+                                        # world came from imported it
+    try:
+        import sky
+        import flight as FL             # fly() let the flight code go
+                                        # with the flight, so this lands
+                                        # it again - and the room after
+                                        # the flight may not take it
+    except MemoryError:
+        return False        # the sky and the flight's view constants
+                            # did not fit: phase A is skipped, phases B
+                            # and C play as they do for the harness
+                            # call. docs/12 12.4.
     claw = None                         # nScriptedViewObject = the object
     for ob in world.o[1:]:              # the player landed on: the Tiger's
         if ob.typ == W.OT_TIGERS_CLAW:  # Claw the landing code targets,
@@ -362,7 +381,7 @@ def _approach(world, carrier, fighter, fb):
 def flyoff(ship, world=None):
     """ShowCarrierLaunchSequence (launch.c:164-446): phase A, the 3D
     scripted approach (_approach), when a live flight world is handed
-    in (MainGame.py:391 - the landing flow's own world, holding the
+    in (MainGame.py:554 - the landing flow's own world, holding the
     carrier the player landed on and the player's scale), then phases
     B and C: the fighter slides down the deck and swings out off the
     carrier's edge while the crew watch. flyoff(ship) alone (the

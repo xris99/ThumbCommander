@@ -81,8 +81,9 @@ PIC_Y1 = 78
 TXT_Y = 79
 
 # one pass of PlaySceneAnimation's loop is one displayed frame; outside
-# flight the rate is 16 per second, 62 ms (docs/01 ch 1.4, docs/06)
-STEP_MS = 62
+# flight a frame is the original's game turn, 1/10 s (docs/04 4.4.1, ten
+# turns a second - the speed flight flies at 'original')
+STEP_MS = 100
 
 # scratch buffer for one shape frame: the biggest converted pri tile is
 # 128x61, the biggest sec frame 107x61 (docs/06 storage plan)
@@ -518,7 +519,8 @@ def play(S, variant, tbl, objs, ins, ninstrs, per, nanim, animation,
     """PlaySceneAnimation(text, shot - 50, duration) minus the subtitle
     (the caller drew it). Returns 'done', 'ff' (A fast-forwarded) or
     'skip' (B / MENU). The step clock is time-based (docs/06 runtime):
-    one script step every 62 ms, drawn after each step; if a step takes
+    one script step every STEP_MS - the game turn, 100 ms, drawn after
+    each step; if a step takes
     longer, the steps that became due run without presenting and only
     the last picture shows."""
     if animation >= nanim:

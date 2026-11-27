@@ -19,7 +19,15 @@ watched while they play, and death, ejection and stranded - which a
 landing run never reaches - are played afterwards. Every scene that
 really plays must paint a picture and be photographed. Screenshots
 of the stages are written to build/wc1_selfplay/ so the pictures can
-be checked by eye.
+be checked by eye. The opening cinematic (docs/06 6.2, title.c's
+Title_Sequence) plays in full: the pilot is held off while it runs,
+and its stages - opening text, logo zoom, credits, close and menu -
+are photographed in turn.
+
+The Origin FX startup intro (docs/06 6.2, dos_intro.c's
+SdlPlayDosStartupIntro) - the orchestra, the Earth behind it, the
+ORION logo zoom and the fireworks - plays before the title and is
+photographed as well.
 
 Usage:
     python3 tool/wc1_selfplay.py            # first mission
@@ -97,10 +105,14 @@ def main():
     import wcmath as M
     import world as W
     import scramble, launchseq, deathseq, ejectseq   # docs/06 6.2
+    import funeralseq
+    import titleseq
+    import introfx
 
     state = {'frame': 0, 'flight': None, 'saves': 0, 'shots': 0,
              'phase': 'menus', 'done_at': None, 'flight_frames': 0,
-             'last_shot': -999, 'auto_wait': 0, 'log': [], 'upd': 0}
+             'last_shot': -999, 'auto_wait': 0, 'log': [], 'upd': 0,
+             'tshots': {}}
 
     def picture_nonblack():
         """Visible pixels in the conversation picture rows 16..77 -
@@ -143,6 +155,12 @@ def main():
     # is text on black, so it is held to a lower bar
     SCENE_MIN = {'stranded': 30}
 
+    # the opening cinematic is photographed stage by stage; titleseq.stage
+    # names the one playing ('A'..'E', 'menu'; every stage has its own
+    # shot now - the fly-by in 'B' is the part the user asked to see)
+    STAGE_SHOT = {'A': 'titleA', 'B': 'titleB', 'C': 'titleC',
+                  'D': 'titleD', 'E': 'titleE', 'menu': 'titlemenu'}
+
     import talk
 
     real_load_face = talk.Talk.load_face
@@ -171,6 +189,34 @@ def main():
         state['st'] = a[4]
         print('[selfplay] flight started at frame', state['frame'])
     flight.Flight.__init__ = init
+
+    # The game lets the flight code go for the title and re-imports
+    # it when it launches (docs/12 12.2). A re-imported flight is a
+    # fresh module, not the one wrapped above, and fly() builds its
+    # Flight right after the import, before the pump could re-wrap it
+    # in step(). So patch every flight module on its way through
+    # __import__.
+    import builtins
+    real_import = builtins.__import__
+
+    def patched_import(name, *a, **k):
+        m = real_import(name, *a, **k)
+        if name == 'flight' and m.Flight.__init__ is not init:
+            m.PACE = False               # a game turn every frame
+            m.Flight.__init__ = init
+        # The same fresh-module story as flight above: the title pops
+        # the scene modules and the mission re-imports them, so a game
+        # call lands on a fresh function the setup wraps never touched.
+        # Re-apply the wrapper on every import of a listed name and the
+        # call counts, the spent press and the scene marker keep
+        # working across the reloads (docs/12 12.2).
+        for attr in SCENE_BY_NAME.get(name, ()):
+            fn = getattr(m, attr, None)
+            if fn is not None and not getattr(fn, '_selfplay_wrap',
+                                              False):
+                wrap(m, attr)
+        return m
+    builtins.__import__ = patched_import
 
     real_save = campaign.State.save
 
@@ -213,13 +259,19 @@ def main():
                 return real(*a, **k)
             finally:
                 state['scene'] = None
+        f._selfplay_wrap = True     # marks a wrapped entry point for
+                                    # the import hook below
         setattr(mod, attr, f)
 
+    SCENE_BY_NAME = {}
     for _m, _a in ((scramble, 'hangar'), (scramble, 'deck'),
                    (scramble, 'landing'), (launchseq, 'door'),
                    (launchseq, 'flyoff'), (deathseq, 'death'),
-                   (ejectseq, 'eject'), (ejectseq, 'stranded')):
+                   (ejectseq, 'eject'), (ejectseq, 'stranded'),
+                   (funeralseq, 'funeral'), (titleseq, 'title'),
+                   (introfx, 'play')):
         wrap(_m, _a)
+        SCENE_BY_NAME.setdefault(_m.__name__, []).append(_a)
 
     def shot(name):
         try:
@@ -322,7 +374,23 @@ def main():
             shot('flight')
 
     def step():
-        if state['scene'] is not None:
+        # MainGame's title releases the flight code and brings it
+        # back lazily when a flight starts (docs/12 12.2): a fresh
+        # flight module has a Flight.__init__ that is not the capture
+        # wrapper and a PACE back to the real pacing. Put both
+        # patches back before a flight can be built - which happens
+        # after the carrier menu, where the pilot runs.
+        fm = sys.modules.get('flight')
+        if fm is not None and fm.Flight.__init__ is not init:
+            fm.PACE = False                # a game turn every frame
+            fm.Flight.__init__ = init
+        # docs/06 6.2: the title cinematic is a hard scene too, but its
+        # own menu is the one part the pilot has to drive (titleseq.hold
+        # goes False when the cinematic ends) - without that the run
+        # would sit in the menu forever with the breaker held off as
+        # long as a scene is named.
+        if state['scene'] is not None and not (state['scene'] == 'title'
+                                               and not titleseq.hold):
             # a hard scene is playing. color.py:205-209 runs an engine
             # tick inside every display.update(), and the scenes pump
             # the display by the thousands while they pace themselves -
@@ -424,6 +492,14 @@ def main():
             if n >= SCENE_MIN.get(sc, 100) and not rec[3]:
                 rec[3] = True
                 shot(sc)
+            if sc == 'title':
+                tag = STAGE_SHOT.get(titleseq.stage)
+                if tag and not state['tshots'].get(tag) and (
+                        tag != 'titleC' or titleseq.dist <= 30):
+                    # the logo is photographed once it is big enough to
+                    # read, not at the small start of the zoom
+                    state['tshots'][tag] = True
+                    shot(tag)
         elif state['upd'] > 300:
             state['upd'] = 0
             tb._current_keys['B'] = True
@@ -549,7 +625,10 @@ def main():
             return base_update(*a)
         plat.display.update = upd_hard
         try:
+            # the player's funeral follows the death (gameflow.c:401-407)
             for _m, _a, _args in ((deathseq, 'death', (ship,)),
+                                  (funeralseq, 'funeral',
+                                   (1, state['ai'], state['st'])),
                                   (ejectseq, 'eject', (ship,)),
                                   (ejectseq, 'stranded', ())):
                 if _a in state['scenes']:
@@ -573,6 +652,17 @@ def main():
             if seen.get(name, [0])[0] < 1:
                 print('[selfplay] FAILED: %s was never called' % name)
                 code = 1
+        if seen.get('title', [0])[0] < 1:
+            print('[selfplay] FAILED: title was never called')
+            code = 1
+        if seen.get('play', [0])[0] < 1:
+            print('[selfplay] FAILED: the intro was never played')
+            code = 1
+        for tag in ('titleA', 'titleB', 'titleC', 'titleD', 'titleE',
+                    'titlemenu'):
+            if not state['tshots'].get(tag):
+                print('[selfplay] FAILED: no screenshot of %s' % tag)
+                code = 1
         for name in seen:
             rec = seen[name]
             print('[selfplay] %s: %d calls, picture %d px, text %d px'
@@ -585,7 +675,7 @@ def main():
             elif not rec[3]:
                 print('[selfplay] FAILED: no screenshot of %s' % name)
                 code = 1
-        for name in ('death', 'eject', 'stranded'):
+        for name in ('death', 'funeral', 'eject', 'stranded'):
             if name not in seen:
                 print('[selfplay] FAILED: %s did not play' % name)
                 code = 1

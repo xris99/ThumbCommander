@@ -275,8 +275,18 @@ def stop():
     except:
         pass
         
+    # A file that is owned by a registered handle must stay open:
+    # play_id() re-seeks into it on every later replay, and closing it
+    # here made the next flight crash with ValueError on a closed file.
+    # Only stop() and load()'s own un-registered file gets closed.
     if audio.data_file:
-        audio.data_file.close()
+        owned = False
+        for info in audio.file_handles:
+            if info and info[0] is audio.data_file:
+                owned = True
+                break
+        if not owned:
+            audio.data_file.close()
         audio.data_file = None
 
 def _start_playback():

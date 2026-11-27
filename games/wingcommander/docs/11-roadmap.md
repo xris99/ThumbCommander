@@ -110,11 +110,20 @@ missing; the harness counts each scene's picture and text pixels.
 
 Same method, lower priority, one function at a time (table in 6.2).
 
-Done for death, ejection and the stranded ending: verbatim ports of
-`death_sequence`, `ejection_sequence`, `stranded_sequence` and
-`check_stranded` in `deathseq.py` and `ejectseq.py` (docs/06 6.2).
-Medals, funeral, office, bar, barracks, intro and endings not
-started.
+Done for death, ejection, the stranded ending and the funeral:
+verbatim ports of `death_sequence`, `ejection_sequence`,
+`stranded_sequence` and `check_stranded` in `deathseq.py` and
+`ejectseq.py`, and of `funeral_sequence` with `funeral_player`,
+`funeral_wingman` and the constellation in `funeralseq.py` (docs/06
+6.2). Done for the intro and title: `Title_Sequence` with
+`DrawTitleLogo` and the picture-font `print_subtitle` in
+`titleseq.py` - the cinematic flying game.c's own title mission
+through world.py's physics (the canned sequences, the hazard chain,
+the explode-on-entry into the asteroid field), the eleven credits in
+the converted intro font and the button-driven New Game / Continue
+menu; the full `wc1_selfplay.py` run passes including the title,
+photographing all six stage shots (docs/06 6.2).
+Medals, office, bar, barracks and endings not started.
 
 ## 7. Sound: sequencer and driver (chapters 8, 10) - PC
 

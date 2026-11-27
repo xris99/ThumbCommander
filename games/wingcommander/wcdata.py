@@ -7,15 +7,19 @@
 
 from struct import unpack_from
 from array import array
+import os
 import wcgfx
 
 A = 'assets/'
 
 
 def exists(name):
+    """Stat, never open: open allocates the filesystem's own file
+    buffer - 1,148 bytes on ThumbyColor - and a fragmented heap has
+    refused that ask in a tight phase (device log, docs/12 12.1).
+    A stat costs a small tuple, nothing wide."""
     try:
-        f = open(A + name, 'rb')
-        f.close()
+        os.stat(A + name)
         return True
     except OSError:
         return False

@@ -40,6 +40,17 @@ Code deployment:
     a package folder of .mpy files just as well as a single file; on
     the device all code is bytecode, which is what saves the little
     RAM they have;
+  * every module is compiled with -O3 and -s <file name>: -O3 is
+    the only optimisation level that does anything (-O1 and -O2
+    compile byte-identical to -O0), and what it removes is the
+    per-scope bytecode that stores docstrings - measured: some 6 to
+    8 percent off every module, with the qstr and object tables
+    byte-identical so no name, string or constant object is ever
+    dropped; the text of a docstring never enters those tables at
+    any level, so this port's documentation costs the device
+    nothing either way; -s makes the .mpy name its module by the
+    short file name instead of embedding the full staging path as a
+    qstr (that path is 110 characters in every module of a build);
   * the only exception is the entry point: the firmware can only
     start .py files, so the shim (main.py in the repo) is copied
     as-is - renamed per platform - and everything else (including
@@ -150,10 +161,13 @@ GAMES = {
         'platforms': ['thumbycolor'],
         'entry': {'thumbycolor': 'main.py'},
         'modules': {
-            'common': [GAME_ENTRY, 'MainGame.py', 'world.py', 'ai.py',
+            'common': [GAME_ENTRY, 'MainGame.py',
+                       'world.py', 'ai.py',
                        'flight.py', 'talk.py', 'scene.py', 'campaign.py',
                        'ui.py', 'wcdata.py', 'wcgfx.py', 'wcmath.py',
-                       'sky.py'],
+                       'sky.py', 'scramble.py', 'launchseq.py',
+                       'deathseq.py', 'ejectseq.py', 'funeralseq.py',
+                       'titleseq.py', 'introfx.py'],
             'thumbycolor': ['manifest.txt', 'icon.bmp'],
         },
     },
@@ -329,7 +343,8 @@ def mpy_cross_version(mpy_cross):
         return mpy_cross
 
 
-def compile_dir(dirpath, mpy_cross, keep_py, arch, entry=None):
+def compile_dir(dirpath, mpy_cross, keep_py, arch, entry=None,
+                lines=False):
     """Compile every .py under dirpath in place to .mpy.
 
     The entry file (main.py) is never compiled: the firmware can only
@@ -346,7 +361,26 @@ def compile_dir(dirpath, mpy_cross, keep_py, arch, entry=None):
                 continue
             src = os.path.join(root, f)
             out = os.path.splitext(src)[0] + '.mpy'
-            cmd = [mpy_cross] + cmd_arch + ['-o', out, src]
+            # -O3: the only level that does anything (-O1/-O2 are
+            # byte-identical to -O0): it strips the per-scope
+            # bytecode that stores docstrings, some 6-8% off the
+            # file, qstr and object tables byte-identical; -s: the
+            # .mpy names its module by this short file name, not by
+            # the full staging path (a 110-character qstr in every
+            # module of a build).
+            cmd = ([mpy_cross] + cmd_arch + ['-O3', '-s'])
+            if lines:
+                # --lines: emit bytecode version 5, not the default
+                # 6. v6 tracebacks print "line 1" on the device; v5
+                # may print real lines again. Whether the firmware
+                # loads a v5 .mpy at all is untested, so this is a
+                # debug build only; v5 also costs bytes, and not
+                # evenly (measured: titleseq +475, world +3,915,
+                # scramble -893). The local v1.19 mpy-cross for
+                # thumby has no -b flag: use --lines with the system
+                # binary on thumbycolor.
+                cmd += ['-b', '5']
+            cmd += [f, '-o', out, src]
             print('  $ ' + ' '.join(cmd))
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode != 0:
@@ -423,6 +457,13 @@ def main():
                          'the devices)')
     ap.add_argument('--keep-py', action='store_true',
                     help='keep the .py sources next to the compiled .mpy')
+    ap.add_argument('--lines', action='store_true',
+                    help='compile to bytecode version 5 instead of 6 - '
+                         'may restore real line numbers in device '
+                         'tracebacks; firmware loadability of v5 is '
+                         'untested so this is a debug build only, and '
+                         'the files grow (measured: titleseq +475, '
+                         'world +20 percent) - never ship it')
     ap.add_argument('--remote', nargs='?', const='default', default=None,
                     metavar='TARGET',
                     help='push to the device via mpremote (optionally with a'
@@ -473,11 +514,13 @@ def main():
         stage_dir = stage(platform, args.game, args.stage)
         if mpy_cross:
             compile_dir(os.path.join(stage_dir, 'lib', 'thumby_engine'),
-                        mpy_cross, args.keep_py, arch)
+                        mpy_cross, args.keep_py, arch,
+                        lines=args.lines)
             compile_dir(os.path.join(stage_dir, 'Games',
                                      game['device_name']),
                         mpy_cross, args.keep_py, arch,
-                        entry=game['entry'][platform])
+                        entry=game['entry'][platform],
+                        lines=args.lines)
         else:
             print(f'[{platform}/{args.game}] not compiled '
                   f'(--no-compile, debug only)')

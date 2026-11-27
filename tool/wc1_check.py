@@ -33,9 +33,12 @@ def guard_lite(W):
     write raise for the rest of this run."""
     full = W.Obj(0)
     lite = W.Lite(W.NSHIP)
-    for name, value in vars(full).items():
+    # fields live in the instances plainly again; the comparison reads
+    # them through getattr
+    for name in W.OBJF:
         if name == 'i':
             continue
+        value = getattr(full, name)
         got = getattr(lite, name)
         if isinstance(value, list):
             got = list(got)
@@ -43,16 +46,21 @@ def guard_lite(W):
             raise AssertionError('world.Lite.%s is %r, Obj has %r'
                                  % (name, got, value))
     allowed = set(W.LITE) | {'i', 'm'}
-    missing = allowed - set(vars(lite))
+    missing = set(n for n in allowed if not hasattr(lite, n))
     if missing:
         raise AssertionError('Lite.clear() does not set %s' % sorted(missing))
+
+    # Lite's __slots__ already refuse a write to a name outside i, m
+    # and LITE; the guard only keeps the clearer message and lets an
+    # allowed write through.
+    orig = W.Lite.__setattr__
 
     def guarded(self, name, value):
         if name not in allowed:
             raise AttributeError(
                 'write to %s on a Lite object: add it to world.LITE and '
                 'Lite.clear()' % name)
-        object.__setattr__(self, name, value)
+        orig(self, name, value)
     W.Lite.__setattr__ = guarded
 
 

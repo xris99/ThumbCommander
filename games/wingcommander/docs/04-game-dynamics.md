@@ -192,7 +192,7 @@ for every object:
     replenish_shields, burn fuel
 every 10 turns:
     track_objectives; if no enemy is left, set_up_next_wave
-hazard_turn         asteroid and mine fields around the player
+hazard_turn         rocks and mines while the player is near a field
 ```
 
 The player's inputs are applied by `flight.controls` before the turn
@@ -341,7 +341,7 @@ chapter 5 is about using them.
 | autopilot jumps | fly-by camera, formation shots | `src/auto.c` |
 | landing: fly into the carrier with clearance | approach from the front, request, landing cutscene | `src/targ.c`, `cutscene.c landing` |
 | missiles track without waiting | lock-on time, lock tone, IR vs image lock | `src/cockpt.c decrement_lock_time` |
-| asteroid / mine fields: rocks spawned around the player | field objects with density and bounds | `src/targ.c`, `src/spc.c` |
+| asteroid / mine fields: rocks spawned in front of the player, drifting +-3, recycled past 4300; the fields themselves are faithful - registered at launch for every field ship (radius = speed + 3000, at most seven), activated by proximity (radius + 4300), one spawn attempt per turn likelier the faster the player flies (215 vs speed + 30), cap 12 because the slots are shared with weapons | rocks aimed ahead by travel time, density from the field ship's pilot, Kilrathi nearby freezing the rocks, mines closing at 20 | `src/winmain.c`, `src/mission.c` |
 | capital ships: route + turrets | plus launch bays, flak patterns | `src/brains.c`, `src/logic.c` |
 | radio: 4 orders, stock replies | full menus, taunts, all 11 message kinds | chapter 7 |
 | Kilrathi aces: ordinary pilots with the ace tables | named, taunt, tracked across missions | `src/comm.c`, `src/mission.c` |

@@ -56,23 +56,33 @@
 # comments at each site, the standing ones being: no audio, no debris,
 # no shock wave, no mission state, the rest of the world frozen and
 # undrawn (the chase never touches the live world, so the stranding
-# check at MainGame.py:390 stays correct), per-pass velocities instead
-# of per-turn ones (one 62 ms pass instead of one 100 ms turn, the cut
-#scene has no turns), and the star field that cannot respawn while the
-# eye neither pitches nor yaws.
+# check at MainGame.py:583 stays correct), per-pass velocities instead
+# of per-turn ones - with the pass now held to the turn's 100 ms
+#(PASS_MS = TURN_MS), they are the per-turn numbers themselves, and
+# the star field that cannot respawn while the eye neither pitches nor
+# yaws.
 
-import scramble as S
 import world as W
 from time import ticks_ms, ticks_diff
 from math import acos
 from array import array
+from gc import collect
 from thumby_engine.platform import display
 import ui
 import wcgfx as G
 import wcmath as M
-import sky
-import flight as FL
 import wcdata as D
+# scramble, sky and the flight module are not imported with this one.
+# The chase mirrors the flight's projection constants and its fixed
+# divide itself (see the block after PASS_MS), so the room a flight
+# leaves does not pay the flight's code again: the device log
+# 2026-11-27 died inside _dirv allocating 1,488 bytes with FREE 6,400 -
+# the 72,400 the flight had released, minus exactly what `import
+# ejectseq` had claimed by landing its module-top imports: ejectseq
+# 8.5 KB, scramble and its 12,288-byte scratch 22.2, sky 5.9, flight
+# 15.2, ai 14.8. The scenes import what they draw with inside, for
+# themselves, guarded: no room, the scene that does not need it plays
+# instead of an out-of-memory. docs/12 12.1, 12.4.
 
 FULL_Y1 = 112
 
@@ -121,23 +131,42 @@ CHASE_GAP = 700
 # by (25 << 8))
 GAP_DIV = 25 * 256
 # velocity conversion: one chase pass is S.STEP_MS ms, one flight turn
-# is 100 ms (flight.TURN_MS), so metres-per-turn become metres-per-pass
-PASS_MS = 62
+# is 100 ms (flight.TURN_MS); outside flight a pass is the turn itself,
+# so metres-per-turn are metres-per-pass unchanged
+PASS_MS = 100
 TURN_MS = 100
+
+# --- the flight, mirrored -------------------------------------------------
+# The chase's projection is flight.py's own: _draw_obj below mirrors
+# flight.py:262-375, _right_shape mirrors flight.py:194-230, _dirv
+# mirrors flight.py:103-117. The flight's constants and its truncating
+# divide stand here so the ejection never lands the flight module
+# again. The numbers are flight.py's: FX and FY at flight.py:50-51,
+# the colours :53-54, the explosion sets :65, tdiv :93-95.
+
+FX = 64                 # flight.py:50 focal length in pixels, horizontal
+FY = 77                 # flight.py:51 vertical (the original's 1:1.2 pixels)
+WHITE = 0xFFFF          # flight.py:53
+GREY = 0x8410           # flight.py:54
+_EXPL_SET = ('fx01.wcs', 'fx02.wcs', 'fx03.wcs', 'fx09.wcs')  # flight.py:65
+
+
+def _tdiv(a, b):        # flight.py:93-95: C division, truncates toward
+    return a // b if a >= 0 else -((-a) // b)        # zero
 
 
 def _per_pass(v):
     """One flight velocity (Q8 metres per turn) as metres per pass:
-    v * 62 / 100, truncated away from zero like the original's
-    DivideFixed (the flight's turn/100 ms rate applied over 62 ms)."""
-    return FL.tdiv(v * PASS_MS, TURN_MS)
+    v * PASS_MS / TURN_MS with both now the turn's 100 ms, truncated
+    away from zero like the original's DivideFixed."""
+    return _tdiv(v * PASS_MS, TURN_MS)
 
 
 class _Ob:
     """One chase object: the fields of world.py's Obj that the chase's
     camera, upkeep and projection touch, as a local snapshot. The live
     world is never read past setup and never written: the stranding
-    check after the scene (MainGame.py:390, check_stranded below) still
+    check after the scene (MainGame.py:583, check_stranded below) still
     sees the simulation's own positions."""
 
     def __init__(self):
@@ -325,14 +354,14 @@ def _right_shape(T, dv, ob, dx, dy, dz, em, table):
     calls this with the player's table 0."""
     ox, oy, oz = M.to_frame(ob.m, -dx, -dy, -dz)
     yw, pt = M.spherical(ox, oy, oz)
-    q = FL.tdiv(pt, 30)
+    q = _tdiv(pt, 30)
     rem = pt - q * 30
     band = q + 3
     if rem > 15:
         band = min(band + 1, 6)
     elif rem < -15:
         band = max(band - 1, 0)
-    q = FL.tdiv(yw, 30)
+    q = _tdiv(yw, 30)
     rem = yw - q * 30
     ys = (12 - q) % 12
     if rem > 15:
@@ -380,7 +409,7 @@ def _sset(name):
     return s
 
 
-def _draw_obj(fb, pal, cache, em, eye, ob, T, dv, pss):
+def _draw_obj(fb, pal, cache, em, eye, ob, T, dv, pss, S):
     """Project and draw one chase object exactly as flight.py:262-375 -
     the port's verified mirror of transform_objects_to_your_view
     (geom.c:1227) - run with the eye at its true position: the cutscene
@@ -408,8 +437,8 @@ def _draw_obj(fb, pal, cache, em, eye, ob, T, dv, pss):
     # reach into the picture from there (a carrier alongside)
     if vz * 256 < dist * 0x94 and ob.radius * 3 < dist:
         return                        # flight.py:276-279
-    sx = 64 + FL.FX * vx // vz        # flight.py:280-281 at the picture's
-    sy = 64 - FL.FY * vy // vz        # centre (no cockpit: 0..128, 16..112)
+    sx = 64 + FX * vx // vz        # flight.py:280-281 at the picture's
+    sy = 64 - FY * vy // vz        # centre (no cockpit: 0..128, 16..112)
     c = ob.cls
     typ = ob.typ
     frame = 0
@@ -417,7 +446,7 @@ def _draw_obj(fb, pal, cache, em, eye, ob, T, dv, pss):
     ang = 0
     sset = None
     if c == W.C_EXPLOSION:            # flight.py:299-301
-        sset = _sset(FL._EXPL_SET[min(3, typ - W.OT_EXPLOSION0)])
+        sset = _sset(_EXPL_SET[min(3, typ - W.OT_EXPLOSION0)])
         frame = ob.counter >> 1       # the original's animate_object step
     elif c >= W.C_SHIP:               # flight.py:290-293, table 0: the
         sset = _sset('sh%02d.wcs' % typ)    # dying ship is a player fighter
@@ -429,7 +458,7 @@ def _draw_obj(fb, pal, cache, em, eye, ob, T, dv, pss):
         return                        # the tumble is the pil02 animation
     # far off screen: the margin grows with the object's projected size,
     # so a big ship is not dropped while its hull still shows
-    mg = 100 + FL.FX * ob.radius // vz        # flight.py:310-315, at the
+    mg = 100 + FX * ob.radius // vz        # flight.py:310-315, at the
     if sx < 0 - mg or sx > 128 + mg or \
             sy < S.PIC_Y0 - mg or sy > FULL_Y1 + mg:
         return                        # picture's margins
@@ -442,7 +471,7 @@ def _draw_obj(fb, pal, cache, em, eye, ob, T, dv, pss):
         slot = cache.get(sset, frame)
     if slot < 0:
         if ob.vis:                    # flight.py:325-328
-            display.setPixel(sx, sy, FL.GREY)
+            display.setPixel(sx, sy, GREY)
         return
     res = cache.res[slot]
     # 16.16 screen scale of the stored frame (flight.py:331-335; the cap
@@ -457,7 +486,7 @@ def _draw_obj(fb, pal, cache, em, eye, ob, T, dv, pss):
     hy = cache.hy[slot]               # flight.py:336-339
     if (max(w, h) * s16) >> 16 < 2 or s16 < 2048:
         if ob.vis:                    # too far to resolve: a point of
-            col = FL.WHITE if c == W.C_EXPLOSION else FL.GREY
+            col = WHITE if c == W.C_EXPLOSION else GREY
             display.setPixel(sx, sy, col)   # flight.py:340-346
         return
     ex = max(hx, w - hx)              # flight.py:347-348
@@ -506,9 +535,9 @@ def _eye_11(eye, view_obj):
     if n < PULL_BACK:
         if n == 0:
             n = 1                     # guard the division; the original's
-        ax = FL.tdiv(vx * -PULL_BACK, n)   # Normalize of a zero vector
-        ay = FL.tdiv(vy * -PULL_BACK, n)
-        az = FL.tdiv(vz * -PULL_BACK, n)
+        ax = _tdiv(vx * -PULL_BACK, n)   # Normalize of a zero vector
+        ay = _tdiv(vy * -PULL_BACK, n)
+        az = _tdiv(vz * -PULL_BACK, n)
         eye.x = view_obj.x + ax       # eye += vector + adjustment
         eye.y = view_obj.y + ay       # (:430-433) = pilot + 600 m away
         eye.z = view_obj.z + az
@@ -566,9 +595,9 @@ def _eye_4(eye, view_obj, sh, sv, world):
     pdx = des_x - eye.x               # positionDelta (:228-230)
     pdy = des_y - eye.y
     pdz = des_z - eye.z
-    eye.vx = FL.tdiv(pdx, GAP_DIV)    # velocity = delta / (25 << 8)
-    eye.vy = FL.tdiv(pdy, GAP_DIV)    # (:233 divide_vector, the port's
-    eye.vz = FL.tdiv(pdz, GAP_DIV)    # truncating tdiv)
+    eye.vx = _tdiv(pdx, GAP_DIV)    # velocity = delta / (25 << 8)
+    eye.vy = _tdiv(pdy, GAP_DIV)    # (:233 divide_vector, the port's
+    eye.vz = _tdiv(pdz, GAP_DIV)    # truncating tdiv)
     eye.m[6] = vx                     # F = viewDirection (:235)
     eye.m[7] = vy
     eye.m[8] = vz
@@ -645,6 +674,15 @@ def _chase(ship, world, T, pal, cache, pss):
     projection and the depth-sorted draw. Velocities are one pass
     instead of one turn (_per_pass above), which is the cutscene's
     whole 16 fps pacing; the ship's rotation follows the same scale."""
+    import scramble as S                # eject() imported it guarded,
+    # so it is in sys.modules: this lookup costs nothing and only
+    # binds the name for the picture timing and the cut poll below.
+    try:
+        import sky
+    except MemoryError:
+        sky = None                      # no room for the star field:
+        # the chase runs without stars and dust - the field is
+        # cosmetic, the projection is the scene. docs/12 12.4.
     p = world.o[0]
     sh = _Ob()
     sh.cls = W.C_SHIP
@@ -703,12 +741,25 @@ def _chase(ship, world, T, pal, cache, pss):
     # the eye neither pitches nor yaws - a documented deviation, the
     # original's update_star_field moves the field with the eye's own
     # pitch/yaw too and that stays 0 here
-    sky_obj = sky.Sky(eye, FL.FX, FL.FY,
-                      (0, S.PIC_Y0, 128, FULL_Y1, 64, 64))
+    sky_obj = None
+    if sky is not None:
+        try:
+            sky_obj = sky.Sky(eye, FX, FY,
+                              (0, S.PIC_Y0, 128, FULL_Y1, 64, 64))
+        except MemoryError:
+            sky_obj = None        # the field's arrays are bigger than
+            # the hole left: no stars and dust, the chase still runs.
+            # docs/12 12.4.
 
     objects = [pil, sh]
     expl = None
-    dv = _dirv()
+    try:
+        dv = _dirv()
+    except MemoryError:
+        return False                # no hole for the direction bases
+        # (the 1,488-byte ask that died in the device log 2026-11-27):
+        # the chase is skipped, the seat scenes above still played,
+        # and the scene ends instead of ending the game. docs/12 12.1.
 
     fb = display.buffer
     display.fill(0)                   # free_cockpit (:144): rows 0..15
@@ -753,9 +804,10 @@ def _chase(ship, world, T, pal, cache, pss):
             ob.y += ob.vy             # velocities, both in Q8
             ob.z += ob.vz
         pil.af += 1                   # the pilot's animation step
-        sky_obj.turn(eye)             # the eye as the flight's player:
-        # dust that is out of reach is set up ahead again, stars wait
-        # for a pitch or yaw that never comes
+        if sky_obj is not None:
+            sky_obj.turn(eye)         # the eye as the flight's player:
+            # dust that is out of reach is set up ahead again, stars
+            # wait for a pitch or yaw that never comes
 
         # the camera (set_eye_direction_and_position, spc.c:161)
         _set_eye(eye, sv, pil, sh, world)
@@ -769,8 +821,11 @@ def _chase(ship, world, T, pal, cache, pss):
         # update_star_field :2019), the dust, then the objects sorted
         # far to near (sort_object_depth :2025 - the port's Manhattan
         # approximation, as in flight.py:389-403)
-        sky_obj.draw(fb, display, eye.m, eye.x, eye.y, eye.z, eye, True)
-        sky_obj.draw(fb, display, eye.m, eye.x, eye.y, eye.z, eye, False)
+        if sky_obj is not None:
+            sky_obj.draw(fb, display, eye.m, eye.x, eye.y, eye.z,
+                         eye, True)
+            sky_obj.draw(fb, display, eye.m, eye.x, eye.y, eye.z,
+                         eye, False)
         # far to near: the same sort flight.py:386-402 uses - collect
         # the Manhattan distances, sort ascending, draw from the far end
         # in so the nearer objects land on top. eventmgr.c's
@@ -794,9 +849,15 @@ def _chase(ship, world, T, pal, cache, pss):
         order.sort()
         k = len(order) - 1
         while k >= 0:
-            _draw_obj(fb, pal, cache, eye.m, eye, order[k][2], T, dv, pss)
+            _draw_obj(fb, pal, cache, eye.m, eye, order[k][2], T, dv,
+                      pss, S)
             k -= 1
         display.update()              # dump_buffer_to_screen (:168)
+        collect()                     # the garbage one pass wide, the
+        # titleseq._pace rule: the sort tuples and the cull lists die
+        # here instead of piling up over the 201 passes - the chase
+        # room is small (docs/12 12.2) and the scene cannot pay for
+        # two hundred passes of retained tuples.
 
         # eject.c:169-174: the switch runs on the current frame, before
         # frame++, so the fireball born here first shows on the NEXT
@@ -842,9 +903,8 @@ def _chase(ship, world, T, pal, cache, pss):
 
 def _rot_step(ob):
     """rotate_object (world.py:1247-1255) at the chase's pass scale:
-    each rotation applied is the control rate scaled by 62/100, so the
-    spin matches the flight's pace instead of a full rate per 62 ms
-    pass (documented deviation)."""
+    the pass is the turn's 100 ms now, so _per_pass is the identity
+    and the spin runs at the flight's rate exactly."""
     m = ob.m
     if ob.rp:
         M.pitch(m, _per_pass(ob.rp))
@@ -870,6 +930,12 @@ def eject(ship, world=None, T=None, pal=None, cache=None):
     comes the 3-D chase (:143-181) - the ported one, see _chase. Only
     the four WC1 cockpits; missing files skip the scene. Returns True
     when a button cut it."""
+    try:
+        import scramble as S
+    except MemoryError:
+        return False                # no room for the sprite helpers:
+        # the seat scene cannot be drawn, as the original skips on a
+        # missing file (:48-51's early return). docs/12 12.4.
     if ship not in (0, 1, 2, 3):
         return False
     bg = S._set('ckbg%d.wcs' % ship)      # eject.c:48-49 (sec 3)
@@ -996,11 +1062,19 @@ def stranded():
     message from frame 160, THE END from 300, 400 frames unless a button
     cuts it. Text colours are the original's subtitle palette indices -
     50 for the message, 56 for THE END (eject.c:214-218)."""
+    try:
+        import scramble as S
+    except MemoryError:
+        S = None            # the scene draws no sprites - only the
+        # picture's first row and the frame timing are taken from it,
+        # and both fall back to scramble's own numbers below.
     fb = display.buffer
     display.fill(0)
     t0 = ticks_ms()
     esc = False
     drawn = 0
+    pic0 = S.PIC_Y0 if S is not None else 16    # scramble.py:41
+    step = S.STEP_MS if S is not None else 100  # scramble.py:43
     for frame in range(400):                    # eject.c:210, 226
         if drawn == 0 and frame >= 160:         # :216-218
             ui.text.centre(fb, STRANDED_LINES[0], STRANDED_ROWS[0],
@@ -1013,12 +1087,12 @@ def stranded():
                            ui.pal565(50))
             drawn = 1
         elif drawn == 1 and frame >= 300:       # :213-215
-            G.fill_rows(fb, S.PIC_Y0, FULL_Y1, 0)
+            G.fill_rows(fb, pic0, FULL_Y1, 0)
             ui.text.centre(fb, b'THE END', THE_END_ROW, ui.pal565(56))
             drawn = 2
         display.update()                        # :219
-        while ticks_diff(ticks_ms(), t0) < (frame + 1) * S.STEP_MS:
-            if S._key():
+        while ticks_diff(ticks_ms(), t0) < (frame + 1) * step:
+            if S is not None and S._key():
                 esc = True
             display.update()
         if esc:                                 # :221-222
@@ -1031,4 +1105,9 @@ def stranded():
 
 def cleanup():
     """Let go of the cached sets between flights."""
+    try:
+        import scramble as S
+    except MemoryError:
+        return            # nothing to let go of: the module never
+        # landed, so its scratch and sets never existed.
     S.cleanup()

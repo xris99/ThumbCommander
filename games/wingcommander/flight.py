@@ -16,6 +16,7 @@ from thumby_engine.platform import (display, buttonA, buttonB, buttonU,
                                     buttonRB, buttonMENU, rumble,
                                     audio_play_id)
 from array import array
+from struct import unpack_from
 from random import randint
 from gc import collect
 from time import ticks_ms, ticks_diff, ticks_add
@@ -63,6 +64,27 @@ _BOLT_SET = {24: 'fx06.wcs', 25: 'fx08.wcs', 26: 'fx07.wcs',
              27: 'fx06.wcs'}
 _EXPL_SET = ('fx01.wcs', 'fx02.wcs', 'fx03.wcs', 'fx09.wcs')
 
+# The pilot's hand on the flight stick: PILOTANM.VGA section 3 in
+# pil03.wcs, composited over the cockpit art the way the original draws
+# it (cockpt.c:2665 DrawPilotHandFrame). The grip sits at the fixed
+# origin of data.c:285 - 154,187 in every view - scaled to the device
+# here; the hand is clipped to the rectangle of data.c:274, which
+# differs per ship; and the sleeve, the 18th frame, hangs from the grip
+# at the per-pose offsets of cockpt.c:20-24 asPilotHandOffsets.
+HAND_GX = int(round(154 * 128 / 320))           # grip column: 62
+HAND_GY = PIC_Y + int(round(187 * 96 / 200))    # grip row: 106
+HAND_RECTS = ((120, 152, 203, 199), (120, 152, 205, 199),   # data.c:274
+              (120, 151, 213, 199), (120, 152, 205, 199),
+              (120, 152, 203, 199))
+HAND_CLIP = tuple((round(l * 128 / 320), round(r * 128 / 320),
+                   PIC_Y + round(t * 96 / 200), PIC_Y + round(b * 96 / 200))
+                  for l, t, r, b in HAND_RECTS)
+HAND_SO = tuple((round(dx * 128 / 320), round(dy * 96 / 200))
+                for dx, dy in
+                ((6, -3), (7, 2), (7, 9), (7, 12), (8, 13), (0, -1),
+                 (-1, -1), (-4, -1), (-6, -1), (6, 0), (8, 0), (10, 0),
+                 (13, 3), (8, -7), (6, -9), (5, -11), (5, -14)))
+
 
 def num(n):
     return str(n).encode()
@@ -76,9 +98,11 @@ def tdiv(a, b):
 class Flight:
     def __init__(self, types, tables, fonts, pal, state, mission, opts,
                  sfx=False, cache=None, ckbuf=None):
-        # cache and ckbuf are the two large buffers of a flight. The game
-        # allocates them once at start-up (MainGame) and hands them in;
-        # a caller that passes nothing gets fresh ones.
+        # cache and ckbuf are the two large buffers of a flight. The
+        # game allocates the cache once at start-up (MainGame) and
+        # hands it in; a caller that passes nothing for the cockpit
+        # buffer gets a fresh one claimed at load time, and the flight
+        # gives it back whole when the flight is deleted.
         self.T = types
         self.font = fonts[0]            # small
         self.pal = pal
@@ -117,6 +141,32 @@ class Flight:
                 self.dirv[idx * 6 + k] = min(32767, tmp[k])
         self.cockpit = None
         self.load_cockpit()
+        # The pilot's hand on the stick (pil03.wcs). Its buffers are
+        # allocated here and never while flying; the frame is re-read
+        # only when the pose changes, as animate_pilot (cockpt.c:2708)
+        # redraws only on a pose change too.
+        hs = self.sset('pil03.wcs')
+        self.handset = hs if hs else None
+        if self.handset is not None:
+            tab = self.handset.table
+            self.hand_tab = [unpack_from('<IBBbb', tab, i * 8)
+                             for i in range(self.handset.n)]
+            size = self.handset.largest
+            self.hand_buf = bytearray(size)
+            self.sleeve_buf = bytearray(size)
+            self.hand_mv = memoryview(self.hand_buf)
+            self.sleeve_mv = memoryview(self.sleeve_buf)
+        else:
+            self.hand_tab = None
+            self.hand_buf = self.sleeve_buf = None
+            self.hand_mv = self.sleeve_mv = None
+        self.hand_pose = -1               # pose last read into hand_buf
+        self.hand_hw = (0, 0, 0, 0)       # w, h, hx, hy of that frame
+        self.sleeve_ready = False         # frame 17 read into sleeve_buf
+        self.sleeve_w = self.sleeve_h = self.sleeve_hx = self.sleeve_hy = 0
+        # the pilot stick, like the original's stRotationInput: -9 .. 9,
+        # ramped one notch per turn by controls()
+        self.st_x = self.st_y = 0
         # stars and space dust (sky.py); needs the view set by the cockpit
         self.sky = sky.Sky(self.w.o[0], FX, FY,
                            (self.vx0, self.vy0, self.vx1, self.vy1,
@@ -152,17 +202,30 @@ class Flight:
         self.cockpit = None
         self.ck = None
         ship = self.w.o[0].typ
+        self.hand_clip = HAND_CLIP[ship if ship < len(HAND_CLIP)
+                                   else len(HAND_CLIP) - 1]
         name = 'ck%d.wc' % ship
         if self.opts.get('cockpit', 1) and D.exists(name):
             if self.ckbuf is None:
-                self.ckbuf = bytearray(D.CK_SIZE)
-            d = self.ckbuf
-            f = open(D.A + name, 'rb')
-            n = f.readinto(d)
-            f.close()
-            if n == len(d):
-                self.ck = bytes(d[4:20])
-                self.cockpit = memoryview(d)[20:]
+                # the cockpit's 12 KB are the flight's own: claimed at
+                # flight start and given back when the flight ends. If
+                # the hole is not this wide the flight flies without
+                # the cockpit art instead of ending the game: the
+                # device log 2026-11-27 died on this very allocation,
+                # 12,308 bytes in 19,920 free. The guard below gives
+                # the space view the whole screen. docs/12 12.1.
+                try:
+                    self.ckbuf = bytearray(D.CK_SIZE)
+                except MemoryError:
+                    self.ckbuf = None
+            if self.ckbuf is not None:
+                d = self.ckbuf
+                f = open(D.A + name, 'rb')
+                n = f.readinto(d)
+                f.close()
+                if n == len(d):
+                    self.ck = bytes(d[4:20])
+                    self.cockpit = memoryview(d)[20:]
         if self.cockpit is not None:
             k = self.ck
             self.vx0 = k[0]; self.vy0 = PIC_Y + k[1]
@@ -181,6 +244,8 @@ class Flight:
         return n
 
     def sset(self, name):
+        """The first load of a name reads its table plain. The set
+        dict belongs to the flight and goes with the flight."""
         s = self.sets.get(name)
         if s is None:
             if D.exists(name):
@@ -492,6 +557,7 @@ class Flight:
         if self.cockpit is not None:
             G.blit_indexed(fb, self.pal, self.cockpit, 0, PIC_Y, 128, 96,
                            PIC_Y, PIC_Y + 96)
+            self.draw_pilot_hand(fb)       # the hand between the legs
             k = self.ck
             self.draw_radar(k[4], PIC_Y + k[5], k[6], k[7])
             lx0 = k[8] + 1; ly0 = PIC_Y + k[9] + 1
@@ -580,6 +646,61 @@ class Flight:
                  lc(ob.ar[1], f[D.T_ARMOR_R][t]))
         self.bar(x + 2, y + 18, bw, 2, ob.sh[1], f[D.T_SHIELD_A][t], BLUE)
 
+    def pilot_hand_pose(self):
+        """determine_pilot_hand (cockpt.c:2634-2662): the pose of the
+        hand from the stick, yaw beating pitch. C divisions truncate
+        toward zero, hence tdiv. yaw 1..4 maps to frames 9..12 and yaw
+        -1..-4 to 5..8; pitch 1..4 to 13..16 and -1..-4 to 1..4; a dead
+        stick, or a deflection below two notches, is the centred frame
+        0."""
+        yaw = tdiv(self.st_y, 2)
+        pitch = tdiv(self.st_x, 2)
+        if yaw:
+            if yaw > 0:
+                pose = yaw + 8
+                return 12 if pose > 12 else pose
+            pose = 4 - yaw
+            return 8 if pose > 8 else pose
+        if pitch:
+            if pitch > 0:
+                pose = pitch + 12
+                return 16 if pose > 16 else pose
+            pose = -pitch
+            return 4 if pose > 4 else pose
+        return 0
+
+    def draw_pilot_hand(self, fb):
+        """The hand on the stick and the sleeve that comes with it
+        (pil03.wcs, PILOTANM.VGA section 3) over the cockpit art. The
+        pose frame is blitted so its hot spot - the grip pixel - lands
+        on the fixed origin; the sleeve, frame 17, follows at the pose's
+        offset; both are cut to the ship's hand rectangle, as the
+        original clips them to the hand bounds. The pose frame is read
+        again only when the pose changes."""
+        if self.handset is None:
+            return
+        pose = self.pilot_hand_pose()
+        if pose != self.hand_pose:
+            off, w, h, hx, hy = self.hand_tab[pose]
+            self.handset.read(off, self.hand_mv)
+            self.hand_pose = pose
+            self.hand_hw = (w, h, hx, hy)
+        w, h, hx, hy = self.hand_hw
+        x0, x1, y0, y1 = self.hand_clip
+        G.blit_indexed_clip(fb, self.pal, self.hand_buf, HAND_GX - hx,
+                            HAND_GY - hy, w, h, x0, x1, y0, y1)
+        if not self.sleeve_ready:
+            off, w, h, hx, hy = self.hand_tab[17]
+            self.handset.read(off, self.sleeve_mv)
+            self.sleeve_w, self.sleeve_h = w, h
+            self.sleeve_hx, self.sleeve_hy = hx, hy
+            self.sleeve_ready = True
+        dx, dy = HAND_SO[pose]
+        G.blit_indexed_clip(fb, self.pal, self.sleeve_buf,
+                            HAND_GX + dx - self.sleeve_hx,
+                            HAND_GY + dy - self.sleeve_hy,
+                            self.sleeve_w, self.sleeve_h, x0, x1, y0, y1)
+
     def draw(self):
         self.draw_space()
         self.draw_cockpit()
@@ -663,6 +784,37 @@ class Flight:
         lf = buttonL.pressed()
         rt = buttonR.pressed()
         b = buttonB.pressed()
+        # The pilot stick for the hand overlay, read straight off the
+        # buttons - the art mirrors the keys, so it is unaffected by the
+        # 'invert' option. Like the original key handling (main.c:798-
+        # 898) a turn steps the held axis one notch toward +-9 and the
+        # opposite key first snaps the axis to centre; letting go returns
+        # it to centre (main.c:1014-1034). Roll is not on the stick:
+        # determine_pilot_hand only reads x and y.
+        if up:
+            if self.st_x < 0:
+                self.st_x = 0
+            elif self.st_x < 9:
+                self.st_x += 1
+        elif dn:
+            if self.st_x > 0:
+                self.st_x = 0
+            elif self.st_x > -9:
+                self.st_x -= 1
+        else:
+            self.st_x = 0
+        if rt:
+            if self.st_y < 0:
+                self.st_y = 0
+            elif self.st_y < 9:
+                self.st_y += 1
+        elif lf:
+            if self.st_y > 0:
+                self.st_y = 0
+            elif self.st_y > -9:
+                self.st_y -= 1
+        else:
+            self.st_y = 0
         want_p = 0
         want_y = 0
         want_r = 0
