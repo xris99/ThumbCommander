@@ -1927,8 +1927,8 @@ def _sset(name):
 
 
 def _right_shape(ob, dx, dy, dz, em, table):
-    """flight.py:194-230 verbatim: get_right_shape -> (frame, flip,
-    clockwise angle)."""
+    """flight.py right_shape verbatim: get_right_shape -> (frame, flip,
+    screen rotation angle)."""
     ox, oy, oz = M.to_frame(ob.m, -dx, -dy, -dz)
     yw, pt = M.spherical(ox, oy, oz)
     q = _tdiv(pt, 30)
@@ -1956,13 +1956,21 @@ def _right_shape(ob, dx, dy, dz, em, table):
     b = idx * 6
     px = eux * dv[b] + euy * dv[b + 1] + euz * dv[b + 2]
     py = eux * dv[b + 3] + euy * dv[b + 4] + euz * dv[b + 5]
-    ang = M.angle_cw(px >> 8, py >> 8)
+    # The original's rotation angle (geom.c:1442-1447) is ArcCos of the
+    # eye's up projected against the chosen direction's right and up,
+    # mirrored to 360 - a when px >= 0. Both branches are one value:
+    # -angle_cw mod 360. blit_rs rotates the sprite clockwise by the
+    # angle, exactly as the original's raster (TransformRLEPoint) does,
+    # so the port angle must equal the original's. The frame corrections
+    # are the game's own: +90 on frame 0 (straight ahead), -90 on frame
+    # 36 (straight over - only table 0 has that frame, hence table != 1).
+    ang = (-M.angle_cw(px >> 8, py >> 8)) % 360
     T = _T
     frame = T.dir_frame[idx + table * 62]
     if frame == 0:
-        ang -= 90
-    elif frame == 36 and table != 1:
         ang += 90
+    elif frame == 36 and table != 1:
+        ang -= 90
     return frame, T.dir_flip[idx + table * 62], ang % 360
 
 
